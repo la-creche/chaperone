@@ -1,0 +1,75 @@
+# cargo-deny configuration. `cargo deny check` reads this file.
+# AGENTS.md rule 9: no cryptography beyond sha2, subtle and getrandom.
+
+[graph]
+all-features = true
+
+[advisories]
+# Every advisory fails the check: vulnerability, unmaintained, unsound, yanked.
+unmaintained = "all"
+yanked = "deny"
+ignore = []
+
+[licenses]
+# Each license here is compatible with "MIT OR Apache-2.0".
+allow = [
+    "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception",
+    "MIT",
+    "Unicode-3.0",
+    "Zlib",
+]
+confidence-threshold = 0.93
+unused-allowed-license = "allow"
+
+[licenses.private]
+ignore = true
+
+[bans]
+multiple-versions = "deny"
+wildcards = "deny"
+allow-wildcard-paths = true
+highlight = "all"
+# The RustCrypto support crates of sha2 (digest, block-buffer,
+# crypto-common, cpufeatures, const-oid, hybrid-array) stay allowed.
+deny = [
+    # Hashes, MACs and KDFs other than sha2.
+    { crate = "md-5", reason = "AGENTS.md rule 9" },
+    { crate = "md5", reason = "AGENTS.md rule 9" },
+    { crate = "sha1", reason = "AGENTS.md rule 9" },
+    { crate = "sha3", reason = "AGENTS.md rule 9" },
+    { crate = "blake2", reason = "AGENTS.md rule 9" },
+    { crate = "blake3", reason = "AGENTS.md rule 9" },
+    { crate = "hmac", reason = "AGENTS.md rule 9" },
+    { crate = "hkdf", reason = "AGENTS.md rule 9" },
+    { crate = "pbkdf2", reason = "AGENTS.md rule 9" },
+    { crate = "argon2", reason = "AGENTS.md rule 9" },
+    { crate = "bcrypt", reason = "AGENTS.md rule 9" },
+    { crate = "scrypt", reason = "AGENTS.md rule 9" },
+    # Ciphers and signatures.
+    { crate = "aes", reason = "AGENTS.md rule 9" },
+    { crate = "aes-gcm", reason = "AGENTS.md rule 9" },
+    { crate = "chacha20", wrappers = ["proptest"], reason = "AGENTS.md rule 9. proptest uses it as a test RNG" },
+    { crate = "chacha20poly1305", reason = "AGENTS.md rule 9" },
+    { crate = "ed25519-dalek", reason = "AGENTS.md rule 9" },
+    { crate = "x25519-dalek", reason = "AGENTS.md rule 9" },
+    { crate = "curve25519-dalek", reason = "AGENTS.md rule 9" },
+    { crate = "p256", reason = "AGENTS.md rule 9" },
+    { crate = "rsa", reason = "AGENTS.md rule 9" },
+    # Whole crypto stacks.
+    { crate = "ring", reason = "AGENTS.md rule 9" },
+    { crate = "openssl", reason = "AGENTS.md rule 9" },
+    { crate = "openssl-sys", reason = "AGENTS.md rule 9" },
+    { crate = "native-tls", reason = "AGENTS.md rule 9" },
+    { crate = "aws-lc-rs", reason = "AGENTS.md rule 9" },
+    { crate = "aws-lc-sys", reason = "AGENTS.md rule 9" },
+    { crate = "boring", reason = "AGENTS.md rule 9" },
+    # Randomness goes through getrandom (design.md 9). proptest may use rand.
+    { crate = "rand", wrappers = ["proptest"], reason = "design.md 9: getrandom only" },
+]
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]
+allow-git = []
