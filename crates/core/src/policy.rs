@@ -5,7 +5,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 
-use serde::{Deserialize, Deserializer};
+use serde::Deserialize;
 use serde_json::value::RawValue;
 
 use crate::hook::{Fence, PreparedFence, RawSection, SectionError};
@@ -20,7 +20,8 @@ const POLICY_VERSION: u32 = 1;
 const DIGESTS_MAX: usize = 2;
 
 /// The SHA-256 digest of one bearer token.
-#[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Deserialize)]
+#[serde(try_from = "String")]
 pub struct TokenDigest([u8; 32]);
 
 impl TokenDigest {
@@ -42,18 +43,22 @@ impl fmt::Debug for TokenDigest {
     }
 }
 
-impl<'de> Deserialize<'de> for TokenDigest {
-    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-        let text = String::deserialize(deserializer)?;
+/// Why a text is not a token digest.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
+#[error("a token digest is 64 lower-case hex characters")]
+pub struct DigestError;
+
+impl TryFrom<String> for TokenDigest {
+    type Error = DigestError;
+
+    fn try_from(text: String) -> Result<Self, DigestError> {
         let lower_hex = text.len() == 64
             && text
                 .chars()
                 .all(|c| c.is_ascii_digit() || ('a'..='f').contains(&c));
         let mut bytes = [0_u8; 32];
         if !lower_hex || hex::decode_to_slice(&text, &mut bytes).is_err() {
-            return Err(serde::de::Error::custom(
-                "a token digest is 64 lower-case hex characters",
-            ));
+            return Err(DigestError);
         }
         Ok(Self(bytes))
     }
@@ -160,6 +165,13 @@ struct RawPolicy {
     apps: BTreeMap<AppId, RawApp>,
 }
 
+/// One active fence with its section for one app instance already read.
+#[derive(Debug)]
+pub(crate) struct ActiveFence {
+    pub(crate) plugin: PluginName,
+    pub(crate) fence: Box<dyn PreparedFence>,
+}
+
 /// One loaded app instance.
 #[derive(Debug)]
 pub struct App {
@@ -167,7 +179,7 @@ pub struct App {
     digests: Vec<TokenDigest>,
     limits: Limits,
     grants: BTreeMap<PluginName, UpstreamGrant>,
-    fences: Vec<(PluginName, Box<dyn PreparedFence>)>,
+    fences: Vec<ActiveFence>,
 }
 
 impl App {
@@ -208,7 +220,7 @@ impl App {
     }
 
     /// The prepared fences, in plugin name order.
-    pub(crate) fn fences(&self) -> &[(PluginName, Box<dyn PreparedFence>)] {
+    pub(crate) fn fences(&self) -> &[ActiveFence] {
         &self.fences
     }
 }
@@ -373,7 +385,10 @@ fn load_app(
                 plugin: name.clone(),
                 error,
             })?;
-        fences.push((name.clone(), prepared));
+        fences.push(ActiveFence {
+            plugin: name.clone(),
+            fence: prepared,
+        });
     }
 
     Ok(App {

@@ -6,8 +6,8 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use serde::Deserialize;
 
-use crate::ids::{PluginName, SecretName};
-use crate::plugin::{Hook, Manifest, PluginKind, SecretParam, Slot};
+use crate::ids::{PluginName, SecretName, SecretParam};
+use crate::plugin::{Hook, Manifest, PluginKind, Slot};
 use crate::strict::{self, ByteCap, StrictError};
 
 /// The largest `install.json` chaperone reads.
@@ -109,9 +109,27 @@ pub struct Found {
     pub manifest: Manifest,
 }
 
-/// Every plugin found on disk, keyed by kind and name. Two halves of one
-/// plugin share a name and differ in kind.
-pub type Catalog = BTreeMap<(PluginKind, PluginName), Found>;
+/// The key of one plugin on disk. Two halves of one plugin share a name and
+/// differ in kind.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct PluginKey {
+    pub kind: PluginKind,
+    pub name: PluginName,
+}
+
+impl PluginKey {
+    /// The key of the plugin that `manifest` describes.
+    #[must_use]
+    pub fn from_manifest(manifest: &Manifest) -> Self {
+        Self {
+            kind: manifest.kind(),
+            name: manifest.name().clone(),
+        }
+    }
+}
+
+/// Every plugin found on disk.
+pub type Catalog = BTreeMap<PluginKey, Found>;
 
 /// The secrets of one active plugin and how it receives them.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -206,7 +224,7 @@ pub fn resolve(install: &InstallFile, catalog: &Catalog) -> Result<Setup, SetupE
     let halves = |name: &PluginName| -> Vec<&Found> {
         catalog
             .iter()
-            .filter(|((_, found_name), _)| found_name == name)
+            .filter(|(key, _)| key.name == *name)
             .map(|(_, found)| found)
             .collect()
     };
@@ -265,7 +283,10 @@ fn pick_slot(
 ) -> Result<PluginName, SetupError> {
     let claims = |name: &PluginName| {
         catalog
-            .get(&(slot.hook().kind(), name.clone()))
+            .values()
+            .find(|found| {
+                found.manifest.kind() == slot.hook().kind() && found.manifest.name() == name
+            })
             .is_some_and(|found| found.manifest.slot() == Some(slot))
     };
 
@@ -373,7 +394,7 @@ pub(crate) mod tests {
     fn put(catalog: &mut Catalog, location: Location, text: &str) {
         let manifest = manifest(text);
         catalog.insert(
-            (manifest.kind(), manifest.name().clone()),
+            PluginKey::from_manifest(&manifest),
             Found { location, manifest },
         );
     }
@@ -448,7 +469,7 @@ pub(crate) mod tests {
     }
 
     fn name(text: &str) -> PluginName {
-        PluginName::new(text).unwrap()
+        PluginName::try_new(text).unwrap()
     }
 
     #[test]
@@ -496,7 +517,10 @@ pub(crate) mod tests {
     #[test]
     fn refuses_a_missing_default() {
         let mut catalog = defaults();
-        catalog.remove(&(PluginKind::Decision, name("bearer")));
+        catalog.remove(&PluginKey {
+            kind: PluginKind::Decision,
+            name: name("bearer"),
+        });
         let error = resolve(&install(r#"{"version":1}"#), &catalog).unwrap_err();
         assert_eq!(error, SetupError::MissingDefault(Slot::Identity));
     }
@@ -532,7 +556,10 @@ pub(crate) mod tests {
     #[test]
     fn refuses_a_missing_pair_half() {
         let mut catalog = v1_catalog();
-        catalog.remove(&(PluginKind::Effect, name("ha-call")));
+        catalog.remove(&PluginKey {
+            kind: PluginKind::Effect,
+            name: name("ha-call"),
+        });
         let text = r#"{"version":1,"plugins":{"ha-call":{}}}"#;
         let error = resolve(&install(text), &catalog).unwrap_err();
         assert!(matches!(error, SetupError::MissingPair { .. }));

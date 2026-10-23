@@ -3,7 +3,6 @@
 //! canonical text. The gate ID hashes that text (`docs/design.md` 5.3).
 
 use std::collections::BTreeMap;
-use std::fmt::Write as _;
 
 /// One JSON value, built only by the strict reader.
 #[derive(Debug, Clone, PartialEq)]
@@ -59,7 +58,18 @@ impl ArgValue {
         out
     }
 
+    /// The canonical text of an object, from its members. The text equals
+    /// that of `ArgValue::Object(members)`, with no copy of the members.
+    #[must_use]
+    pub fn canonical_object(members: &BTreeMap<String, ArgValue>) -> String {
+        let mut out = String::new();
+        write_object(members, &mut out);
+        out
+    }
+
     fn write_canonical(&self, out: &mut String) {
+        use std::fmt::Write as _;
+
         match self {
             Self::Null => out.push_str("null"),
             Self::Bool(flag) => out.push_str(if *flag { "true" } else { "false" }),
@@ -81,20 +91,22 @@ impl ArgValue {
                 }
                 out.push(']');
             }
-            Self::Object(members) => {
-                out.push('{');
-                for (index, (key, item)) in members.iter().enumerate() {
-                    if index > 0 {
-                        out.push(',');
-                    }
-                    write_string(key, out);
-                    out.push(':');
-                    item.write_canonical(out);
-                }
-                out.push('}');
-            }
+            Self::Object(members) => write_object(members, out),
         }
     }
+}
+
+fn write_object(members: &BTreeMap<String, ArgValue>, out: &mut String) {
+    out.push('{');
+    for (index, (key, item)) in members.iter().enumerate() {
+        if index > 0 {
+            out.push(',');
+        }
+        write_string(key, out);
+        out.push(':');
+        item.write_canonical(out);
+    }
+    out.push('}');
 }
 
 fn write_string(text: &str, out: &mut String) {
@@ -116,6 +128,7 @@ fn write_float(float: f64, out: &mut String) {
 
 #[cfg(test)]
 mod tests {
+    use super::ArgValue;
     use crate::strict::{ByteCap, read_value};
 
     const CAP: ByteCap = ByteCap::new(4096);
@@ -136,6 +149,15 @@ mod tests {
     #[test]
     fn an_escape_and_its_character_give_one_text() {
         assert_eq!(canon(r#""a""#), canon(r#""a""#));
+    }
+
+    #[test]
+    fn the_object_text_equals_the_value_text() {
+        let value = read_value(br#"{"b": [1, {"c": null}], "a": "x"}"#, CAP).unwrap();
+        let ArgValue::Object(members) = &value else {
+            panic!("not an object");
+        };
+        assert_eq!(ArgValue::canonical_object(members), value.canonical());
     }
 
     #[test]

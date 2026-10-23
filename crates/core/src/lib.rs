@@ -18,17 +18,17 @@ pub use hook::{
     Caller, Credentials, Fence, FenceReason, FenceVerdict, Identity, PreparedFence, RawSection,
     Reach, SectionError, ToolCall,
 };
-pub use ids::{AppId, ArgName, NameError, PluginName, SecretName, ToolName};
+pub use ids::{
+    AppId, ArgName, Name, NameError, NameKind, PluginName, SecretName, SecretParam, ToolName,
+};
 pub use install::{
     Binding, Catalog, Found, INSTALL_FILE_CAP, InstallEntry, InstallError, InstallFile, Location,
-    SecretDelivery, Setup, SetupError, resolve,
+    PluginKey, SecretDelivery, Setup, SetupError, resolve,
 };
-pub use plugin::{
-    Hook, Manifest, ManifestError, PLUGIN_FILE_CAP, PluginKind, Runtime, SecretParam, Slot,
-};
+pub use plugin::{Hook, Manifest, ManifestError, PLUGIN_FILE_CAP, PluginKind, Runtime, Slot};
 pub use policy::{
-    App, Approval, ArgumentFence, Limits, POLICY_FILE_CAP, Policy, PolicyError, Scalar,
-    TokenDigest, ToolGrant,
+    App, Approval, ArgumentFence, DigestError, Limits, POLICY_FILE_CAP, Policy, PolicyError,
+    Scalar, TokenDigest, ToolGrant,
 };
 pub use secret::{Bearer, Secret};
 pub use time::Timestamp;

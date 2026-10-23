@@ -4,9 +4,9 @@
 use std::collections::BTreeSet;
 use std::fmt;
 
-use serde::{Deserialize, Deserializer};
+use serde::Deserialize;
 
-use crate::ids::{NameError, PluginName};
+use crate::ids::{PluginName, SecretParam};
 use crate::strict::{self, ByteCap, StrictError};
 
 /// The largest `plugin.json` chaperone reads.
@@ -93,58 +93,6 @@ impl Hook {
             Self::FrontDoor | Self::SecretSource | Self::AuditSink => PluginKind::Adapter,
             Self::Approval | Self::Upstream => PluginKind::Effect,
         }
-    }
-}
-
-/// The name under which a plugin receives one secret. For a plugin with
-/// the env exception, it is the name of the environment variable.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, serde::Serialize)]
-#[serde(transparent)]
-pub struct SecretParam(String);
-
-const PARAM_MAX: usize = 64;
-
-impl SecretParam {
-    /// Check `text` and wrap it: 1 to 64 characters of A-Z, a-z, 0-9 and
-    /// '_', not starting with a digit.
-    ///
-    /// # Errors
-    ///
-    /// Returns a [`NameError`] when `text` breaks the grammar.
-    pub fn new(text: impl Into<String>) -> Result<Self, NameError> {
-        let text = text.into();
-        let first_ok = text
-            .chars()
-            .next()
-            .is_some_and(|c| c.is_ascii_alphabetic() || c == '_');
-        let rest_ok = text.chars().all(|c| c.is_ascii_alphanumeric() || c == '_');
-        if first_ok && rest_ok && text.len() <= PARAM_MAX {
-            Ok(Self(text))
-        } else {
-            Err(NameError::new(
-                "secret parameter",
-                text,
-                "1 to 64 characters of A-Z, a-z, 0-9 and '_', not starting with a digit",
-            ))
-        }
-    }
-
-    /// The parameter as text.
-    #[must_use]
-    pub fn as_str(&self) -> &str {
-        &self.0
-    }
-}
-
-impl fmt::Display for SecretParam {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(&self.0)
-    }
-}
-
-impl<'de> Deserialize<'de> for SecretParam {
-    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-        Self::new(String::deserialize(deserializer)?).map_err(serde::de::Error::custom)
     }
 }
 

@@ -28,8 +28,9 @@ pub struct Credentials<'a> {
 pub enum Reach {
     /// The full grant of the app instance.
     Full,
-    /// Only these tools, and only where the grant also allows them.
-    Only(BTreeSet<(PluginName, ToolName)>),
+    /// Only these tools of each upstream, and only where the grant also
+    /// allows them.
+    Only(BTreeMap<PluginName, BTreeSet<ToolName>>),
 }
 
 /// The result of the identity hook: one app instance and its reach.

@@ -4,8 +4,6 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 
-use sha2::{Digest, Sha256};
-
 use crate::hook::{Caller, FenceReason, FenceVerdict, Reach, ToolCall};
 use crate::ids::{ArgName, PluginName, ToolName};
 use crate::policy::{App, Approval, ArgumentFence, Policy, Scalar};
@@ -21,7 +19,9 @@ impl GateId {
     /// Hash the app instance, the upstream, the tool and the canonical
     /// arguments, each separated by a NUL byte. Keep the first 16 bytes.
     #[must_use]
-    pub fn of(call: &ToolCall<'_>) -> Self {
+    pub fn from_call(call: &ToolCall<'_>) -> Self {
+        use sha2::{Digest, Sha256};
+
         let mut hasher = Sha256::new();
         hasher.update(call.app.as_str());
         hasher.update([0]);
@@ -29,7 +29,7 @@ impl GateId {
         hasher.update([0]);
         hasher.update(call.tool.as_str());
         hasher.update([0]);
-        hasher.update(ArgValue::Object(call.arguments.clone()).canonical());
+        hasher.update(ArgValue::canonical_object(call.arguments));
         let digest = hasher.finalize();
         let mut id = [0_u8; 16];
         id.copy_from_slice(&digest[..16]);
@@ -97,6 +97,7 @@ pub enum DenyReason {
 }
 
 /// The result of the decision function.
+#[must_use]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Decision {
     Allow,
@@ -106,7 +107,6 @@ pub enum Decision {
 }
 
 /// Decide one call. `policy` is `None` when no valid policy is loaded.
-#[must_use]
 pub fn decide(policy: Option<&Policy>, request: &Request<'_>) -> Decision {
     let Some(policy) = policy else {
         return Decision::Deny(DenyReason::PolicyNotLoaded);
@@ -144,12 +144,12 @@ pub fn decide(policy: Option<&Policy>, request: &Request<'_>) -> Decision {
         arguments: request.arguments,
         now: request.now,
     };
-    let fenced_gate = match run_fences(app, &call) {
-        Ok(gate) => gate,
+    let fenced = match run_fences(app, &call) {
+        Ok(fenced) => fenced,
         Err(reason) => return Decision::Deny(reason),
     };
 
-    if grant.approval() == Approval::Required || fenced_gate {
+    if grant.approval() == Approval::Required || fenced == FenceOutcome::Gate {
         return decide_gate(app, &call, request.gates, request.now);
     }
     Decision::Allow
@@ -158,7 +158,9 @@ pub fn decide(policy: Option<&Policy>, request: &Request<'_>) -> Decision {
 fn in_reach(reach: &Reach, upstream: &PluginName, tool: &ToolName) -> bool {
     match reach {
         Reach::Full => true,
-        Reach::Only(tools) => tools.contains(&(upstream.clone(), tool.clone())),
+        Reach::Only(tools) => tools
+            .get(upstream)
+            .is_some_and(|names| names.contains(tool)),
     }
 }
 
@@ -195,27 +197,33 @@ fn matches(scalar: &Scalar, value: &ArgValue) -> bool {
     }
 }
 
-/// Run every fence in plugin name order. The first deny wins. `Ok(true)`
-/// means at least one fence asks for a gate.
-fn run_fences(app: &App, call: &ToolCall<'_>) -> Result<bool, DenyReason> {
-    let mut gate = false;
-    for (plugin, fence) in app.fences() {
-        match fence.check(call) {
+/// What the fences of one call ask for, when none denies.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum FenceOutcome {
+    Clear,
+    Gate,
+}
+
+/// Run every fence in plugin name order. The first deny wins.
+fn run_fences(app: &App, call: &ToolCall<'_>) -> Result<FenceOutcome, DenyReason> {
+    let mut outcome = FenceOutcome::Clear;
+    for active in app.fences() {
+        match active.fence.check(call) {
             FenceVerdict::Pass => {}
-            FenceVerdict::Gate => gate = true,
+            FenceVerdict::Gate => outcome = FenceOutcome::Gate,
             FenceVerdict::Deny(reason) => {
                 return Err(DenyReason::Fence {
-                    plugin: plugin.clone(),
+                    plugin: active.plugin.clone(),
                     reason,
                 });
             }
         }
     }
-    Ok(gate)
+    Ok(outcome)
 }
 
 fn decide_gate(app: &App, call: &ToolCall<'_>, gates: Gates<'_>, now: Timestamp) -> Decision {
-    let id = GateId::of(call);
+    let id = GateId::from_call(call);
     let live =
         |entries: &BTreeMap<GateId, Timestamp>| entries.get(&id).is_some_and(|end| *end > now);
 

@@ -11,9 +11,9 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use chaperone_core::{
     AppId, ArgValue, Caller, Catalog, Decision, DenyReason, Fence, FenceReason, FenceVerdict,
-    Found, GateId, Gates, InstallFile, Location, Manifest, PluginName, Policy, PolicyError,
-    PreparedFence, RawSection, Reach, Request, SectionError, Timestamp, ToolCall, ToolName, decide,
-    resolve, strict,
+    Found, GateId, Gates, InstallFile, Location, Manifest, PluginKey, PluginName, Policy,
+    PolicyError, PreparedFence, RawSection, Reach, Request, SectionError, Timestamp, ToolCall,
+    ToolName, strict,
 };
 use proptest::prelude::*;
 use serde::Deserialize;
@@ -21,21 +21,21 @@ use serde::Deserialize;
 // ---------------------------------------------------------------- fixtures
 
 fn name(text: &str) -> PluginName {
-    PluginName::new(text).unwrap()
+    PluginName::try_new(text).unwrap()
 }
 
 fn tool(text: &str) -> ToolName {
-    ToolName::new(text).unwrap()
+    ToolName::try_new(text).unwrap()
 }
 
 fn app_id(text: &str) -> AppId {
-    AppId::new(text).unwrap()
+    AppId::try_new(text).unwrap()
 }
 
 fn put(catalog: &mut Catalog, location: Location, text: &str) {
     let manifest = Manifest::read(text.as_bytes()).unwrap();
     catalog.insert(
-        (manifest.kind(), manifest.name().clone()),
+        PluginKey::from_manifest(&manifest),
         Found { location, manifest },
     );
 }
@@ -220,7 +220,7 @@ impl PreparedFence for PreparedExtra {
 
 fn load(install: &str, policy: &str, fences: &[&dyn Fence]) -> Result<Policy, PolicyError> {
     let install = InstallFile::read(install.as_bytes()).unwrap();
-    let setup = resolve(&install, &catalog()).unwrap();
+    let setup = chaperone_core::resolve(&install, &catalog()).unwrap();
     Policy::load(policy.as_bytes(), &setup, fences)
 }
 
@@ -294,7 +294,7 @@ impl Case {
     }
 
     fn gate_id(&self) -> GateId {
-        GateId::of(&ToolCall {
+        GateId::from_call(&ToolCall {
             app: &app_id("librechat"),
             upstream: &self.upstream,
             tool: &self.tool,
@@ -304,7 +304,7 @@ impl Case {
     }
 
     fn decide(&self, policy: Option<&Policy>) -> Decision {
-        decide(
+        chaperone_core::decide(
             policy,
             &Request {
                 caller: self.caller.as_ref(),
@@ -374,7 +374,10 @@ fn row_3_a_narrowed_reach_denies_a_granted_tool() {
     let mut case = Case::new("vikunja", "list_tasks", "{}");
     case.caller = Some(Caller {
         app: app_id("librechat"),
-        reach: Reach::Only(BTreeSet::from([(name("vikunja"), tool("update_task"))])),
+        reach: Reach::Only(BTreeMap::from([(
+            name("vikunja"),
+            BTreeSet::from([tool("update_task")]),
+        )])),
     });
     assert_eq!(case.decide(Some(&policy)), deny(DenyReason::ToolNotGranted));
 }
@@ -384,7 +387,7 @@ fn row_4_an_allow_fence_needs_a_listed_value() {
     let policy = base_policy();
     let fenced = || {
         deny(DenyReason::ArgumentFenced {
-            argument: chaperone_core::ArgName::new("project").unwrap(),
+            argument: chaperone_core::ArgName::try_new("project").unwrap(),
         })
     };
     assert_eq!(
@@ -410,7 +413,7 @@ fn row_4_a_deny_fence_refuses_a_listed_value_and_a_non_scalar() {
     let policy = base_policy();
     let fenced = || {
         deny(DenyReason::ArgumentFenced {
-            argument: chaperone_core::ArgName::new("project").unwrap(),
+            argument: chaperone_core::ArgName::try_new("project").unwrap(),
         })
     };
     assert_eq!(
@@ -636,7 +639,10 @@ fn arb_case() -> impl Strategy<Value = Case> {
                 if narrow {
                     case.caller = Some(Caller {
                         app: app_id("librechat"),
-                        reach: Reach::Only(BTreeSet::from([(name("vikunja"), tool("list_tasks"))])),
+                        reach: Reach::Only(BTreeMap::from([(
+                            name("vikunja"),
+                            BTreeSet::from([tool("list_tasks")]),
+                        )])),
                     });
                 }
                 case
@@ -682,7 +688,7 @@ proptest! {
         let full = case.decide(Some(&policy));
         case.caller = Some(Caller {
             app: app_id("librechat"),
-            reach: Reach::Only(BTreeSet::from([(name("vikunja"), tool("list_tasks"))])),
+            reach: Reach::Only(BTreeMap::from([(name("vikunja"), BTreeSet::from([tool("list_tasks")]))])),
         });
         let narrow = case.decide(Some(&policy));
         if full != Decision::Allow {
