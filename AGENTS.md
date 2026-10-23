@@ -7,6 +7,7 @@ Rules for every contributor and every agent that edits this repository. A direct
 1. `docs/design.md`. It states what chaperone guarantees. The rules below exist to keep those guarantees. Each guarantee has an ID from G1 to G10.
 2. `docs/writing-standard.md`. Every Markdown document follows it.
 3. The `AGENTS.md` of the directory you edit.
+4. For a Rust change: the [Google Rust Style Guide](https://google.github.io/styleguide/rustguide.html). "Rust style guide" below says how it applies.
 
 ## The structure in one table
 
@@ -47,6 +48,32 @@ Each line cites the guarantee it protects. A pull request that does one of these
 - Use an enum, not a boolean, for a choice. Use an enum, not an `Option`, when "nothing" has more than one meaning.
 - Match every variant of our own enums by name. Do not use a `_ =>` arm on them, so that a new variant breaks the build where it must be handled.
 - Make an invalid state impossible to build. A constructor that can fail returns `Result`. Fields stay private.
+
+### Rust style guide
+
+The core style guide for Rust in this repository is the [Google Rust Style Guide](https://google.github.io/styleguide/rustguide.html). Read it before you write Rust.
+
+When two rules conflict, this order decides:
+
+1. This file and the `AGENTS.md` of the directory you edit.
+2. The Google Rust Style Guide.
+3. The Rust API Guidelines and the Rust Style Guide, which the Google guide defers to.
+
+How the guide applies here:
+
+- `crates/core` is library code, because the other crates and every plugin use it. The guide's library rules are binding there. The other crates are application code.
+- The rules marked [Chrome], [Fuchsia] or [Android] do not apply. `async` is allowed, and tests use `#[test]` and `proptest`.
+
+This repository departs from the guide in these places. Each departure is stricter, or the guide's rule is not available on stable Rust.
+
+| The guide | This repository | Why |
+|---|---|---|
+| Use `panic!` for a bug. Prefer `expect` over `unwrap`. | No `panic!`, `unwrap` or `expect` outside tests. The guide allows a codebase that avoids panics. | A panic is an unhandled error. G2 needs every error to end in a deny. |
+| Use a wildcard arm for variants you do not care about. | No `_ =>` arm on our own enums. | A new variant must break the build where it needs handling. |
+| Use `#[non_exhaustive]` on public enums. | Do not use it. | One workspace holds every user. A change fixes every user in the same pull request. It also conflicts with the rule above. |
+| Set `imports_granularity = Module` in rustfmt. | The reviewer checks it. | The option is not stable. The toolchain is stable. |
+| Consider the `missing_docs` lint. | Do not turn it on. Document each public type, trait and function whose name does not say enough. | The lint asks for comments that only repeat a name. The guide refuses those comments too. |
+| Keep the files of one crate in one flat directory. | Use the Cargo layout. `tests/` is allowed. | The guide marks this rule [Chrome]. |
 
 ### Errors
 
