@@ -1,0 +1,11 @@
+# Each crate outside crates/core reads this file. crates/core has its own,
+# which repeats these lines and adds the purity bans.
+allow-unwrap-in-tests = true
+allow-expect-in-tests = true
+allow-panic-in-tests = true
+
+# G9: every read of a secret value is a visible, reviewed exception.
+# A caller adds #[expect(clippy::disallowed_methods, reason = "...")].
+disallowed-methods = [
+  { path = "chaperone_core::Secret::expose", reason = "G9: a secret value read needs an expect attribute with a reason" },
+]

@@ -255,7 +255,9 @@ Version 1 is installed by hand. The project publishes tagged versions with built
 One pull request per step:
 
 1. `AGENTS.md` files and this document.
-2. `core`: policy types, the strict reader, the decision, the hook traits, property tests.
+2. `core`, in two pull requests:
+   1. The workspace, CI, the strict reader, the name types, `Secret`, argument values and time.
+   2. The config types, slot resolution, the decision, the hook traits and the property tests.
 3. The front door and the default identity plugin.
 4. The effect host and the Vikunja upstream.
 5. The audit sink and the secret source.
