@@ -4,6 +4,8 @@
 #![allow(
     clippy::unwrap_used,
     clippy::panic,
+    clippy::arithmetic_side_effects,
+    clippy::string_slice,
     reason = "test fixtures fail loudly on a bad fixture"
 )]
 
@@ -160,9 +162,8 @@ impl PreparedFence for PreparedEntities {
         let Some(section) = &self.0 else {
             return FenceVerdict::Deny(FenceReason::new("no entity allow-list"));
         };
-        let entity = match call.arguments.get("entity_id") {
-            Some(ArgValue::String(entity)) => entity,
-            _ => return FenceVerdict::Deny(FenceReason::new("entity_id is missing")),
+        let Some(ArgValue::String(entity)) = call.arguments.get("entity_id") else {
+            return FenceVerdict::Deny(FenceReason::new("entity_id is missing"));
         };
         if section.gate.contains(entity) {
             FenceVerdict::Gate

@@ -2,6 +2,14 @@
 //! decision. This crate does no I/O (G3). `crates/core/AGENTS.md` has the
 //! rules.
 
+// G2: a panic is an unhandled error. These lints refuse the panics that
+// arithmetic and slicing can hide.
+#![deny(
+    clippy::arithmetic_side_effects,
+    clippy::indexing_slicing,
+    clippy::string_slice
+)]
+
 mod decide;
 mod hook;
 mod ids;

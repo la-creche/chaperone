@@ -69,11 +69,8 @@ impl FenceReason {
     /// Wrap `text`, cut at a character boundary to [`Self::MAX`] bytes.
     #[must_use]
     pub fn new(text: &str) -> Self {
-        let mut end = text.len().min(Self::MAX);
-        while !text.is_char_boundary(end) {
-            end -= 1;
-        }
-        Self(text[..end].to_owned())
+        let end = text.floor_char_boundary(Self::MAX);
+        Self(text.get(..end).unwrap_or_default().to_owned())
     }
 
     #[must_use]

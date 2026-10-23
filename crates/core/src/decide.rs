@@ -20,6 +20,7 @@ impl GateId {
     /// arguments, each separated by a NUL byte. Keep the first 16 bytes.
     #[must_use]
     pub fn from_call(call: &ToolCall<'_>) -> Self {
+        use sha2::digest::typenum::U16;
         use sha2::{Digest, Sha256};
 
         let mut hasher = Sha256::new();
@@ -31,9 +32,8 @@ impl GateId {
         hasher.update([0]);
         hasher.update(ArgValue::canonical_object(call.arguments));
         let digest = hasher.finalize();
-        let mut id = [0_u8; 16];
-        id.copy_from_slice(&digest[..16]);
-        Self(id)
+        let (head, _) = digest.split_ref::<U16>();
+        Self((*head).into())
     }
 
     /// The ID as 32 lower-case hex characters.

@@ -160,7 +160,7 @@ struct Check<'a> {
 impl Check<'_> {
     fn child(&mut self) -> Check<'_> {
         Check {
-            depth: self.depth + 1,
+            depth: self.depth.saturating_add(1),
             fault: &mut *self.fault,
         }
     }
