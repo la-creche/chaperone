@@ -196,6 +196,18 @@ chaperone sends each bound secret over the plugin's stdin, in the first message 
 
 One exception exists for third-party MCP servers that read secrets from the environment. The install file can set `"secret_delivery": "env"` for one plugin. chaperone then logs a warning at each start. The warning names the plugin and the cost. A plugin in `default` or `included` can never use this exception.
 
+### 7.6 The front door
+
+The front door is the adapter that receives an app's connection. It turns each request into a call of the `Gateway` trait in `crates/core`, and turns the answer back into its protocol. It decides nothing.
+
+An app sees one MCP server with the tools of every granted upstream. Each tool has an exposed name: `<upstream>__<tool>`, for example `vikunja__list_tasks`.
+
+- A plugin name cannot contain `__`, so the first `__` always ends the upstream name.
+- An exposed name holds only `A-Z`, `a-z`, `0-9`, `_` and `-`, up to 50 characters. LibreChat passes each tool to the model as `<tool>_mcp_<server>`, and model APIs allow 64 such characters.
+- The manifest leaves out a tool whose exposed name breaks these rules. chaperone logs a warning that names the tool.
+
+In version 1, the default front door serves plain HTTP only on a loopback address. chaperone refuses to start when the front door address is not loopback and TLS is not set up. TLS comes before the move to the host.
+
 ## 8. Secrets
 
 - A secret is one file, mode 0600. chaperone checks the owner and the mode before it reads the file.
@@ -264,9 +276,11 @@ One pull request per step:
 2. `core`, in two pull requests:
    1. The workspace, CI, the strict reader, the name types, `Secret`, argument values and time.
    2. The config types, slot resolution, the decision, the hook traits and the property tests.
-3. The front door and the default identity plugin.
+3. In two pull requests:
+   1. The `Gateway` contract, exposed names, the `bearer` identity plugin and the `audit-jsonl` audit sink. The audit sink moves here from step 5, so the first program that runs already writes the audit (G6).
+   2. The `chaperone` program and the `mcp-http` front door.
 4. The effect host and the Vikunja upstream.
-5. The audit sink and the secret source.
+5. The secret source.
 6. Gates, the approval hook and `ha-approval`.
 7. `ha-call`, both halves.
 8. The admin socket, the CLI and the editor.

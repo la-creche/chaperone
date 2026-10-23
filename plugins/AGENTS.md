@@ -22,7 +22,7 @@ The directory names the kind. Put a plugin only in the directory of its kind.
 |---|---|---|---|---|
 | identity | decision | identity (required) | The request credential, the request facts, the policy | An app instance, or nothing. Optionally a narrower reach. |
 | fence | decision | none, any number | App instance, tool, arguments, the plugin's policy section | Pass, `Deny(reason)` or `Gate` |
-| front door | adapter | front door (required) | Inbound connections | Calls into the core |
+| front door | adapter | front door (required) | Inbound connections | Calls the `Gateway` trait in `crates/core` |
 | secret source | adapter | secret source (required) | A secret name | A `Secret` |
 | audit sink | adapter | audit sink (required) | One audit record | Written, or an error |
 | approval | effect | approval channel (required) | Gate ID, app instance, summary | `Approved`, `Denied(reason)`, or an error |

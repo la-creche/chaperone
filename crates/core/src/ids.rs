@@ -142,12 +142,17 @@ pub enum PluginNameKind {}
 
 impl sealed::Sealed for PluginNameKind {}
 
+// The front door joins an upstream and a tool with "__", so a plugin name
+// may not contain it (`docs/design.md` 7.6).
+const PLUGIN_RULE: &str =
+    "1 to 64 characters of a-z, 0-9, '-' and '_', starting with a-z or 0-9, with no \"__\"";
+
 impl NameKind for PluginNameKind {
     const KIND: &'static str = "plugin name";
-    const RULE: &'static str = SLUG_RULE;
+    const RULE: &'static str = PLUGIN_RULE;
 
     fn is_valid(text: &str) -> bool {
-        is_slug(text)
+        is_slug(text) && !text.contains("__")
     }
 }
 
@@ -253,6 +258,12 @@ mod tests {
         for bad in ["", "-x", "_x", "Upper", "a b", "a/b", "é", &"a".repeat(65)] {
             assert!(AppId::try_new(bad).is_err(), "{bad:?}");
         }
+    }
+
+    #[test]
+    fn a_plugin_name_refuses_a_double_underscore() {
+        assert!(PluginName::try_new("ha_call").is_ok());
+        assert!(PluginName::try_new("ha__call").is_err());
     }
 
     #[test]

@@ -96,6 +96,23 @@ pub enum DenyReason {
     GateCap,
 }
 
+impl DenyReason {
+    /// A stable code for an app and for the audit file.
+    #[must_use]
+    pub const fn code(&self) -> &'static str {
+        match self {
+            Self::PolicyNotLoaded => "policy_not_loaded",
+            Self::UnknownCredential => "unknown_credential",
+            Self::RateLimited => "rate_limited",
+            Self::ToolNotGranted => "tool_not_granted",
+            Self::ArgumentFenced { .. } => "argument_fenced",
+            Self::Fence { .. } => "fence",
+            Self::ApprovalDenied => "approval_denied",
+            Self::GateCap => "gate_cap",
+        }
+    }
+}
+
 /// The result of the decision function.
 #[must_use]
 #[derive(Debug, Clone, PartialEq, Eq)]
