@@ -8,7 +8,7 @@ pub mod strict;
 mod time;
 mod value;
 
-pub use ids::{AppId, ArgName, NameError, PluginName, SecretName, ToolName};
+pub use ids::{AppId, ArgName, Name, NameError, NameKind, PluginName, SecretName, ToolName};
 pub use secret::Secret;
 pub use time::Timestamp;
 pub use value::ArgValue;

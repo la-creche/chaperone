@@ -1,10 +1,12 @@
-//! One newtype per kind of name. A constructor checks the grammar, so a value
-//! of each type is valid by construction. Each type reads from JSON through
+//! One distinct type per kind of name. [`Name::try_new`] checks the grammar
+//! of the kind, so each value is valid by construction. JSON reads through
 //! the same check.
 
 use std::fmt;
+use std::marker::PhantomData;
+use std::str::FromStr;
 
-use serde::{Deserialize, Deserializer, Serialize};
+use serde::{Deserialize, Serialize};
 
 /// Why a text is not a valid name of its kind.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
@@ -15,14 +17,87 @@ pub struct NameError {
     rule: &'static str,
 }
 
-/// The grammar of a slug: an app ID, a plugin name or a secret name.
-const SLUG_RULE: &str = "1 to 64 characters of a-z, 0-9, '-' and '_', starting with a-z or 0-9";
-const SLUG_MAX: usize = 64;
+/// The grammar of one kind of name. Only this crate defines kinds.
+pub trait NameKind: sealed::Sealed {
+    /// The kind, as an error message names it.
+    const KIND: &'static str;
+    /// The grammar, as an error message states it.
+    const RULE: &'static str;
+    /// Whether `text` follows the grammar.
+    fn is_valid(text: &str) -> bool;
+}
 
-/// The grammar of a tool name or an argument name. It follows the MCP
-/// guidance for tool names.
-const TOOL_RULE: &str = "1 to 128 characters of A-Z, a-z, 0-9, '_', '-' and '.'";
-const TOOL_MAX: usize = 128;
+pub(crate) mod sealed {
+    pub trait Sealed {}
+}
+
+/// A name of kind `K`. Use the aliases: [`AppId`], [`PluginName`],
+/// [`SecretName`], [`ToolName`], [`ArgName`].
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[serde(try_from = "String", into = "String", bound = "K: NameKind + Clone")]
+pub struct Name<K> {
+    text: String,
+    kind: PhantomData<K>,
+}
+
+impl<K: NameKind> Name<K> {
+    /// Check `text` and wrap a copy of it.
+    ///
+    /// # Errors
+    ///
+    /// Returns a [`NameError`] when `text` breaks the grammar of `K`.
+    pub fn try_new(text: &str) -> Result<Self, NameError> {
+        Self::try_from(text.to_owned())
+    }
+
+    /// The name as text.
+    #[must_use]
+    pub fn as_str(&self) -> &str {
+        &self.text
+    }
+}
+
+impl<K: NameKind> TryFrom<String> for Name<K> {
+    type Error = NameError;
+
+    fn try_from(text: String) -> Result<Self, NameError> {
+        if K::is_valid(&text) {
+            Ok(Self {
+                text,
+                kind: PhantomData,
+            })
+        } else {
+            Err(NameError {
+                kind: K::KIND,
+                text,
+                rule: K::RULE,
+            })
+        }
+    }
+}
+
+impl<K: NameKind> FromStr for Name<K> {
+    type Err = NameError;
+
+    fn from_str(text: &str) -> Result<Self, NameError> {
+        Self::try_new(text)
+    }
+}
+
+impl<K> From<Name<K>> for String {
+    fn from(name: Name<K>) -> Self {
+        name.text
+    }
+}
+
+impl<K> fmt::Display for Name<K> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(&self.text)
+    }
+}
+
+const SLUG_MAX: usize = 64;
+const SLUG_RULE: &str = "1 to 64 characters of a-z, 0-9, '-' and '_', starting with a-z or 0-9";
 
 fn is_slug(text: &str) -> bool {
     let mut chars = text.chars();
@@ -34,6 +109,10 @@ fn is_slug(text: &str) -> bool {
         && chars.all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-' || c == '_')
 }
 
+// The MCP guidance for tool names.
+const TOOL_MAX: usize = 128;
+const TOOL_RULE: &str = "1 to 128 characters of A-Z, a-z, 0-9, '_', '-' and '.'";
+
 fn is_tool_name(text: &str) -> bool {
     !text.is_empty()
         && text.len() <= TOOL_MAX
@@ -42,70 +121,91 @@ fn is_tool_name(text: &str) -> bool {
             .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-' || c == '.')
 }
 
-macro_rules! name_type {
-    ($(#[$doc:meta])* $name:ident, $kind:literal, $valid:ident, $rule:ident) => {
-        $(#[$doc])*
-        #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
-        #[serde(transparent)]
-        pub struct $name(String);
+/// The kind of [`AppId`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum AppIdKind {}
 
-        impl $name {
-            /// Check `text` and wrap it.
-            ///
-            /// # Errors
-            ///
-            /// Returns a [`NameError`] when `text` breaks the grammar.
-            pub fn new(text: impl Into<String>) -> Result<Self, NameError> {
-                let text = text.into();
-                if $valid(&text) {
-                    Ok(Self(text))
-                } else {
-                    Err(NameError { kind: $kind, text, rule: $rule })
-                }
-            }
+impl sealed::Sealed for AppIdKind {}
 
-            /// The name as text.
-            #[must_use]
-            pub fn as_str(&self) -> &str {
-                &self.0
-            }
-        }
+impl NameKind for AppIdKind {
+    const KIND: &'static str = "app ID";
+    const RULE: &'static str = SLUG_RULE;
 
-        impl fmt::Display for $name {
-            fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-                f.write_str(&self.0)
-            }
-        }
-
-        impl<'de> Deserialize<'de> for $name {
-            fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-                let text = String::deserialize(deserializer)?;
-                Self::new(text).map_err(serde::de::Error::custom)
-            }
-        }
-    };
+    fn is_valid(text: &str) -> bool {
+        is_slug(text)
+    }
 }
 
-name_type!(
-    /// The ID of one app instance in the policy file.
-    AppId, "app ID", is_slug, SLUG_RULE
-);
-name_type!(
-    /// The name of one plugin. It equals the plugin's directory name.
-    PluginName, "plugin name", is_slug, SLUG_RULE
-);
-name_type!(
-    /// The name of one secret. It equals the secret's file name.
-    SecretName, "secret name", is_slug, SLUG_RULE
-);
-name_type!(
-    /// The name of one tool of an upstream.
-    ToolName, "tool name", is_tool_name, TOOL_RULE
-);
-name_type!(
-    /// The name of one top-level argument of a tool call.
-    ArgName, "argument name", is_tool_name, TOOL_RULE
-);
+/// The kind of [`PluginName`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum PluginNameKind {}
+
+impl sealed::Sealed for PluginNameKind {}
+
+impl NameKind for PluginNameKind {
+    const KIND: &'static str = "plugin name";
+    const RULE: &'static str = SLUG_RULE;
+
+    fn is_valid(text: &str) -> bool {
+        is_slug(text)
+    }
+}
+
+/// The kind of [`SecretName`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum SecretNameKind {}
+
+impl sealed::Sealed for SecretNameKind {}
+
+impl NameKind for SecretNameKind {
+    const KIND: &'static str = "secret name";
+    const RULE: &'static str = SLUG_RULE;
+
+    fn is_valid(text: &str) -> bool {
+        is_slug(text)
+    }
+}
+
+/// The kind of [`ToolName`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum ToolNameKind {}
+
+impl sealed::Sealed for ToolNameKind {}
+
+impl NameKind for ToolNameKind {
+    const KIND: &'static str = "tool name";
+    const RULE: &'static str = TOOL_RULE;
+
+    fn is_valid(text: &str) -> bool {
+        is_tool_name(text)
+    }
+}
+
+/// The kind of [`ArgName`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum ArgNameKind {}
+
+impl sealed::Sealed for ArgNameKind {}
+
+impl NameKind for ArgNameKind {
+    const KIND: &'static str = "argument name";
+    const RULE: &'static str = TOOL_RULE;
+
+    fn is_valid(text: &str) -> bool {
+        is_tool_name(text)
+    }
+}
+
+/// The ID of one app instance in the policy file.
+pub type AppId = Name<AppIdKind>;
+/// The name of one plugin. It equals the plugin's directory name.
+pub type PluginName = Name<PluginNameKind>;
+/// The name of one secret. It equals the secret's file name.
+pub type SecretName = Name<SecretNameKind>;
+/// The name of one tool of an upstream.
+pub type ToolName = Name<ToolNameKind>;
+/// The name of one top-level argument of a tool call.
+pub type ArgName = Name<ArgNameKind>;
 
 #[cfg(test)]
 mod tests {
@@ -113,23 +213,23 @@ mod tests {
 
     #[test]
     fn a_slug_takes_lower_case_digits_dash_and_underscore() {
-        assert!(AppId::new("librechat-1_a").is_ok());
-        assert!(AppId::new("0app").is_ok());
+        assert!(AppId::try_new("librechat-1_a").is_ok());
+        assert!(AppId::try_new("0app").is_ok());
     }
 
     #[test]
     fn a_slug_refuses_bad_text() {
         for bad in ["", "-x", "_x", "Upper", "a b", "a/b", "é", &"a".repeat(65)] {
-            assert!(AppId::new(bad).is_err(), "{bad:?}");
+            assert!(AppId::try_new(bad).is_err(), "{bad:?}");
         }
     }
 
     #[test]
     fn a_tool_name_takes_the_mcp_characters() {
-        assert!(ToolName::new("listTasks.v2-x_y").is_ok());
-        assert!(ToolName::new("a b").is_err());
-        assert!(ToolName::new("").is_err());
-        assert!(ToolName::new("a".repeat(129)).is_err());
+        assert!(ToolName::try_new("listTasks.v2-x_y").is_ok());
+        assert!(ToolName::try_new("a b").is_err());
+        assert!(ToolName::try_new("").is_err());
+        assert!(ToolName::try_new(&"a".repeat(129)).is_err());
     }
 
     #[test]
@@ -138,5 +238,23 @@ mod tests {
         assert!(ok.is_ok());
         let bad: Result<PluginName, _> = serde_json::from_str("\"HA call\"");
         assert!(bad.is_err());
+    }
+
+    #[test]
+    fn a_name_writes_to_json_as_its_text() {
+        let name = PluginName::try_new("ha-call").unwrap();
+        assert_eq!(serde_json::to_string(&name).unwrap(), "\"ha-call\"");
+    }
+
+    #[test]
+    fn a_name_parses_with_from_str() {
+        let name: ToolName = "ha_call".parse().unwrap();
+        assert_eq!(name.as_str(), "ha_call");
+    }
+
+    #[test]
+    fn the_error_names_the_kind() {
+        let error = SecretName::try_new("Bad").unwrap_err();
+        assert!(error.to_string().contains("secret name"));
     }
 }

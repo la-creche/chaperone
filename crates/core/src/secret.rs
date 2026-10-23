@@ -54,7 +54,7 @@ mod tests {
 
     #[test]
     fn debug_shows_the_name_and_not_the_value() {
-        let secret = Secret::new(SecretName::new("ha_token").unwrap(), "hunter2".into());
+        let secret = Secret::new(SecretName::try_new("ha_token").unwrap(), "hunter2".into());
         let shown = format!("{secret:?}");
         assert_eq!(shown, "Secret(ha_token)");
         assert!(!shown.contains("hunter2"));
@@ -62,7 +62,7 @@ mod tests {
 
     #[test]
     fn expose_returns_the_value() {
-        let secret = Secret::new(SecretName::new("ha_token").unwrap(), "hunter2".into());
+        let secret = Secret::new(SecretName::try_new("ha_token").unwrap(), "hunter2".into());
         assert_eq!(secret.expose(), "hunter2");
     }
 }
