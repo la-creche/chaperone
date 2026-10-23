@@ -1,0 +1,30 @@
+# The purity bans of crates/core (G3). clippy reads this file instead of the
+# root clippy.toml, so the test allowances repeat here.
+allow-unwrap-in-tests = true
+allow-expect-in-tests = true
+allow-panic-in-tests = true
+
+disallowed-methods = [
+  { path = "std::time::SystemTime::now", reason = "G3: the caller passes the time" },
+  { path = "std::time::Instant::now", reason = "G3: the caller passes the time" },
+  { path = "std::env::var", reason = "G3: no environment in core" },
+  { path = "std::env::var_os", reason = "G3: no environment in core" },
+  { path = "std::env::vars", reason = "G3: no environment in core" },
+  { path = "std::fs::read", reason = "G3: core takes bytes, not paths" },
+  { path = "std::fs::read_to_string", reason = "G3: core takes bytes, not paths" },
+  { path = "std::fs::write", reason = "G3: no I/O in core" },
+  { path = "std::process::Command::new", reason = "G3: no I/O in core" },
+]
+disallowed-types = [
+  { path = "std::fs::File", reason = "G3: no I/O in core" },
+  { path = "std::fs::OpenOptions", reason = "G3: no I/O in core" },
+  { path = "std::net::TcpStream", reason = "G3: no I/O in core" },
+  { path = "std::net::TcpListener", reason = "G3: no I/O in core" },
+  { path = "std::net::UdpSocket", reason = "G3: no I/O in core" },
+  { path = "std::time::SystemTime", reason = "G3: the caller passes the time" },
+  { path = "std::time::Instant", reason = "G3: the caller passes the time" },
+  { path = "std::cell::Cell", reason = "G3: no hidden state in core" },
+  { path = "std::cell::RefCell", reason = "G3: no hidden state in core" },
+  { path = "std::sync::Mutex", reason = "G3: no hidden state in core" },
+  { path = "std::sync::RwLock", reason = "G3: no hidden state in core" },
+]
