@@ -49,12 +49,11 @@ Each plugin directory holds a `plugin.json`. The strict reader reads it. It hold
 - `name`, `version` and `kind`
 - `slot`, if the plugin can fill one
 - `hooks`: the hooks it serves
-- `secrets`: the names of the secrets it needs. Never a value.
-- `policy_schema`: the schema of its section in `policy.json`
-- `pairs_with`: the other half, if any
-- for an effect plugin: `command` and `secret_delivery`
+- `secrets`: the secret parameters it needs. Never a value. A decision plugin takes none.
+- `pairs_with`: the kind of the other half, if any
+- for an effect plugin: `command`
 
-The exact JSON shape is settled in build step 2.
+`crates/core/src/plugin.rs` holds the exact shape. A compiled plugin's policy schema comes from its Rust type. The operator sets `secret_delivery` in `install.json`, not here.
 
 ## Slots and overrule
 

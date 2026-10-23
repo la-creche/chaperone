@@ -82,22 +82,27 @@ It returns one of:
 
 The rows apply in this order. The first row that matches decides.
 
-1. No app instance: `Deny(unknown_credential)`.
-2. The rate counter is over the limit: `Deny(rate_limited)`.
-3. The policy does not grant the tool: `Deny(tool_not_granted)`.
-4. A policy argument fence for the upstream refuses the arguments: `Deny(argument_fenced)`.
-5. A fence plugin returns deny: `Deny(reason)` from that plugin.
-6. The policy gates the tool, or a fence plugin returns gate:
-   1. The gate is approved and not expired: `Allow`.
-   2. The pending-gate count is at the cap: `Deny(gate_cap)`.
-   3. Otherwise: `Gate(gate_id)`.
+0. No valid policy is loaded: `Deny(policy_not_loaded)`.
+1. No app instance, or an app instance the policy does not hold: `Deny(unknown_credential)`.
+2. The app instance made `calls_per_minute` calls or more in the current minute: `Deny(rate_limited)`.
+3. The policy does not grant the tool, or the caller's narrowed reach excludes it: `Deny(tool_not_granted)`.
+4. A policy argument fence refuses an argument: `Deny(argument_fenced)`.
+   - An `allow` fence needs the argument present and equal to a listed value.
+   - A `deny` fence refuses a listed value, and refuses an argument that is not a scalar.
+5. A fence plugin returns deny: `Deny(fence)` with that plugin's reason. Fences run in plugin name order. The first deny wins.
+6. The policy marks the tool `"approval": "required"`, or a fence plugin returns gate:
+   1. The gate is denied and not expired: `Deny(approval_denied)`.
+   2. The gate is approved and not expired: `Allow`.
+   3. The gate is pending: `Gate(gate_id)`.
+   4. The pending-gate count is at `max_pending_gates`: `Deny(gate_cap)`.
+   5. Otherwise: `Gate(gate_id)`.
 7. Otherwise: `Allow`.
 
 The core pull request may refine the reason names. It may not change the order without a change to this section.
 
 ### 5.3 Gates
 
-The gate ID is a hash over the app instance, the tool name and the canonical arguments. An identical retry produces the same gate ID.
+The gate ID is the first 16 bytes of a SHA-256 hash over the app instance, the upstream, the tool name and the canonical arguments, separated by NUL bytes. The canonical arguments are the arguments with sorted keys and no white space. An identical retry produces the same gate ID.
 
 A gated call goes through these steps:
 
@@ -179,10 +184,11 @@ Each plugin directory holds a `plugin.json`. It holds:
 - the name, the version and the kind
 - the slot the plugin can fill, if any
 - the hooks it serves
-- the names of the secrets it needs
-- the schema of its policy section
-- the plugin it pairs with, if it has two halves
-- for an effect plugin: the launch command and the secret delivery mode
+- the secret parameters it needs: the names under which it receives secrets. A decision plugin takes none.
+- the kind of its other half, if it has two halves
+- for an effect plugin: the launch command
+
+An effect plugin serves one role: upstream or approval. A compiled plugin's policy-section schema comes from its Rust type, not from `plugin.json`, so the schema has one source. The secret delivery mode is the operator's choice, so it sits in `install.json`.
 
 ### 7.5 Secret delivery to an effect plugin
 
@@ -269,7 +275,8 @@ One pull request per step:
 
 | Item | Settle in |
 |---|---|
-| The final name of the approval hook | Step 6 |
+| The final name of the approval hook, and its answer type | Step 6 |
 | The exact framing of the secret message on stdin | Step 4 |
-| The JSON shape of `install.json`, `policy.json` and `plugin.json` | Step 2 |
+| The adapter traits: front door, secret source, audit sink | Steps 3 and 5 |
+| JSON Schema generation for the editor | Step 8 |
 | Stage (b): sandbox per app instance, the OpenHands runtime, the model pass-through | After version 1 |
