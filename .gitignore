@@ -1,0 +1,15 @@
+/target/
+**/*.rs.bk
+
+# Plugins in an `added` directory are the operator's own. Git ignores them.
+/plugins/adapter/added/*
+!/plugins/adapter/added/.gitkeep
+/plugins/decision/added/*
+!/plugins/decision/added/.gitkeep
+/plugins/effect/added/*
+!/plugins/effect/added/.gitkeep
+
+# Local configuration and secrets never enter the repository.
+/install.json
+/policy.json
+/secrets/
