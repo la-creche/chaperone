@@ -1,0 +1,7 @@
+# Seeds for failure cases proptest has generated in the past. It is
+# automatically read and these particular cases re-run before any
+# novel cases are generated.
+#
+# It is recommended to check this file in to source control so that
+# everyone who runs the test benefits from these saved cases.
+cc 52fdc52e5d19216c62adc8356093c598bb49ca25c25d8141c3dd1c2c29e0c7e7 # shrinks to case = Case { caller: Some(Caller { app: AppId("librechat"), reach: Full }), upstream: PluginName("ha-call"), tool: ToolName("ha_call"), arguments: {"entity_id": String("switch.heater"), "n": Int(0), "project": Int(0)}, calls: 0, gates: GateBook { pending: {}, approved: {}, denied: {} } }, behavior = Pass

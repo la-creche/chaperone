@@ -32,7 +32,7 @@ pub(crate) mod sealed {
 }
 
 /// A name of kind `K`. Use the aliases: [`AppId`], [`PluginName`],
-/// [`SecretName`], [`ToolName`], [`ArgName`].
+/// [`SecretName`], [`ToolName`], [`ArgName`], [`SecretParam`].
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(try_from = "String", into = "String", bound = "K: NameKind + Clone")]
 pub struct Name<K> {
@@ -196,6 +196,34 @@ impl NameKind for ArgNameKind {
     }
 }
 
+const PARAM_MAX: usize = 64;
+const PARAM_RULE: &str = "1 to 64 characters of A-Z, a-z, 0-9 and '_', not starting with a digit";
+
+fn is_param(text: &str) -> bool {
+    let first_ok = text
+        .chars()
+        .next()
+        .is_some_and(|c| c.is_ascii_alphabetic() || c == '_');
+    first_ok
+        && text.len() <= PARAM_MAX
+        && text.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
+}
+
+/// The kind of [`SecretParam`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum SecretParamKind {}
+
+impl sealed::Sealed for SecretParamKind {}
+
+impl NameKind for SecretParamKind {
+    const KIND: &'static str = "secret parameter";
+    const RULE: &'static str = PARAM_RULE;
+
+    fn is_valid(text: &str) -> bool {
+        is_param(text)
+    }
+}
+
 /// The ID of one app instance in the policy file.
 pub type AppId = Name<AppIdKind>;
 /// The name of one plugin. It equals the plugin's directory name.
@@ -206,6 +234,9 @@ pub type SecretName = Name<SecretNameKind>;
 pub type ToolName = Name<ToolNameKind>;
 /// The name of one top-level argument of a tool call.
 pub type ArgName = Name<ArgNameKind>;
+/// The name under which a plugin receives one secret. For a plugin with
+/// the env exception, it is the name of the environment variable.
+pub type SecretParam = Name<SecretParamKind>;
 
 #[cfg(test)]
 mod tests {
