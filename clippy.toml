@@ -8,4 +8,5 @@ allow-panic-in-tests = true
 # A caller adds #[expect(clippy::disallowed_methods, reason = "...")].
 disallowed-methods = [
   { path = "chaperone_core::Secret::expose", reason = "G9: a secret value read needs an expect attribute with a reason" },
+  { path = "chaperone_core::Bearer::expose", reason = "G9: a token read needs an expect attribute with a reason" },
 ]

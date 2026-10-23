@@ -15,6 +15,12 @@ pub struct NameError {
     rule: &'static str,
 }
 
+impl NameError {
+    pub(crate) fn new(kind: &'static str, text: String, rule: &'static str) -> Self {
+        Self { kind, text, rule }
+    }
+}
+
 /// The grammar of a slug: an app ID, a plugin name or a secret name.
 const SLUG_RULE: &str = "1 to 64 characters of a-z, 0-9, '-' and '_', starting with a-z or 0-9";
 const SLUG_MAX: usize = 64;

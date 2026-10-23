@@ -45,12 +45,37 @@ impl fmt::Debug for Secret {
     }
 }
 
+/// The bearer token an app sends with a call. Like a [`Secret`], it has no
+/// `Display` and no `Serialize`, and its `Debug` hides the value.
+pub struct Bearer(SecretString);
+
+impl Bearer {
+    /// Wrap the token text from a request.
+    #[must_use]
+    pub fn new(token: String) -> Self {
+        Self(SecretString::from(token))
+    }
+
+    /// The token text. An identity plugin hashes it and drops it.
+    #[must_use]
+    pub fn expose(&self) -> &str {
+        self.0.expose_secret()
+    }
+}
+
+impl fmt::Debug for Bearer {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("Bearer(..)")
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use static_assertions::assert_not_impl_any;
 
     assert_not_impl_any!(Secret: fmt::Display, serde::Serialize, Clone);
+    assert_not_impl_any!(Bearer: fmt::Display, serde::Serialize, Clone);
 
     #[test]
     fn debug_shows_the_name_and_not_the_value() {
@@ -58,6 +83,11 @@ mod tests {
         let shown = format!("{secret:?}");
         assert_eq!(shown, "Secret(ha_token)");
         assert!(!shown.contains("hunter2"));
+    }
+
+    #[test]
+    fn bearer_debug_hides_the_token() {
+        assert_eq!(format!("{:?}", Bearer::new("tok".into())), "Bearer(..)");
     }
 
     #[test]
