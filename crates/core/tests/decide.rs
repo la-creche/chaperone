@@ -551,6 +551,21 @@ fn a_policy_without_the_fence_code_does_not_load() {
 }
 
 #[test]
+fn two_fences_of_one_name_do_not_load_in_either_order() {
+    let entities = EntityFence(name("ha-call"));
+    let twin = ExtraFence(name("ha-call"), Behavior::Pass);
+    let expected = PolicyError::DuplicateFence(name("ha-call"));
+    assert_eq!(
+        load(INSTALL, &policy_text(""), &[&entities, &twin]).unwrap_err(),
+        expected
+    );
+    assert_eq!(
+        load(INSTALL, &policy_text(""), &[&twin, &entities]).unwrap_err(),
+        expected
+    );
+}
+
+#[test]
 fn a_policy_with_a_bad_plugin_section_does_not_load() {
     let text = policy_text("").replace(r#""gate": ["lock.front"]"#, r#""gates": []"#);
     assert!(matches!(load_error(&text), PolicyError::Section { .. }));
