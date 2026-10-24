@@ -6,7 +6,7 @@
 use std::collections::BTreeMap;
 use std::panic::{self, AssertUnwindSafe};
 use std::sync::mpsc;
-use std::sync::{Arc, Mutex, PoisonError};
+use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::Duration;
 
@@ -65,6 +65,29 @@ struct Counters {
     rates: RateBook,
     /// The number of the next call, or `None` once the counter is exhausted.
     next_call: Option<CallNumber>,
+}
+
+/// Why a call could not take a call number.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum BeginFault {
+    /// The call counter is exhausted.
+    Exhausted,
+    /// A panic left the counters lock poisoned. The program does not reach
+    /// inside a poisoned lock, so every later call fails (G2).
+    Poisoned,
+}
+
+/// Take the next call number and count the call for `app`.
+fn begin(
+    counters: &Mutex<Counters>,
+    app: Option<&AppId>,
+    now: Timestamp,
+) -> Result<(CallNumber, u32), BeginFault> {
+    let mut counters = counters.lock().map_err(|_| BeginFault::Poisoned)?;
+    let call = counters.next_call.ok_or(BeginFault::Exhausted)?;
+    counters.next_call = call.checked_next();
+    let calls_this_minute = app.map_or(0, |app| counters.rates.count(app, now));
+    Ok((call, calls_this_minute))
 }
 
 /// The program's side of the gateway. It decides each call through core and
@@ -141,9 +164,14 @@ impl ChaperoneGateway {
     ) -> CallOutcome {
         let started_at = self.clock.now();
         let app = caller.as_ref().map(|caller| &caller.app);
-        let Some((call, calls_this_minute)) = self.begin(app, started_at) else {
+        let (call, calls_this_minute) = match begin(&self.counters, app, started_at) {
+            Ok(begun) => begun,
             // Without a call number no record can be written (G6).
-            return CallOutcome::Failed(CallFault::AuditFailed);
+            Err(BeginFault::Exhausted) => return CallOutcome::Failed(CallFault::AuditFailed),
+            Err(BeginFault::Poisoned) => {
+                tracing::error!("the call counters are poisoned, so every call fails");
+                return CallOutcome::Failed(CallFault::Halted);
+            }
         };
         let audit = CallAudit::new(
             self.run,
@@ -198,18 +226,6 @@ impl ChaperoneGateway {
             self.identity.resolve(credentials, policy)
         }))
         .unwrap_or(None)
-    }
-
-    /// Take the next call number and count the call for `app`. `None` means
-    /// the call counter is exhausted.
-    fn begin(&self, app: Option<&AppId>, now: Timestamp) -> Option<(CallNumber, u32)> {
-        // The guarded data stays whole through a panic of another caller,
-        // so a poisoned lock is taken back.
-        let mut counters = self.counters.lock().unwrap_or_else(PoisonError::into_inner);
-        let call = counters.next_call?;
-        counters.next_call = call.checked_next();
-        let calls_this_minute = app.map_or(0, |app| counters.rates.count(app, now));
-        Some((call, calls_this_minute))
     }
 
     /// Decide on another thread and wait up to the budget. `None` means the
@@ -322,6 +338,40 @@ impl Gateway for SharedGateway {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn fresh() -> Mutex<Counters> {
+        Mutex::new(Counters {
+            rates: RateBook::default(),
+            next_call: Some(CallNumber::FIRST),
+        })
+    }
+
+    #[test]
+    fn begin_numbers_each_call() {
+        let counters = fresh();
+        let now = Timestamp::from_unix_millis(0);
+        let (first, _) = begin(&counters, None, now).unwrap();
+        let (second, _) = begin(&counters, None, now).unwrap();
+        assert_eq!(first, CallNumber::FIRST);
+        assert_eq!(Some(second), first.checked_next());
+    }
+
+    #[test]
+    fn a_poisoned_lock_fails_every_later_call() {
+        let counters = std::sync::Arc::new(fresh());
+        let held = std::sync::Arc::clone(&counters);
+        let panicked = std::thread::spawn(move || {
+            let _guard = held.lock().unwrap();
+            panic!("a panic while the lock is held");
+        })
+        .join();
+        assert!(panicked.is_err());
+
+        let now = Timestamp::from_unix_millis(0);
+        for _ in 0..2 {
+            assert_eq!(begin(&counters, None, now), Err(BeginFault::Poisoned));
+        }
+    }
 
     #[test]
     fn the_rate_book_counts_within_a_minute_and_starts_over_after_it() {
