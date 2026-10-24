@@ -22,7 +22,7 @@ use rmcp::ServiceExt;
 use rmcp::model::CallToolRequestParams;
 use rmcp::transport::StreamableHttpClientTransport;
 use rmcp::transport::streamable_http_client::StreamableHttpClientTransportConfig;
-use support::{INSTALL, TOKEN, config_dir, plugin_tree, policy_text};
+use support::{INSTALL, TOKEN, config_dir, plugin_tree, policy_text, secrets_dir};
 use tokio_util::sync::CancellationToken;
 
 const OTHER_TOKEN: &str = "fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210";
@@ -42,7 +42,8 @@ async fn serve() -> Served {
     let plugins = plugin_tree(root.path());
     let config = config_dir(root.path(), INSTALL, &policy_text(30));
     let audit_path = root.path().join("audit.jsonl");
-    let loaded = startup::load(&config, &plugins, &audit_path).unwrap();
+    let secrets = secrets_dir(root.path());
+    let loaded = startup::load(&config, &plugins, &audit_path, &secrets).unwrap();
     let gateway = Arc::new(SharedGateway::new(ChaperoneGateway::new(
         loaded.run,
         loaded.policy,
