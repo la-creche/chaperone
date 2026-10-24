@@ -55,7 +55,7 @@ impl CallFault {
     }
 }
 
-/// The answer to one tool call. Build step 4 adds `Ran`, with the checked
+/// The answer to one tool call. Build step 5 adds `Ran`, with the checked
 /// upstream result.
 #[derive(Debug, Clone)]
 pub enum CallOutcome {

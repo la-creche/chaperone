@@ -18,12 +18,8 @@ use chaperone_core::{
 
 use crate::clock::Clock;
 
-/// The longest the program waits for one decision. A decision that takes
-/// longer fails the call with `no_decision` (G2).
-// DESIGN-QUESTION: docs/design.md 5 sets no bound for a decision. Five
-// seconds is far above the time of a pure function over a policy file. A
-// larger bound holds a caller longer on a stuck fence. A smaller bound
-// fails a call on a slow host.
+/// The longest the program waits for one decision (`docs/design.md` 5.5).
+/// A decision that takes longer fails the call with `no_decision` (G2).
 pub const DECISION_BUDGET: Duration = Duration::from_secs(5);
 
 const MINUTE_MILLIS: i64 = 60_000;
@@ -138,7 +134,7 @@ impl ChaperoneGateway {
         if self.resolve(credentials).is_none() {
             return Err(ListError::UnknownCredential);
         }
-        // Build step 4 lists the granted tools of each running upstream.
+        // Build step 5 lists the granted tools of each running upstream.
         Ok(Vec::new())
     }
 
@@ -201,7 +197,7 @@ impl ChaperoneGateway {
         match next {
             AfterDecision::Denied(reason) => CallOutcome::Denied(reason),
             AfterDecision::Allowed(call) => {
-                // Build step 4 runs the call. No upstream runs yet.
+                // Build step 5 runs the call. No upstream runs yet.
                 let fault = CallFault::NotConnected;
                 outcome(call.failed(fault, self.clock.now(), sink), fault)
             }
@@ -217,10 +213,7 @@ impl ChaperoneGateway {
     /// fence that panics denies (G2). The payload is dropped unread, because
     /// it can hold a token (G9).
     pub(crate) fn resolve(&self, credentials: &Credentials<'_>) -> Option<Caller> {
-        // DESIGN-QUESTION: docs/design.md 5 bounds the time of no hook. The
-        // identity hook runs on the caller's thread, because `Credentials`
-        // borrows the request. A hook that never returns holds this one
-        // call. A bound would need an owned copy of the bearer token.
+        // The identity hook has no time bound (`docs/design.md` 5.5).
         let policy = &self.policy;
         panic::catch_unwind(AssertUnwindSafe(|| {
             self.identity.resolve(credentials, policy)
