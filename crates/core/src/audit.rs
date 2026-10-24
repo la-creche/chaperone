@@ -1,4 +1,5 @@
-//! The audit records and the audit-sink hook (G6).
+//! The audit records (G6). The `AuditSink` trait that writes them is in
+//! `hook.rs`.
 //!
 //! [`CallAudit`] is the only way to build an [`AuditRecord`]. Its consuming
 //! methods define the valid record sequences in `docs/design.md` section 5.4.
@@ -19,6 +20,7 @@ use std::num::NonZeroU64;
 use crate::decide::{Decision, DenyReason, GateId};
 use crate::exposed::ExposedName;
 use crate::gateway::CallFault;
+use crate::hook::AuditSink;
 use crate::ids::AppId;
 use crate::policy::Policy;
 use crate::time::Timestamp;
@@ -436,17 +438,6 @@ pub enum AuditError {
     /// The sink could not encode the record.
     #[error("the audit record could not be encoded")]
     Encode,
-}
-
-/// The audit-sink hook. It fills the audit sink slot. Only [`CallAudit`]
-/// and its states call it.
-pub trait AuditSink: Send + Sync + fmt::Debug {
-    /// Write one record. Return only after the record is durable.
-    ///
-    /// # Errors
-    ///
-    /// Returns an [`AuditError`] when the record is not durable.
-    fn write(&self, record: &AuditRecord) -> Result<(), AuditError>;
 }
 
 #[cfg(test)]

@@ -53,7 +53,7 @@ Limits of the guarantee:
 
 | Part | Path | Job |
 |---|---|---|
-| core | `crates/core` | Policy types, the strict JSON reader, the decision function, the decision-hook traits. No I/O. |
+| core | `crates/core` | Policy types, the strict JSON reader, the decision function, the hook traits. No I/O. |
 | chaperone | `crates/chaperone` | The program. It hosts the adapter plugins and the effect plugins, writes the audit, serves the admin socket and runs the CLI. |
 | editor | `crates/editor` | A separate program. It serves HTML forms that edit the policy file. |
 | plugins | `plugins/` | Every plugin. See section 7. |
@@ -213,6 +213,8 @@ Fences and upstreams are not slots. The install file can enable any number of th
 
 To overrule a default plugin, the operator names a different plugin for that slot in `install.json`. When the install file names no plugin for a slot, the default plugin fills it. chaperone refuses to start when two enabled plugins claim one slot and the install file does not choose.
 
+`crates/core/src/hook.rs` holds every contract between chaperone and a compiled plugin: the trait a decision or adapter plugin implements, and the `Gateway` trait a front door calls. A plugin implements a trait from that module and nothing else of `core`.
+
 A release binary contains the decision and adapter plugins from `default` and `included`. `crates/chaperone/src/registry.rs` is the one table that names each compiled plugin and how the build constructs it. A compiled plugin that `install.json` puts in a slot without a row there refuses start (G2). A decision or adapter plugin in `added` needs a row and a build from source. An effect plugin in `added` works with a release binary, because it runs as its own process.
 
 ### 7.4 The plugin manifest
@@ -320,11 +322,12 @@ One pull request per step:
 2. `core`, in two pull requests:
    1. The workspace, CI, the strict reader, the name types, `Secret`, argument values and time.
    2. The config types, slot resolution, the decision, the hook traits and the property tests.
-3. In four pull requests:
+3. In five pull requests:
    1. The `Gateway` contract, exposed names, the `bearer` identity plugin and the `audit-jsonl` audit sink. The audit sink comes this early, so the first program that runs already writes the audit (G6).
    2. The `chaperone` program and the `mcp-http` front door.
    3. The registry of compiled plugins.
    4. The clock slot and the `system-clock` adapter.
+   5. One module for every hook trait.
 4. The secret source. It comes before the effect host, because the Vikunja upstream needs a secret.
 5. The effect host, the upstream result check and the Vikunja upstream.
 6. Gates, the approval hook and `ha-approval`.

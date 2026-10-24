@@ -29,7 +29,7 @@ The directory names the kind. Put a plugin only in the directory of its kind.
 | approval | effect | approval channel (required) | Gate ID, app instance, summary | `Approved`, `Denied(reason)`, or an error |
 | upstream tools | effect | none, any number | An MCP `tools/call` | An MCP result |
 
-A change to this table changes `docs/design.md` in the same pull request.
+Each compiled hook is one trait in `crates/core/src/hook.rs`. That file is the whole contract. A change to this table changes `docs/design.md` and that file in the same pull request.
 
 ## Layout
 

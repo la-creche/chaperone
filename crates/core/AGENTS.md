@@ -11,7 +11,7 @@ Rules for `crates/core`. Read the root `AGENTS.md` first.
 - The JSON Schema generation from those types.
 - The cross-file checks behind `chaperone check`.
 - The decision function in `docs/design.md` section 5.
-- The traits for decision hooks and adapter hooks, and the result types of effect hooks.
+- The hook traits, all in `src/hook.rs`: what a decision or adapter plugin implements, and the `Gateway` trait a front door calls. The result types of effect hooks.
 - The `Secret` type.
 
 ## Rules

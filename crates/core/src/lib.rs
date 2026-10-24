@@ -3,7 +3,6 @@
 //! rules.
 
 mod audit;
-mod clock;
 mod decide;
 mod exposed;
 mod gateway;
@@ -19,15 +18,14 @@ mod value;
 
 pub use audit::{
     AfterDecision, AllowedCall, ArgumentsDigest, AuditApp, AuditDecision, AuditError, AuditEvent,
-    AuditRecord, AuditSink, AuditTool, CallAudit, CallNumber, GatedCall, RunId,
+    AuditRecord, AuditTool, CallAudit, CallNumber, GatedCall, RunId,
 };
-pub use clock::Clock;
 pub use decide::{Decision, DenyReason, GateId, Gates, Request, decide};
 pub use exposed::{ExposedError, ExposedName, SEPARATOR};
-pub use gateway::{CallFault, CallOutcome, Gateway, ListError, ListedTool};
+pub use gateway::{CallFault, CallOutcome, ListError, ListedTool};
 pub use hook::{
-    Caller, Credentials, Fence, FenceReason, FenceVerdict, Identity, PreparedFence, RawSection,
-    Reach, SectionError, ToolCall,
+    AuditSink, Caller, Clock, Credentials, Fence, FenceReason, FenceVerdict, Gateway, Identity,
+    PreparedFence, RawSection, Reach, SecretSource, SectionError, ToolCall,
 };
 pub use ids::{
     AppId, ArgName, Name, NameError, NameKind, PluginName, SecretName, SecretParam, ToolName,
@@ -41,6 +39,6 @@ pub use policy::{
     App, Approval, ArgumentFence, DigestError, Limits, POLICY_FILE_CAP, Policy, PolicyError,
     Scalar, TokenDigest, ToolGrant,
 };
-pub use secret::{Bearer, Secret, SecretError, SecretSource};
+pub use secret::{Bearer, Secret, SecretError};
 pub use time::Timestamp;
 pub use value::{ArgValue, Finite};

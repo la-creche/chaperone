@@ -89,19 +89,6 @@ pub enum SecretError {
     Io(std::io::ErrorKind),
 }
 
-/// The secret-source hook. It fills the secret source slot
-/// (`docs/design.md` 7.2). chaperone reads each bound secret through it at
-/// start.
-pub trait SecretSource: Send + Sync + fmt::Debug {
-    /// The secret `name`.
-    ///
-    /// # Errors
-    ///
-    /// Returns a [`SecretError`] when the secret is missing, unsafe,
-    /// invalid or unreadable.
-    fn read(&self, name: &SecretName) -> Result<Secret, SecretError>;
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
