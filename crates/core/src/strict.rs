@@ -296,7 +296,7 @@ mod tests {
     #[test]
     fn refuses_a_duplicate_key_written_with_an_escape() {
         assert_eq!(
-            err(br#"{"a": 1, "a": 2}"#),
+            err(br#"{"a": 1, "\u0061": 2}"#),
             StrictError::DuplicateKey { key: "a".into() }
         );
     }

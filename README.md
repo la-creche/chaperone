@@ -6,7 +6,7 @@ The app never holds an upstream credential. No model takes part in a decision. A
 
 ## Status
 
-Design only. No code exists yet. `docs/design.md` states the design and the build order.
+Build step 3.1 is done: `crates/core`, the `bearer` identity plugin and the `audit-jsonl` audit sink. The `chaperone` program does not exist yet. `docs/design.md` section 13 lists the build order.
 
 ## Documents
 

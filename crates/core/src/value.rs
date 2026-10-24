@@ -148,7 +148,7 @@ mod tests {
 
     #[test]
     fn an_escape_and_its_character_give_one_text() {
-        assert_eq!(canon(r#""a""#), canon(r#""a""#));
+        assert_eq!(canon(r#""\u0061""#), canon(r#""a""#));
     }
 
     #[test]
