@@ -41,4 +41,4 @@ pub use policy::{
 };
 pub use secret::{Bearer, Secret};
 pub use time::Timestamp;
-pub use value::ArgValue;
+pub use value::{ArgValue, Finite};
