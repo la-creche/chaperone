@@ -3,6 +3,7 @@
 //! rules.
 
 mod audit;
+mod clock;
 mod decide;
 mod exposed;
 mod gateway;
@@ -20,6 +21,7 @@ pub use audit::{
     AfterDecision, AllowedCall, ArgumentsDigest, AuditApp, AuditDecision, AuditError, AuditEvent,
     AuditRecord, AuditSink, AuditTool, CallAudit, CallNumber, GatedCall, RunId,
 };
+pub use clock::Clock;
 pub use decide::{Decision, DenyReason, GateId, Gates, Request, decide};
 pub use exposed::{ExposedError, ExposedName, SEPARATOR};
 pub use gateway::{CallFault, CallOutcome, Gateway, ListError, ListedTool};

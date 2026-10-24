@@ -7,7 +7,7 @@ This crate wires the parts together. It reads the configuration, starts the plug
 ## Rules
 
 1. Read each file with the strict reader in `core`. Do not parse JSON any other way.
-2. Read the clock here, and pass the time to `core` (G3).
+2. Read the time through the clock slot, and pass it to `core` (G3). Never read a clock anywhere else in this crate.
 3. Keep the rate counters and the gate state here. Pass them to `core` as values.
 4. Write the audit line through the audit sink before you return a result (G6).
 5. Blank each exact secret value in a tool result before the audit write and before the return (G9).

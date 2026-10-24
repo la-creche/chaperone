@@ -15,7 +15,6 @@ use std::io::{Read, Write};
 use std::net::SocketAddr;
 use std::sync::Arc;
 
-use chaperone::clock::SystemClock;
 use chaperone::gateway::{ChaperoneGateway, DECISION_BUDGET, SharedGateway};
 use chaperone::startup;
 use chaperone_plugin_mcp_http::BODY_CAP;
@@ -49,7 +48,7 @@ async fn serve() -> Served {
         loaded.policy,
         loaded.identity,
         loaded.audit,
-        Box::new(SystemClock),
+        loaded.clock,
         DECISION_BUDGET,
     )));
 

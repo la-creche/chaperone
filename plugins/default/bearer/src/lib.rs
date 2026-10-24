@@ -76,6 +76,7 @@ mod tests {
             ("bearer", "decision", "identity", "identity"),
             ("secret-files", "adapter", "secret_source", "secret_source"),
             ("audit-jsonl", "adapter", "audit_sink", "audit_sink"),
+            ("system-clock", "adapter", "clock", "clock"),
         ] {
             let text = format!(
                 r#"{{"name":"{name}","version":"1","kind":"{kind}","slot":"{slot}","hooks":["{hook}"]}}"#

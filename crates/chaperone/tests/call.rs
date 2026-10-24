@@ -14,14 +14,13 @@ use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-use chaperone::clock::Clock;
 use chaperone::gateway::{ChaperoneGateway, DECISION_BUDGET, SharedGateway};
 use chaperone::startup;
 use chaperone_core::{
     AppId, AuditDecision, AuditError, AuditEvent, AuditRecord, AuditSink, AuditTool, Bearer,
-    CallFault, CallNumber, CallOutcome, Caller, Credentials, DenyReason, Fence, FenceVerdict,
-    Gateway, Identity, InstallFile, ListError, PluginName, Policy, PreparedFence, RawSection,
-    RunId, SectionError, Timestamp, ToolCall,
+    CallFault, CallNumber, CallOutcome, Caller, Clock, Credentials, DenyReason, Fence,
+    FenceVerdict, Gateway, Identity, InstallFile, ListError, PluginName, Policy, PreparedFence,
+    RawSection, RunId, SectionError, Timestamp, ToolCall,
 };
 use support::{INSTALL, TOKEN, config_dir, plugin_tree, policy_text, write_manifest};
 

@@ -33,16 +33,18 @@ pub enum Slot {
     SecretSource,
     AuditSink,
     ApprovalChannel,
+    Clock,
 }
 
 impl Slot {
     /// Every slot, in a fixed order.
-    pub const ALL: [Self; 5] = [
+    pub const ALL: [Self; 6] = [
         Self::FrontDoor,
         Self::Identity,
         Self::SecretSource,
         Self::AuditSink,
         Self::ApprovalChannel,
+        Self::Clock,
     ];
 
     /// The hook a plugin must serve to fill this slot.
@@ -54,6 +56,7 @@ impl Slot {
             Self::SecretSource => Hook::SecretSource,
             Self::AuditSink => Hook::AuditSink,
             Self::ApprovalChannel => Hook::Approval,
+            Self::Clock => Hook::Clock,
         }
     }
 }
@@ -66,6 +69,7 @@ impl fmt::Display for Slot {
             Self::SecretSource => "secret_source",
             Self::AuditSink => "audit_sink",
             Self::ApprovalChannel => "approval_channel",
+            Self::Clock => "clock",
         })
     }
 }
@@ -82,6 +86,7 @@ pub enum Hook {
     AuditSink,
     Approval,
     Upstream,
+    Clock,
 }
 
 impl Hook {
@@ -90,7 +95,9 @@ impl Hook {
     pub const fn kind(self) -> PluginKind {
         match self {
             Self::Identity | Self::Fence => PluginKind::Decision,
-            Self::FrontDoor | Self::SecretSource | Self::AuditSink => PluginKind::Adapter,
+            Self::FrontDoor | Self::SecretSource | Self::AuditSink | Self::Clock => {
+                PluginKind::Adapter
+            }
             Self::Approval | Self::Upstream => PluginKind::Effect,
         }
     }

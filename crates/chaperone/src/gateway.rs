@@ -13,11 +13,10 @@ use std::time::Duration;
 
 use chaperone_core::{
     AfterDecision, AppId, ArgValue, ArgumentsDigest, AuditApp, AuditError, AuditSink, AuditTool,
-    CallAudit, CallFault, CallNumber, CallOutcome, Caller, Credentials, Decision, ExposedName,
-    Gates, Gateway, Identity, ListError, ListedTool, Policy, Request, RunId, Timestamp,
+    CallAudit, CallFault, CallNumber, CallOutcome, Caller, Clock, Credentials, Decision,
+    ExposedName, Gates, Gateway, Identity, ListError, ListedTool, Policy, Request, RunId,
+    Timestamp,
 };
-
-use crate::clock::Clock;
 
 /// The longest the program waits for one decision. A decision that takes
 /// longer fails the call with `no_decision` (G2).
