@@ -39,6 +39,6 @@ pub use policy::{
     App, Approval, ArgumentFence, DigestError, Limits, POLICY_FILE_CAP, Policy, PolicyError,
     Scalar, TokenDigest, ToolGrant,
 };
-pub use secret::{Bearer, Secret};
+pub use secret::{Bearer, Secret, SecretError, SecretSource};
 pub use time::Timestamp;
 pub use value::{ArgValue, Finite};
