@@ -10,10 +10,10 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use chaperone_core::{
-    AppId, ArgValue, Caller, Catalog, Decision, DenyReason, Fence, FenceReason, FenceVerdict,
-    Found, GateId, Gates, InstallFile, Location, Manifest, PluginKey, PluginName, Policy,
-    PolicyError, PreparedFence, RawSection, Reach, Request, SectionError, Timestamp, ToolCall,
-    ToolName, strict,
+    AppId, ArgValue, AuditApp, AuditTool, Caller, Catalog, Decision, DenyReason, Fence,
+    FenceReason, FenceVerdict, Found, GateId, Gates, InstallFile, Location, Manifest, PluginKey,
+    PluginName, Policy, PolicyError, PreparedFence, RawSection, Reach, Request, SectionError,
+    Timestamp, ToolCall, ToolName, strict,
 };
 use proptest::prelude::*;
 use serde::Deserialize;
@@ -240,6 +240,32 @@ fn caller() -> Caller {
         app: app_id("librechat"),
         reach: Reach::Full,
     }
+}
+
+#[test]
+fn an_audit_tool_keeps_only_a_configured_name() {
+    let policy = base_policy();
+    assert_eq!(
+        AuditTool::lookup("vikunja__list_tasks", Some(&policy)).as_str(),
+        "vikunja__list_tasks"
+    );
+    assert_eq!(
+        AuditTool::lookup("vikunja__not_granted", Some(&policy)).as_str(),
+        AuditTool::UNKNOWN
+    );
+}
+
+#[test]
+fn an_audit_app_keeps_only_a_configured_id() {
+    let policy = base_policy();
+    assert_eq!(
+        AuditApp::lookup(Some(&app_id("librechat")), Some(&policy)).as_ref(),
+        Some(&app_id("librechat"))
+    );
+    assert_eq!(
+        AuditApp::lookup(Some(&app_id("token-looking-text")), Some(&policy)).as_ref(),
+        None
+    );
 }
 
 fn args(text: &str) -> BTreeMap<String, ArgValue> {

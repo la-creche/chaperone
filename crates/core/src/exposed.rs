@@ -1,6 +1,6 @@
 //! The name under which an app sees an upstream tool: `<upstream>__<tool>`
 //! (`docs/design.md` 7.6). LibreChat passes each MCP tool to the model as a
-//! function named `<tool>_mcp_<server>`, and model APIs allow only
+//! function named `<tool>_mcp_chaperone` in version 1. Model APIs allow only
 //! `A-Z a-z 0-9 _ -` in a function name, up to 64 characters. The limit of
 //! [`ExposedName::MAX`] leaves room for that suffix.
 
@@ -10,6 +10,9 @@ use crate::ids::{PluginName, ToolName};
 
 /// The text that joins an upstream and a tool. A plugin name cannot hold it.
 pub const SEPARATOR: &str = "__";
+
+const LIBRECHAT_SUFFIX: &str = "_mcp_chaperone";
+const MODEL_FUNCTION_MAX: usize = 64;
 
 /// Why a tool cannot be exposed, or a requested name is not valid.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
@@ -36,7 +39,7 @@ pub struct ExposedName {
 
 impl ExposedName {
     /// The longest exposed name, in characters.
-    pub const MAX: usize = 50;
+    pub const MAX: usize = MODEL_FUNCTION_MAX - LIBRECHAT_SUFFIX.len();
 
     /// Join an upstream and one of its tools.
     ///
@@ -125,6 +128,14 @@ mod tests {
         let parsed = ExposedName::parse("vikunja__list__tasks").unwrap();
         assert_eq!(parsed, joined);
         assert_eq!(parsed.tool().as_str(), "list__tasks");
+    }
+
+    #[test]
+    fn the_limit_fits_the_version_1_librechat_suffix() {
+        assert_eq!(
+            ExposedName::MAX + LIBRECHAT_SUFFIX.len(),
+            MODEL_FUNCTION_MAX
+        );
     }
 
     #[test]

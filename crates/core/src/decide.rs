@@ -16,6 +16,12 @@ use crate::value::ArgValue;
 pub struct GateId([u8; 16]);
 
 impl GateId {
+    /// Wrap 16 bytes. Use [`GateId::from_call`] for a real call.
+    #[must_use]
+    pub const fn from_bytes(bytes: [u8; 16]) -> Self {
+        Self(bytes)
+    }
+
     /// Hash the app instance, the upstream, the tool and the canonical
     /// arguments, each separated by a NUL byte. Keep the first 16 bytes.
     #[must_use]
