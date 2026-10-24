@@ -9,7 +9,6 @@ mod gateway;
 mod hook;
 mod ids;
 mod install;
-mod mcp;
 mod plugin;
 mod policy;
 mod secret;
@@ -23,9 +22,7 @@ pub use audit::{
 };
 pub use decide::{Decision, DenyReason, GateId, Gates, Request, decide};
 pub use exposed::{ExposedError, ExposedName, SEPARATOR};
-pub use gateway::{
-    CallFault, CallOutcome, Gateway, ListError, ListedTool, OUTPUT_CAP, OutputError, ToolOutput,
-};
+pub use gateway::{CallFault, CallOutcome, Gateway, ListError, ListedTool};
 pub use hook::{
     Caller, Credentials, Fence, FenceReason, FenceVerdict, Identity, PreparedFence, RawSection,
     Reach, SectionError, ToolCall,
@@ -37,7 +34,6 @@ pub use install::{
     Binding, Catalog, Found, INSTALL_FILE_CAP, InstallEntry, InstallError, InstallFile, Location,
     PluginKey, SecretDelivery, Setup, SetupError, resolve,
 };
-pub use mcp::{ProtocolVersion, ResultError, ResultSchemas, SchemaError};
 pub use plugin::{Hook, Manifest, ManifestError, PLUGIN_FILE_CAP, PluginKind, Runtime, Slot};
 pub use policy::{
     App, Approval, ArgumentFence, DigestError, Limits, POLICY_FILE_CAP, Policy, PolicyError,

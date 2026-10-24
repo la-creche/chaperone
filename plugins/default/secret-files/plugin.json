@@ -1,7 +1,0 @@
-{
-  "name": "secret-files",
-  "version": "1.0.0",
-  "kind": "adapter",
-  "slot": "secret_source",
-  "hooks": ["secret_source"]
-}

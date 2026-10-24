@@ -226,7 +226,7 @@ In version 1, the default front door serves plain HTTP only on a loopback addres
 
 ### 7.7 Upstream results
 
-An upstream result is valid only when it is an MCP `CallToolResult` of the protocol version that the upstream negotiated.
+Build step 4 adds this check, because only an upstream produces a result. An upstream result is valid only when it is an MCP `CallToolResult` of the protocol version that the upstream negotiated.
 
 - chaperone checks it against the official JSON Schema of that version. `crates/core/schemas/mcp/` holds the schemas, copied without change: 2025-06-18, 2025-11-25 and 2026-07-28.
 - The official schema leaves unknown fields open. chaperone refuses a top-level field that the version's `CallToolResult` does not define. It reads the list of fields from the copied schema itself. Nested shapes follow the official schema.
@@ -306,7 +306,7 @@ One pull request per step:
 3. In two pull requests:
    1. The `Gateway` contract, exposed names, the `bearer` identity plugin and the `audit-jsonl` audit sink. The audit sink moves here from step 5, so the first program that runs already writes the audit (G6).
    2. The `chaperone` program and the `mcp-http` front door.
-4. The effect host and the Vikunja upstream.
+4. The effect host, the Vikunja upstream and the upstream result check of section 7.7.
 5. The secret source.
 6. Gates, the approval hook and `ha-approval`.
 7. `ha-call`, both halves.
