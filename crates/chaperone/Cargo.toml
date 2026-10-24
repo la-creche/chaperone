@@ -13,10 +13,17 @@ workspace = true
 chaperone-core = { path = "../core" }
 chaperone-plugin-audit-jsonl = { path = "../../plugins/default/audit-jsonl" }
 chaperone-plugin-bearer = { path = "../../plugins/default/bearer" }
+chaperone-plugin-mcp-http = { path = "../../plugins/default/mcp-http" }
+clap = { workspace = true }
 getrandom = { workspace = true }
 thiserror = { workspace = true }
+tokio = { workspace = true, features = ["macros", "rt-multi-thread", "signal"] }
+tokio-util = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
 
 [dev-dependencies]
 hex = { workspace = true }
+rmcp = { workspace = true, features = ["client", "reqwest", "transport-streamable-http-client-reqwest"] }
 sha2 = { workspace = true }
 tempfile = { workspace = true }
