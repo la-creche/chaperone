@@ -1,7 +1,7 @@
 //! The decision function (`docs/design.md` 5). It is pure (G3): the caller
 //! passes the policy, the call, the counters, the gate state and the time.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 use std::fmt;
 
 use crate::hook::{Caller, FenceReason, FenceVerdict, Reach, ToolCall};
@@ -62,10 +62,10 @@ impl fmt::Display for GateId {
 }
 
 /// The gates of one app instance, as the caller keeps them. Each map value
-/// is the time the entry expires.
+/// is the time the entry expires. An expired entry counts as absent.
 #[derive(Debug, Clone, Copy)]
 pub struct Gates<'a> {
-    pub pending: &'a BTreeSet<GateId>,
+    pub pending: &'a BTreeMap<GateId, Timestamp>,
     pub approved: &'a BTreeMap<GateId, Timestamp>,
     pub denied: &'a BTreeMap<GateId, Timestamp>,
 }
@@ -256,10 +256,11 @@ fn decide_gate(app: &App, call: &ToolCall<'_>, gates: Gates<'_>, now: Timestamp)
     if live(gates.approved) {
         return Decision::Allow;
     }
-    if gates.pending.contains(&id) {
+    if live(gates.pending) {
         return Decision::Gate(id);
     }
-    let pending = u32::try_from(gates.pending.len()).unwrap_or(u32::MAX);
+    let live_pending = gates.pending.values().filter(|end| **end > now).count();
+    let pending = u32::try_from(live_pending).unwrap_or(u32::MAX);
     if pending >= app.limits().max_pending_gates {
         return Decision::Deny(DenyReason::GateCap);
     }

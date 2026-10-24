@@ -93,8 +93,8 @@ The rows apply in this order. The first row that matches decides.
 6. The policy marks the tool `"approval": "required"`, or a fence plugin returns gate:
    1. The gate is denied and not expired: `Deny(approval_denied)`.
    2. The gate is approved and not expired: `Allow`.
-   3. The gate is pending: `Gate(gate_id)`.
-   4. The pending-gate count is at `max_pending_gates`: `Deny(gate_cap)`.
+   3. The gate is pending and not expired: `Gate(gate_id)`.
+   4. The count of pending gates that are not expired is at `max_pending_gates`: `Deny(gate_cap)`.
    5. Otherwise: `Gate(gate_id)`.
 7. Otherwise: `Allow`.
 

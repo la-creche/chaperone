@@ -279,7 +279,7 @@ fn args(text: &str) -> BTreeMap<String, ArgValue> {
 /// The gate state of one test.
 #[derive(Debug, Default, Clone)]
 struct GateBook {
-    pending: BTreeSet<GateId>,
+    pending: BTreeMap<GateId, Timestamp>,
     approved: BTreeMap<GateId, Timestamp>,
     denied: BTreeMap<GateId, Timestamp>,
 }
@@ -482,7 +482,7 @@ fn row_6_a_gated_call_waits_then_runs_after_approval() {
     let id = case.gate_id();
     assert_eq!(case.decide(Some(&policy)), Decision::Gate(id));
 
-    case.gates.pending.insert(id);
+    case.gates.pending.insert(id, LATER);
     assert_eq!(case.decide(Some(&policy)), Decision::Gate(id));
 
     case.gates.pending.clear();
@@ -522,7 +522,25 @@ fn row_6_the_pending_cap_denies_a_new_gate() {
     let mut case = Case::new("vikunja", "create_task", r#"{"title": "milk"}"#);
     let other_a = Case::new("vikunja", "create_task", r#"{"title": "a"}"#).gate_id();
     let other_b = Case::new("vikunja", "create_task", r#"{"title": "b"}"#).gate_id();
-    case.gates.pending.extend([other_a, other_b]);
+    case.gates
+        .pending
+        .extend([(other_a, LATER), (other_b, LATER)]);
+    assert_eq!(case.decide(Some(&policy)), deny(DenyReason::GateCap));
+}
+
+#[test]
+fn row_6_an_expired_pending_gate_does_not_count() {
+    let policy = base_policy();
+    let mut case = Case::new("vikunja", "create_task", r#"{"title": "milk"}"#);
+    let id = case.gate_id();
+    let other_a = Case::new("vikunja", "create_task", r#"{"title": "a"}"#).gate_id();
+    let other_b = Case::new("vikunja", "create_task", r#"{"title": "b"}"#).gate_id();
+    case.gates
+        .pending
+        .extend([(id, NOW), (other_a, NOW), (other_b, NOW)]);
+    assert_eq!(case.decide(Some(&policy)), Decision::Gate(id));
+    case.gates.pending.insert(other_a, LATER);
+    case.gates.pending.insert(other_b, LATER);
     assert_eq!(case.decide(Some(&policy)), deny(DenyReason::GateCap));
 }
 
@@ -664,7 +682,7 @@ fn arb_case() -> impl Strategy<Value = Case> {
                 let id = case.gate_id();
                 let (pending, approved, denied) = flags;
                 if pending {
-                    case.gates.pending.insert(id);
+                    case.gates.pending.insert(id, LATER);
                 }
                 if approved {
                     case.gates.approved.insert(id, LATER);
@@ -675,7 +693,7 @@ fn arb_case() -> impl Strategy<Value = Case> {
                 for index in 0..others {
                     let other =
                         Case::new("vikunja", "create_task", &format!(r#"{{"i": {index}}}"#));
-                    case.gates.pending.insert(other.gate_id());
+                    case.gates.pending.insert(other.gate_id(), LATER);
                 }
                 if narrow {
                     case.caller = Some(Caller {
