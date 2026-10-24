@@ -22,7 +22,7 @@ pub use audit::{
 };
 pub use decide::{Decision, DenyReason, GateId, Gates, Request, decide};
 pub use exposed::{ExposedError, ExposedName, SEPARATOR};
-pub use gateway::{CallFault, CallOutcome, ListError, ListedTool};
+pub use gateway::{CallFault, CallOutcome, ListError, ListedTool, UpstreamResult};
 pub use hook::{
     AuditSink, Caller, Clock, Credentials, Fence, FenceReason, FenceVerdict, Gateway, Identity,
     PreparedFence, RawSection, Reach, SecretSource, SectionError, ToolCall,
@@ -39,6 +39,6 @@ pub use policy::{
     App, Approval, ArgumentFence, DigestError, Limits, POLICY_FILE_CAP, Policy, PolicyError,
     Scalar, TokenDigest, ToolGrant,
 };
-pub use secret::{Bearer, Secret, SecretError};
+pub use secret::{Bearer, REDACTED, Secret, SecretError};
 pub use time::Timestamp;
 pub use value::{ArgValue, Finite};

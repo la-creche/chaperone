@@ -18,14 +18,21 @@ chaperone-plugin-secret-files = { path = "../../plugins/default/secret-files" }
 chaperone-plugin-system-clock = { path = "../../plugins/default/system-clock" }
 clap = { workspace = true }
 getrandom = { workspace = true }
+rmcp = { workspace = true, features = ["client", "transport-child-process"] }
+serde_json = { workspace = true }
 thiserror = { workspace = true }
-tokio = { workspace = true, features = ["macros", "rt-multi-thread", "signal"] }
-tokio-util = { workspace = true }
+tokio = { workspace = true, features = ["io-util", "macros", "process", "rt-multi-thread", "signal", "time"] }
+tokio-stream = { workspace = true }
+tokio-util = { workspace = true, features = ["codec"] }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
 
 [dev-dependencies]
 hex = { workspace = true }
-rmcp = { workspace = true, features = ["client", "reqwest", "transport-streamable-http-client-reqwest"] }
+rmcp = { workspace = true, features = ["client", "reqwest", "server", "transport-io", "transport-streamable-http-client-reqwest"] }
 sha2 = { workspace = true }
 tempfile = { workspace = true }
+
+[[test]]
+name = "fake_upstream"
+harness = false

@@ -1,5 +1,6 @@
 //! The call path end to end, without a front door: each outcome of
-//! `docs/design.md` 5.4 that build step 3 can reach, and its audit records.
+//! `docs/design.md` 5.4 that build step 5 can reach, and its audit records.
+//! An in-memory fake stands in for the upstream process.
 
 #![allow(
     clippy::unwrap_used,
@@ -11,17 +12,22 @@
 mod support;
 
 use std::collections::BTreeMap;
+use std::future::Future;
+use std::pin::Pin;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-use chaperone::gateway::{ChaperoneGateway, DECISION_BUDGET, SharedGateway};
-use chaperone::startup;
+use chaperone::effect::{RESULT_CAP, Redactor, Upstream, UpstreamFault, UpstreamTool, Upstreams};
+use chaperone::gateway::{Bounds, ChaperoneGateway, Plugins, SharedGateway};
+use chaperone::startup::{self, Secrets};
 use chaperone_core::{
-    AppId, AuditDecision, AuditError, AuditEvent, AuditRecord, AuditSink, AuditTool, Bearer,
-    CallFault, CallNumber, CallOutcome, Caller, Clock, Credentials, DenyReason, Fence,
+    AppId, ArgValue, AuditDecision, AuditError, AuditEvent, AuditRecord, AuditSink, AuditTool,
+    Bearer, CallFault, CallNumber, CallOutcome, Caller, Clock, Credentials, DenyReason, Fence,
     FenceVerdict, Gateway, Identity, InstallFile, ListError, PluginName, Policy, PreparedFence,
-    RawSection, RunId, SectionError, Timestamp, ToolCall,
+    RawSection, RunId, Secret, SecretName, SecretParam, SectionError, Timestamp, ToolCall,
+    ToolName, UpstreamResult,
 };
+use rmcp::model::{CallToolResult, ContentBlock};
 use support::{INSTALL, TOKEN, config_dir, plugin_tree, policy_text, secrets_dir, write_manifest};
 
 const RUN: RunId = RunId::from_bytes([9; 16]);
@@ -120,8 +126,93 @@ fn loaded(root: &std::path::Path, calls_per_minute: u32) -> startup::Loaded {
     startup::load(&config, &plugins, &root.join("audit.jsonl"), &secrets).unwrap()
 }
 
+const SECRET_VALUE: &str = "tok-123";
+
+/// Every secret the harness holds: one for `vikunja`.
+fn secrets() -> Secrets {
+    let mut vikunja = BTreeMap::new();
+    vikunja.insert(
+        SecretParam::try_new("VIKUNJA_TOKEN").unwrap(),
+        Secret::new(
+            SecretName::try_new("vikunja_token").unwrap(),
+            SECRET_VALUE.to_owned(),
+        ),
+    );
+    let mut secrets = Secrets::new();
+    secrets.insert(PluginName::try_new("vikunja").unwrap(), vikunja);
+    secrets
+}
+
+/// An upstream in memory. Each tool answers by its name.
+#[derive(Debug)]
+struct FakeUpstream(Vec<UpstreamTool>);
+
+impl FakeUpstream {
+    fn new() -> Self {
+        let tools = [
+            "list_tasks",
+            "create_task",
+            "picture",
+            "big",
+            "broken",
+            "slow",
+            "secret_echo",
+        ]
+        .into_iter()
+        .map(|name| UpstreamTool {
+            name: ToolName::try_new(name).unwrap(),
+            description: Some(format!("the fake {name} tool")),
+            input_schema: BTreeMap::new(),
+        })
+        .collect();
+        Self(tools)
+    }
+}
+
+impl Upstream for FakeUpstream {
+    fn tools(&self) -> &[UpstreamTool] {
+        &self.0
+    }
+
+    fn call<'a>(
+        &'a self,
+        tool: &'a ToolName,
+        _arguments: BTreeMap<String, ArgValue>,
+    ) -> Pin<Box<dyn Future<Output = Result<CallToolResult, UpstreamFault>> + Send + 'a>> {
+        Box::pin(async move {
+            let text = |text: String| CallToolResult::success(vec![ContentBlock::text(text)]);
+            Ok(match tool.as_str() {
+                "list_tasks" => text(format!("two tasks for token {SECRET_VALUE}")),
+                "create_task" => text("created".to_owned()),
+                "picture" => CallToolResult::success(vec![ContentBlock::image(
+                    "iVBORw0KGgo=".to_owned(),
+                    "image/png".to_owned(),
+                )]),
+                "big" => text("a".repeat(RESULT_CAP + 1)),
+                "broken" => CallToolResult::error(vec![ContentBlock::text("boom".to_owned())]),
+                "slow" => {
+                    tokio::time::sleep(Duration::from_secs(5)).await;
+                    text("late".to_owned())
+                }
+                "secret_echo" => text(SECRET_VALUE.to_owned()),
+                _ => return Err(UpstreamFault::NotConnected),
+            })
+        })
+    }
+}
+
+/// The running upstreams of the harness: the fake as `vikunja`.
+fn upstreams() -> Upstreams {
+    let mut upstreams = Upstreams::new();
+    upstreams.insert(
+        PluginName::try_new("vikunja").unwrap(),
+        Box::new(FakeUpstream::new()),
+    );
+    upstreams
+}
+
 struct Harness {
-    gateway: ChaperoneGateway,
+    gateway: SharedGateway,
     sink: Arc<MemorySink>,
     clock: Arc<FixedClock>,
 }
@@ -132,14 +223,18 @@ fn harness(calls_per_minute: u32) -> Harness {
     let loaded = loaded(root.path(), calls_per_minute);
     let sink = Arc::new(MemorySink::default());
     let clock = Arc::new(FixedClock(Mutex::new(START)));
-    let gateway = ChaperoneGateway::new(
+    let gateway = SharedGateway::new(ChaperoneGateway::new(
         RUN,
         loaded.policy,
-        loaded.identity,
-        Arc::clone(&sink) as Arc<dyn AuditSink>,
-        Box::new(SharedClock(Arc::clone(&clock))),
-        DECISION_BUDGET,
-    );
+        Plugins {
+            identity: loaded.identity,
+            audit: Arc::clone(&sink) as Arc<dyn AuditSink>,
+            clock: Box::new(SharedClock(Arc::clone(&clock))),
+            upstreams: upstreams(),
+            redactor: Redactor::new(secrets()),
+        },
+        Bounds::DEFAULT,
+    ));
     Harness {
         gateway,
         sink,
@@ -158,33 +253,39 @@ impl Clock for SharedClock {
 }
 
 /// Call `name` with no arguments as the holder of `token`.
-fn call(gateway: &ChaperoneGateway, token: Option<&str>, name: &str) -> CallOutcome {
+async fn call(gateway: &SharedGateway, token: Option<&str>, name: &str) -> CallOutcome {
     let bearer = token.map(|token| Bearer::new(token.to_owned()));
     let headers = BTreeMap::new();
     let credentials = Credentials {
         bearer: bearer.as_ref(),
         headers: &headers,
     };
-    gateway.call_tool(&credentials, name, BTreeMap::new())
+    gateway.call_tool(&credentials, name, BTreeMap::new()).await
 }
 
 fn app(text: &str) -> AppId {
     AppId::try_new(text).unwrap()
 }
 
-#[test]
-fn an_allowed_call_fails_not_connected_after_two_records() {
+#[tokio::test]
+async fn an_allowed_call_runs_with_each_secret_blanked_after_two_records() {
     let Harness { gateway, sink, .. } = harness(30);
-    let outcome = call(&gateway, Some(TOKEN), "vikunja__list_tasks");
-    assert!(matches!(
-        outcome,
-        CallOutcome::Failed(CallFault::NotConnected)
-    ));
+    let outcome = call(&gateway, Some(TOKEN), "vikunja__list_tasks").await;
+    let CallOutcome::Ran(result) = outcome else {
+        panic!("{outcome:?}");
+    };
+    assert_eq!(
+        result,
+        UpstreamResult {
+            content: vec!["two tasks for token [redacted]".to_owned()],
+            is_error: false,
+        }
+    );
     assert_eq!(
         sink.events(),
         [
             AuditEvent::Decided(AuditDecision::Allow),
-            AuditEvent::Failed(CallFault::NotConnected),
+            AuditEvent::Ran { is_error: false },
         ]
     );
     let record = &sink.records()[0];
@@ -195,10 +296,10 @@ fn an_allowed_call_fails_not_connected_after_two_records() {
     assert_eq!(record.tool().as_str(), "vikunja__list_tasks");
 }
 
-#[test]
-fn a_tool_without_a_grant_is_denied_with_one_record() {
+#[tokio::test]
+async fn a_tool_without_a_grant_is_denied_with_one_record() {
     let Harness { gateway, sink, .. } = harness(30);
-    let outcome = call(&gateway, Some(TOKEN), "vikunja__delete_everything");
+    let outcome = call(&gateway, Some(TOKEN), "vikunja__delete_everything").await;
     assert!(matches!(
         outcome,
         CallOutcome::Denied(DenyReason::ToolNotGranted)
@@ -210,10 +311,10 @@ fn a_tool_without_a_grant_is_denied_with_one_record() {
     assert_eq!(sink.records()[0].tool().as_str(), AuditTool::UNKNOWN);
 }
 
-#[test]
-fn a_gated_call_fails_no_approval_channel_after_two_records() {
+#[tokio::test]
+async fn a_gated_call_fails_no_approval_channel_after_two_records() {
     let Harness { gateway, sink, .. } = harness(30);
-    let outcome = call(&gateway, Some(TOKEN), "vikunja__create_task");
+    let outcome = call(&gateway, Some(TOKEN), "vikunja__create_task").await;
     assert!(matches!(
         outcome,
         CallOutcome::Failed(CallFault::NoApprovalChannel)
@@ -227,10 +328,10 @@ fn a_gated_call_fails_no_approval_channel_after_two_records() {
     assert_eq!(events.len(), 2);
 }
 
-#[test]
-fn a_name_that_is_not_exposed_fails_before_a_decision() {
+#[tokio::test]
+async fn a_name_that_is_not_exposed_fails_before_a_decision() {
     let Harness { gateway, sink, .. } = harness(30);
-    let outcome = call(&gateway, Some(TOKEN), "not.a.tool");
+    let outcome = call(&gateway, Some(TOKEN), "not.a.tool").await;
     assert!(matches!(
         outcome,
         CallOutcome::Failed(CallFault::UnknownTool)
@@ -239,11 +340,11 @@ fn a_name_that_is_not_exposed_fails_before_a_decision() {
     assert_eq!(sink.records()[0].tool().as_str(), AuditTool::UNKNOWN);
 }
 
-#[test]
-fn unknown_credentials_are_denied_and_see_no_tools() {
+#[tokio::test]
+async fn unknown_credentials_are_denied_and_see_no_tools() {
     let Harness { gateway, sink, .. } = harness(30);
     for token in [Some(OTHER_TOKEN), Some("not-a-token"), None] {
-        let outcome = call(&gateway, token, "vikunja__list_tasks");
+        let outcome = call(&gateway, token, "vikunja__list_tasks").await;
         assert!(
             matches!(outcome, CallOutcome::Denied(DenyReason::UnknownCredential)),
             "{token:?}: {outcome:?}"
@@ -259,13 +360,13 @@ fn unknown_credentials_are_denied_and_see_no_tools() {
         headers: &headers,
     };
     assert_eq!(
-        gateway.list_tools(&credentials),
+        gateway.list_tools(&credentials).await,
         Err(ListError::UnknownCredential)
     );
 }
 
-#[test]
-fn a_known_caller_sees_an_empty_tool_list_in_step_3() {
+#[tokio::test]
+async fn a_known_caller_sees_the_granted_tools_the_upstream_lists() {
     let Harness { gateway, .. } = harness(30);
     let bearer = Bearer::new(TOKEN.to_owned());
     let headers = BTreeMap::new();
@@ -273,33 +374,51 @@ fn a_known_caller_sees_an_empty_tool_list_in_step_3() {
         bearer: Some(&bearer),
         headers: &headers,
     };
-    assert_eq!(gateway.list_tools(&credentials), Ok(Vec::new()));
+    let names: Vec<String> = gateway
+        .list_tools(&credentials)
+        .await
+        .unwrap()
+        .into_iter()
+        .map(|tool| tool.name.as_str().to_owned())
+        .collect();
+    // `secret_echo` is listed by the upstream and granted to nobody.
+    assert_eq!(
+        names,
+        [
+            "vikunja__big",
+            "vikunja__broken",
+            "vikunja__create_task",
+            "vikunja__list_tasks",
+            "vikunja__picture",
+            "vikunja__slow",
+        ]
+    );
 }
 
-#[test]
-fn the_rate_limit_counts_every_call_of_the_minute() {
+#[tokio::test]
+async fn the_rate_limit_counts_every_call_of_the_minute() {
     let Harness {
         gateway,
         sink,
         clock,
     } = harness(2);
     assert!(matches!(
-        call(&gateway, Some(TOKEN), "vikunja__list_tasks"),
-        CallOutcome::Failed(CallFault::NotConnected)
+        call(&gateway, Some(TOKEN), "vikunja__list_tasks").await,
+        CallOutcome::Ran(_)
     ));
     assert!(matches!(
-        call(&gateway, Some(TOKEN), "vikunja__delete_everything"),
+        call(&gateway, Some(TOKEN), "vikunja__delete_everything").await,
         CallOutcome::Denied(DenyReason::ToolNotGranted)
     ));
     assert!(matches!(
-        call(&gateway, Some(TOKEN), "vikunja__list_tasks"),
+        call(&gateway, Some(TOKEN), "vikunja__list_tasks").await,
         CallOutcome::Denied(DenyReason::RateLimited)
     ));
 
     clock.set(START.checked_add(Duration::from_secs(60)).unwrap());
     assert!(matches!(
-        call(&gateway, Some(TOKEN), "vikunja__list_tasks"),
-        CallOutcome::Failed(CallFault::NotConnected)
+        call(&gateway, Some(TOKEN), "vikunja__list_tasks").await,
+        CallOutcome::Ran(_)
     ));
 
     let calls: Vec<u64> = sink
@@ -310,20 +429,24 @@ fn the_rate_limit_counts_every_call_of_the_minute() {
     assert_eq!(calls, [1, 1, 2, 3, 4, 4]);
 }
 
-#[test]
-fn an_identity_hook_that_panics_resolves_to_nothing() {
+#[tokio::test]
+async fn an_identity_hook_that_panics_resolves_to_nothing() {
     let root = tempfile::tempdir().unwrap();
     let loaded = loaded(root.path(), 30);
     let sink = Arc::new(MemorySink::default());
-    let gateway = ChaperoneGateway::new(
+    let gateway = SharedGateway::new(ChaperoneGateway::new(
         RUN,
         loaded.policy,
-        Box::new(PanicIdentity),
-        Arc::clone(&sink) as Arc<dyn AuditSink>,
-        Box::new(FixedClock(Mutex::new(START))),
-        DECISION_BUDGET,
-    );
-    let outcome = call(&gateway, Some(TOKEN), "vikunja__list_tasks");
+        Plugins {
+            identity: Box::new(PanicIdentity),
+            audit: Arc::clone(&sink) as Arc<dyn AuditSink>,
+            clock: Box::new(FixedClock(Mutex::new(START))),
+            upstreams: upstreams(),
+            redactor: Redactor::new(secrets()),
+        },
+        Bounds::DEFAULT,
+    ));
+    let outcome = call(&gateway, Some(TOKEN), "vikunja__list_tasks").await;
     assert!(matches!(
         outcome,
         CallOutcome::Denied(DenyReason::UnknownCredential)
@@ -336,8 +459,8 @@ fn an_identity_hook_that_panics_resolves_to_nothing() {
     );
 }
 
-#[test]
-fn a_decision_that_does_not_return_fails_no_decision() {
+#[tokio::test]
+async fn a_decision_that_does_not_return_fails_no_decision() {
     let root = tempfile::tempdir().unwrap();
     let plugins = plugin_tree(root.path());
     write_manifest(
@@ -353,16 +476,23 @@ fn a_decision_that_does_not_return_fails_no_decision() {
     let policy = Policy::load(policy_text(30).as_bytes(), &setup, &[&hang]).unwrap();
 
     let sink = Arc::new(MemorySink::default());
-    let gateway = ChaperoneGateway::new(
+    let gateway = SharedGateway::new(ChaperoneGateway::new(
         RUN,
         policy,
-        Box::new(chaperone_plugin_bearer::BearerIdentity),
-        Arc::clone(&sink) as Arc<dyn AuditSink>,
-        Box::new(FixedClock(Mutex::new(START))),
-        Duration::from_millis(100),
-    );
+        Plugins {
+            identity: Box::new(chaperone_plugin_bearer::BearerIdentity),
+            audit: Arc::clone(&sink) as Arc<dyn AuditSink>,
+            clock: Box::new(FixedClock(Mutex::new(START))),
+            upstreams: upstreams(),
+            redactor: Redactor::new(secrets()),
+        },
+        Bounds {
+            decision: Duration::from_millis(100),
+            upstream: Duration::from_secs(1),
+        },
+    ));
     let began = Instant::now();
-    let outcome = call(&gateway, Some(TOKEN), "vikunja__list_tasks");
+    let outcome = call(&gateway, Some(TOKEN), "vikunja__list_tasks").await;
     assert!(began.elapsed() < Duration::from_secs(10));
     assert!(matches!(
         outcome,
@@ -371,20 +501,24 @@ fn a_decision_that_does_not_return_fails_no_decision() {
     assert_eq!(sink.events(), [AuditEvent::Failed(CallFault::NoDecision)]);
 }
 
-#[test]
-fn a_sink_that_refuses_the_record_fails_the_call() {
+#[tokio::test]
+async fn a_sink_that_refuses_the_record_fails_the_call() {
     let root = tempfile::tempdir().unwrap();
     let loaded = loaded(root.path(), 30);
-    let gateway = ChaperoneGateway::new(
+    let gateway = SharedGateway::new(ChaperoneGateway::new(
         RUN,
         loaded.policy,
-        loaded.identity,
-        Arc::new(RefusingSink),
-        Box::new(FixedClock(Mutex::new(START))),
-        DECISION_BUDGET,
-    );
+        Plugins {
+            identity: loaded.identity,
+            audit: Arc::new(RefusingSink),
+            clock: Box::new(FixedClock(Mutex::new(START))),
+            upstreams: upstreams(),
+            redactor: Redactor::new(secrets()),
+        },
+        Bounds::DEFAULT,
+    ));
     for name in ["vikunja__list_tasks", "vikunja__nope", "not.a.tool"] {
-        let outcome = call(&gateway, Some(TOKEN), name);
+        let outcome = call(&gateway, Some(TOKEN), name).await;
         assert!(
             matches!(outcome, CallOutcome::Failed(CallFault::AuditFailed)),
             "{name}: {outcome:?}"
@@ -392,23 +526,27 @@ fn a_sink_that_refuses_the_record_fails_the_call() {
     }
 }
 
-#[test]
-fn the_audit_file_records_each_call_and_never_the_token() {
+#[tokio::test]
+async fn the_audit_file_records_each_call_and_never_the_token() {
     let root = tempfile::tempdir().unwrap();
     let loaded = loaded(root.path(), 30);
-    let gateway = ChaperoneGateway::new(
+    let gateway = SharedGateway::new(ChaperoneGateway::new(
         loaded.run,
         loaded.policy,
-        loaded.identity,
-        loaded.audit,
-        Box::new(FixedClock(Mutex::new(START))),
-        DECISION_BUDGET,
-    );
-    call(&gateway, Some(TOKEN), "vikunja__list_tasks");
-    call(&gateway, Some(TOKEN), "vikunja__delete_everything");
-    call(&gateway, Some(TOKEN), "vikunja__create_task");
-    call(&gateway, Some(TOKEN), "not.a.tool");
-    call(&gateway, Some(OTHER_TOKEN), "vikunja__list_tasks");
+        Plugins {
+            identity: loaded.identity,
+            audit: loaded.audit,
+            clock: Box::new(FixedClock(Mutex::new(START))),
+            upstreams: upstreams(),
+            redactor: Redactor::new(secrets()),
+        },
+        Bounds::DEFAULT,
+    ));
+    call(&gateway, Some(TOKEN), "vikunja__list_tasks").await;
+    call(&gateway, Some(TOKEN), "vikunja__delete_everything").await;
+    call(&gateway, Some(TOKEN), "vikunja__create_task").await;
+    call(&gateway, Some(TOKEN), "not.a.tool").await;
+    call(&gateway, Some(OTHER_TOKEN), "vikunja__list_tasks").await;
 
     let audit = std::fs::read_to_string(root.path().join("audit.jsonl")).unwrap();
     let lines: Vec<&str> = audit.lines().collect();
@@ -418,7 +556,7 @@ fn the_audit_file_records_each_call_and_never_the_token() {
         "{}",
         lines[0]
     );
-    assert!(lines[1].contains(r#""event":"failed","detail":"not_connected""#));
+    assert!(lines[1].contains(r#""event":"ran","detail":"is_error:false""#));
     assert!(lines[2].contains(r#""detail":"deny:tool_not_granted""#));
     assert!(lines[3].contains(r#""detail":"gate:"#));
     assert!(lines[4].contains(r#""detail":"no_approval_channel""#));
@@ -430,18 +568,60 @@ fn the_audit_file_records_each_call_and_never_the_token() {
 
 #[tokio::test]
 async fn the_shared_gateway_answers_through_the_trait() {
-    let Harness { gateway, sink, .. } = harness(30);
-    let shared = SharedGateway::new(gateway);
+    let Harness {
+        gateway: shared,
+        sink,
+        ..
+    } = harness(30);
     let bearer = Bearer::new(TOKEN.to_owned());
     let headers = BTreeMap::new();
     let credentials = Credentials {
         bearer: Some(&bearer),
         headers: &headers,
     };
-    assert_eq!(shared.list_tools(&credentials).await, Ok(Vec::new()));
+    assert_eq!(shared.list_tools(&credentials).await.unwrap().len(), 6);
     let outcome = shared
         .call_tool(&credentials, "vikunja__list_tasks", BTreeMap::new())
         .await;
+    assert!(matches!(outcome, CallOutcome::Ran(_)));
+    assert_eq!(
+        sink.events(),
+        [
+            AuditEvent::Decided(AuditDecision::Allow),
+            AuditEvent::Ran { is_error: false },
+        ]
+    );
+}
+
+/// A harness whose `vikunja` upstream is not running.
+fn harness_without_upstreams() -> Harness {
+    let root = tempfile::tempdir().unwrap();
+    let loaded = loaded(root.path(), 30);
+    let sink = Arc::new(MemorySink::default());
+    let clock = Arc::new(FixedClock(Mutex::new(START)));
+    let gateway = SharedGateway::new(ChaperoneGateway::new(
+        RUN,
+        loaded.policy,
+        Plugins {
+            identity: loaded.identity,
+            audit: Arc::clone(&sink) as Arc<dyn AuditSink>,
+            clock: Box::new(SharedClock(Arc::clone(&clock))),
+            upstreams: Upstreams::new(),
+            redactor: Redactor::new(secrets()),
+        },
+        Bounds::DEFAULT,
+    ));
+    Harness {
+        gateway,
+        sink,
+        clock,
+    }
+}
+
+#[tokio::test]
+async fn an_allowed_call_without_its_upstream_fails_not_connected() {
+    let Harness { gateway, sink, .. } = harness_without_upstreams();
+    let outcome = call(&gateway, Some(TOKEN), "vikunja__list_tasks").await;
     assert!(matches!(
         outcome,
         CallOutcome::Failed(CallFault::NotConnected)
@@ -451,6 +631,83 @@ async fn the_shared_gateway_answers_through_the_trait() {
         [
             AuditEvent::Decided(AuditDecision::Allow),
             AuditEvent::Failed(CallFault::NotConnected),
+        ]
+    );
+    let bearer = Bearer::new(TOKEN.to_owned());
+    let headers = BTreeMap::new();
+    let credentials = Credentials {
+        bearer: Some(&bearer),
+        headers: &headers,
+    };
+    assert_eq!(gateway.list_tools(&credentials).await, Ok(Vec::new()));
+}
+
+#[tokio::test]
+async fn a_result_with_a_block_that_is_not_text_fails_bad_result() {
+    let Harness { gateway, sink, .. } = harness(30);
+    let outcome = call(&gateway, Some(TOKEN), "vikunja__picture").await;
+    assert!(matches!(outcome, CallOutcome::Failed(CallFault::BadResult)));
+    assert_eq!(
+        sink.events(),
+        [
+            AuditEvent::Decided(AuditDecision::Allow),
+            AuditEvent::Failed(CallFault::BadResult),
+        ]
+    );
+}
+
+#[tokio::test]
+async fn a_result_over_the_cap_fails_bad_result() {
+    let Harness { gateway, sink, .. } = harness(30);
+    let outcome = call(&gateway, Some(TOKEN), "vikunja__big").await;
+    assert!(matches!(outcome, CallOutcome::Failed(CallFault::BadResult)));
+    assert_eq!(sink.events()[1], AuditEvent::Failed(CallFault::BadResult));
+}
+
+#[tokio::test]
+async fn an_error_result_runs_with_the_error_flag() {
+    let Harness { gateway, sink, .. } = harness(30);
+    let outcome = call(&gateway, Some(TOKEN), "vikunja__broken").await;
+    let CallOutcome::Ran(result) = outcome else {
+        panic!("{outcome:?}");
+    };
+    assert!(result.is_error);
+    assert_eq!(result.content, ["boom"]);
+    assert_eq!(sink.events()[1], AuditEvent::Ran { is_error: true });
+}
+
+#[tokio::test]
+async fn an_upstream_that_does_not_answer_in_time_fails_upstream_timeout() {
+    let root = tempfile::tempdir().unwrap();
+    let loaded = loaded(root.path(), 30);
+    let sink = Arc::new(MemorySink::default());
+    let gateway = SharedGateway::new(ChaperoneGateway::new(
+        RUN,
+        loaded.policy,
+        Plugins {
+            identity: loaded.identity,
+            audit: Arc::clone(&sink) as Arc<dyn AuditSink>,
+            clock: Box::new(FixedClock(Mutex::new(START))),
+            upstreams: upstreams(),
+            redactor: Redactor::new(secrets()),
+        },
+        Bounds {
+            decision: Duration::from_secs(5),
+            upstream: Duration::from_millis(50),
+        },
+    ));
+    let began = Instant::now();
+    let outcome = call(&gateway, Some(TOKEN), "vikunja__slow").await;
+    assert!(began.elapsed() < Duration::from_secs(4));
+    assert!(matches!(
+        outcome,
+        CallOutcome::Failed(CallFault::UpstreamTimeout)
+    ));
+    assert_eq!(
+        sink.events(),
+        [
+            AuditEvent::Decided(AuditDecision::Allow),
+            AuditEvent::Failed(CallFault::UpstreamTimeout),
         ]
     );
 }

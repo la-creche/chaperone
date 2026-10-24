@@ -13,7 +13,7 @@ Two kinds of effect plugin exist:
 
 ## Rules
 
-1. Read your secrets from the first message on stdin. `docs/design.md` section 7.5 states the delivery.
+1. Read your secrets from the first line on stdin, if your manifest declares any: one JSON object, `{"secrets":{"<param>":"<value>"}}`. Then speak MCP. `docs/design.md` section 7.5 states the delivery.
 2. Keep each secret in memory only.
 3. Answer every hook call with a result that matches the hook's schema. chaperone treats any other answer as a fault, and a fault is a deny (G2).
 4. An approval plugin returns `Approved` only for a human approval of that exact gate ID.

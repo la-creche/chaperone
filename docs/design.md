@@ -151,6 +151,7 @@ The record keeps the arguments only as the SHA-256 of their canonical form. Clos
 |---|---|---|
 | The decision | 5 seconds. A decision that takes longer fails the call with `no_decision` (G2). | A pure function over a policy file takes far less. A larger bound holds a caller longer on a stuck fence. A smaller bound fails a call on a slow host. |
 | The identity hook | None | The hook runs on the caller's thread, because `Credentials` borrows the request. A hook that never returns holds only that one call. A bound would need an owned copy of the bearer token. The hook is compiled code that the operator chooses in `install.json`. |
+| A call to an upstream | 30 seconds. A call that takes longer fails with `upstream_timeout` (G2). The audit holds a `failed` record. | A tool of version 1 answers in well under a second. A larger bound holds a caller on a stuck upstream. The upstream may still finish its work after the bound. chaperone does not retry (`crates/chaperone/AGENTS.md`). |
 
 ## 6. Configuration
 
@@ -234,6 +235,12 @@ An effect plugin serves one role: upstream or approval. A compiled plugin's poli
 
 chaperone sends each bound secret over the plugin's stdin, in the first message after launch. A secret never goes on argv or into the environment.
 
+The first message is one line: a JSON object with one key, `secrets`, whose value maps each secret parameter of the manifest to its value, followed by one newline. Nothing else is on the line. chaperone writes it before the MCP `initialize` request. A plugin that declares no secret receives no such line, so a third-party server that declares none sees plain MCP from the first byte.
+
+```json
+{"secrets":{"VIKUNJA_TOKEN":"..."}}
+```
+
 One exception exists for third-party MCP servers that read secrets from the environment. The install file can set `"secret_delivery": "env"` for one plugin. chaperone then logs a warning at each start. The warning names the plugin and the cost. A plugin in `default` or `included` can never use this exception.
 
 ### 7.6 The front door
@@ -251,6 +258,29 @@ Version 1 configures the LibreChat MCP server name as `chaperone`. This name has
 `chaperone serve` starts the front door. It takes `--config-dir` (the directory of `install.json` and `policy.json`), `--plugins-dir`, `--audit-file`, `--secrets-dir` and `--listen`. The front door reads each request body through the strict reader before the MCP library parses it, with a cap of 1 MiB. It accepts only loopback `Host` headers, to stop DNS rebinding. Each `--allowed-host` adds one more, such as `host.docker.internal:8300` for an app in Docker.
 
 In version 1, the default front door serves plain HTTP only on a loopback address. chaperone refuses to start when the front door address is not loopback and TLS is not set up. TLS comes before the move to the host.
+
+### 7.7 The effect host
+
+The effect host is the part of `chaperone serve` that runs effect plugins. It is the MCP client of each one.
+
+Start:
+
+1. After the configuration loads, the host launches each active upstream with the `command` of its manifest, in plugin name order. Build step 6 launches the approval channel the same way.
+2. The host pipes stdin, stdout and stderr. It writes the secret line of section 7.5 when the manifest declares a secret. It sends the MCP `initialize` request, then `tools/list`, and keeps the list.
+3. A launch that fails, an `initialize` that fails or a `tools/list` that fails refuses start (G2).
+4. The host reads stderr as log text. It logs each line with the plugin name, after it blanks each exact secret value (G9).
+
+A call:
+
+1. The decision allowed the call and the `decided` record is durable (G6).
+2. The host sends `tools/call` to the upstream with the tool name and the arguments. It waits up to the bound of section 5.5.
+3. The result check: every content block is text, and the text of all blocks is at most 1 MiB together. A block of another type, or more text, fails the call with `bad_result`. Structured content is not forwarded. An MCP error from the upstream is a result with `is_error` set and the error message as its text.
+4. The host blanks each exact secret value in each text block (section 8).
+5. chaperone writes the `ran` record with the upstream's `is_error` flag, then returns the result.
+
+An upstream that is not running, or whose connection is closed, fails a call with `not_connected`. Version 1 does not restart an upstream. The operator restarts chaperone.
+
+The manifest an app sees holds a tool when the policy grants it, the caller's reach holds it, the upstream lists it and its exposed name is valid. chaperone logs a warning at start for each granted tool that its upstream does not list.
 
 ## 8. Secrets
 
@@ -341,7 +371,6 @@ One pull request per step:
 | Item | Settle in |
 |---|---|
 | The final name of the approval hook, and its answer type | Step 6 |
-| The exact framing of the secret message on stdin | Step 5 |
 | JSON Schema generation for the editor | Step 8 |
 | The published `$schema` value of each file, and the step that makes it required | Step 8 |
 | Stage (b): sandbox per app instance, the OpenHands runtime, the model pass-through | After version 1 |

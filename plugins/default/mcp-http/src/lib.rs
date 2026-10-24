@@ -114,10 +114,17 @@ fn error_text(text: String) -> CallToolResult {
     CallToolResult::error(vec![ContentBlock::text(text)])
 }
 
-/// The MCP result of one outcome. Build step 5 adds the result of a call
-/// that ran.
+/// The MCP result of one outcome.
 fn render(outcome: CallOutcome) -> CallToolResult {
     match outcome {
+        CallOutcome::Ran(result) => {
+            let blocks = result.content.into_iter().map(ContentBlock::text).collect();
+            if result.is_error {
+                CallToolResult::error(blocks)
+            } else {
+                CallToolResult::success(blocks)
+            }
+        }
         CallOutcome::Denied(reason) => {
             error_text(format!("chaperone denied this call: {}", reason.code()))
         }

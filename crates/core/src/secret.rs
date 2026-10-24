@@ -9,6 +9,9 @@ use secrecy::{ExposeSecret, SecretString};
 
 use crate::ids::SecretName;
 
+/// The text that replaces a secret value in a result or a log line (G9).
+pub const REDACTED: &str = "[redacted]";
+
 /// A credential that chaperone holds for a plugin.
 pub struct Secret {
     name: SecretName,
@@ -36,6 +39,13 @@ impl Secret {
     #[must_use]
     pub fn expose(&self) -> &str {
         self.value.expose_secret()
+    }
+
+    /// `text` with each exact copy of the value replaced by [`REDACTED`]
+    /// (G9). The caller never sees the value.
+    #[must_use]
+    pub fn blank(&self, text: &str) -> String {
+        text.replace(self.value.expose_secret(), REDACTED)
     }
 }
 
@@ -121,6 +131,16 @@ mod tests {
     #[test]
     fn bearer_debug_hides_the_token() {
         assert_eq!(format!("{:?}", Bearer::new("tok".into())), "Bearer(..)");
+    }
+
+    #[test]
+    fn blank_replaces_each_exact_copy_and_nothing_else() {
+        let secret = Secret::new(SecretName::try_new("ha_token").unwrap(), "hunter2".into());
+        assert_eq!(
+            secret.blank("a hunter2 b hunter2 c Hunter2"),
+            "a [redacted] b [redacted] c Hunter2"
+        );
+        assert_eq!(secret.blank("no copy"), "no copy");
     }
 
     #[test]
