@@ -35,6 +35,9 @@ pub enum CallFault {
     /// chaperone could not write an audit record. It did not run the call or
     /// return its result (G6).
     AuditFailed,
+    /// A lock of the call path is poisoned. chaperone refuses every call
+    /// until it restarts (G2).
+    Halted,
 }
 
 impl CallFault {
@@ -47,6 +50,7 @@ impl CallFault {
             Self::NoApprovalChannel => "no_approval_channel",
             Self::NoDecision => "no_decision",
             Self::AuditFailed => "audit_failed",
+            Self::Halted => "halted",
         }
     }
 }
