@@ -1,16 +1,25 @@
-//! The decision-hook traits: identity and fence. A decision plugin
-//! implements one of them. Both are pure (G3): every input is an argument,
-//! and the result is a value. `plugins/decision/AGENTS.md` has the rules.
+//! Every contract between chaperone and a compiled plugin, in one place.
+//! `plugins/AGENTS.md` has the hook catalog.
+//!
+//! A decision plugin implements [`Identity`] or [`Fence`]. Both are pure
+//! (G3): every input is an argument, and the result is a value. An adapter
+//! plugin implements [`SecretSource`], [`AuditSink`] or [`Clock`]. The front
+//! door is the one adapter that implements nothing: it calls [`Gateway`],
+//! which chaperone implements. The result types of each trait stay in the
+//! module that owns them.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
+use std::future::Future;
 
 use serde::de::DeserializeOwned;
 use serde_json::value::RawValue;
 
-use crate::ids::{AppId, PluginName, ToolName};
+use crate::audit::{AuditError, AuditRecord};
+use crate::gateway::{CallOutcome, ListError, ListedTool};
+use crate::ids::{AppId, PluginName, SecretName, ToolName};
 use crate::policy::Policy;
-use crate::secret::Bearer;
+use crate::secret::{Bearer, Secret, SecretError};
 use crate::time::Timestamp;
 use crate::value::ArgValue;
 
@@ -150,6 +159,54 @@ pub trait Fence: Send + Sync + fmt::Debug {
         &self,
         section: Option<RawSection<'_>>,
     ) -> Result<Box<dyn PreparedFence>, SectionError>;
+}
+
+/// The secret-source hook. It fills the secret source slot
+/// (`docs/design.md` 7.2). chaperone reads each bound secret through it at
+/// start.
+pub trait SecretSource: Send + Sync + fmt::Debug {
+    /// The secret `name`.
+    ///
+    /// # Errors
+    ///
+    /// Returns a [`SecretError`] when the secret is missing, unsafe,
+    /// invalid or unreadable.
+    fn read(&self, name: &SecretName) -> Result<Secret, SecretError>;
+}
+
+/// The audit-sink hook. It fills the audit sink slot. Only `CallAudit` and
+/// its states call it.
+pub trait AuditSink: Send + Sync + fmt::Debug {
+    /// Write one record. Return only after the record is durable.
+    ///
+    /// # Errors
+    ///
+    /// Returns an [`AuditError`] when the record is not durable.
+    fn write(&self, record: &AuditRecord) -> Result<(), AuditError>;
+}
+
+/// The clock hook. It fills the clock slot. The program reads the time
+/// through it and passes the time to the decision as an argument (G3).
+pub trait Clock: Send + Sync + fmt::Debug {
+    fn now(&self) -> Timestamp;
+}
+
+/// What a front door calls. chaperone implements it.
+pub trait Gateway: Send + Sync + 'static {
+    /// The tools that these credentials may see.
+    fn list_tools(
+        &self,
+        credentials: &Credentials<'_>,
+    ) -> impl Future<Output = Result<Vec<ListedTool>, ListError>> + Send;
+
+    /// Decide and, if allowed, run one call. `name` is the exposed name as
+    /// the app sent it.
+    fn call_tool(
+        &self,
+        credentials: &Credentials<'_>,
+        name: &str,
+        arguments: BTreeMap<String, ArgValue>,
+    ) -> impl Future<Output = CallOutcome> + Send;
 }
 
 #[cfg(test)]

@@ -2,11 +2,11 @@
 
 Rules for decision plugins. Read `plugins/AGENTS.md` first.
 
-A decision plugin is a Rust crate that implements a decision-hook trait from `crates/core`. chaperone compiles it in. It runs inside the decision path, so it must be pure (G3).
+A decision plugin is a Rust crate that implements `Identity` or `Fence` from `crates/core/src/hook.rs`. chaperone compiles it in. It runs inside the decision path, so it must be pure (G3).
 
 ## Rules
 
-1. Implement a trait from `crates/core`. Depend on `crates/core` only. Do not depend on `crates/chaperone`.
+1. Implement a trait from `crates/core/src/hook.rs`. Depend on `crates/core` only. Do not depend on `crates/chaperone`.
 2. Take every input as an argument. That includes the time.
 3. Return a value. Do not write to anything.
 4. A fence returns pass, `Deny(reason)` or `Gate`. An identity plugin returns an app instance or nothing, and can only narrow that instance's reach. No decision plugin has an "allow" result (G7).

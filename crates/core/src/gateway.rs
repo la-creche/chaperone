@@ -1,14 +1,13 @@
-//! The contract between a front door and chaperone. A front door plugin
-//! receives an app's connection, turns each request into a [`Gateway`]
-//! call, and turns the answer back into its own protocol. It decides
-//! nothing (`plugins/adapter/AGENTS.md`).
+//! The values that cross the front door: the tools an app sees, the
+//! outcome of one call and the faults. A front door plugin turns each
+//! request into a call of the `Gateway` trait in `hook.rs`, and turns the
+//! answer back into its own protocol. It decides nothing
+//! (`plugins/adapter/AGENTS.md`).
 
 use std::collections::BTreeMap;
-use std::future::Future;
 
 use crate::decide::{DenyReason, GateId};
 use crate::exposed::ExposedName;
-use crate::hook::Credentials;
 use crate::value::ArgValue;
 
 /// One tool in the list that an app sees.
@@ -74,24 +73,6 @@ pub enum ListError {
     UnknownCredential,
     #[error("no valid policy is loaded")]
     PolicyNotLoaded,
-}
-
-/// What a front door calls. chaperone implements it.
-pub trait Gateway: Send + Sync + 'static {
-    /// The tools that these credentials may see.
-    fn list_tools(
-        &self,
-        credentials: &Credentials<'_>,
-    ) -> impl Future<Output = Result<Vec<ListedTool>, ListError>> + Send;
-
-    /// Decide and, if allowed, run one call. `name` is the exposed name as
-    /// the app sent it.
-    fn call_tool(
-        &self,
-        credentials: &Credentials<'_>,
-        name: &str,
-        arguments: BTreeMap<String, ArgValue>,
-    ) -> impl Future<Output = CallOutcome> + Send;
 }
 
 #[cfg(test)]
