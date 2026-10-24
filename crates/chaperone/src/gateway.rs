@@ -1,0 +1,277 @@
+//! The call path of the program: resolve the caller, count the call,
+//! decide, write the audit and answer. In build step 3 no upstream runs and
+//! no approval channel answers, so an allowed call fails with
+//! `not_connected` and a gated call fails with `no_approval_channel`. Both
+//! fail closed (G2).
+
+use std::collections::BTreeMap;
+use std::panic::{self, AssertUnwindSafe};
+use std::sync::mpsc;
+use std::sync::{Arc, Mutex, PoisonError};
+use std::thread;
+use std::time::Duration;
+
+use chaperone_core::{
+    AfterDecision, AppId, ArgValue, ArgumentsDigest, AuditApp, AuditError, AuditSink, AuditTool,
+    CallAudit, CallFault, CallNumber, CallOutcome, Caller, Credentials, Decision, ExposedName,
+    Gates, Identity, ListError, ListedTool, Policy, Request, RunId, Timestamp,
+};
+
+use crate::clock::Clock;
+
+/// The longest the program waits for one decision. A decision that takes
+/// longer fails the call with `no_decision` (G2).
+// DESIGN-QUESTION: docs/design.md 5 sets no bound for a decision. Five
+// seconds is far above the time of a pure function over a policy file. A
+// larger bound holds a caller longer on a stuck fence. A smaller bound
+// fails a call on a slow host.
+pub const DECISION_BUDGET: Duration = Duration::from_secs(5);
+
+const MINUTE_MILLIS: i64 = 60_000;
+
+/// The calls of one app instance in its current minute.
+#[derive(Debug, Clone, Copy)]
+struct Window {
+    minute: i64,
+    calls: u32,
+}
+
+/// The calls of each app instance in its current minute.
+#[derive(Debug, Default)]
+struct RateBook {
+    windows: BTreeMap<AppId, Window>,
+}
+
+impl RateBook {
+    /// Count one call of `app` at `now`. Return the calls before it in the
+    /// same minute.
+    fn count(&mut self, app: &AppId, now: Timestamp) -> u32 {
+        let minute = now.unix_millis().div_euclid(MINUTE_MILLIS);
+        let window = self
+            .windows
+            .entry(app.clone())
+            .or_insert(Window { minute, calls: 0 });
+        if window.minute != minute {
+            *window = Window { minute, calls: 0 };
+        }
+        let before = window.calls;
+        window.calls = window.calls.saturating_add(1);
+        before
+    }
+}
+
+/// The state that changes with each call.
+#[derive(Debug)]
+struct Counters {
+    rates: RateBook,
+    /// The number of the next call, or `None` once the counter is exhausted.
+    next_call: Option<CallNumber>,
+}
+
+/// The program's side of the gateway. It decides each call through core and
+/// writes the audit records of the call.
+#[derive(Debug)]
+pub struct ChaperoneGateway {
+    run: RunId,
+    policy: Arc<Policy>,
+    identity: Box<dyn Identity>,
+    audit: Arc<dyn AuditSink>,
+    clock: Box<dyn Clock>,
+    budget: Duration,
+    counters: Mutex<Counters>,
+}
+
+impl ChaperoneGateway {
+    /// A gateway over a loaded policy. `budget` bounds each decision.
+    #[must_use]
+    pub fn new(
+        run: RunId,
+        policy: Policy,
+        identity: Box<dyn Identity>,
+        audit: Arc<dyn AuditSink>,
+        clock: Box<dyn Clock>,
+        budget: Duration,
+    ) -> Self {
+        Self {
+            run,
+            policy: Arc::new(policy),
+            identity,
+            audit,
+            clock,
+            budget,
+            counters: Mutex::new(Counters {
+                rates: RateBook::default(),
+                next_call: Some(CallNumber::FIRST),
+            }),
+        }
+    }
+
+    /// The tools that these credentials may see.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ListError::UnknownCredential`] when the credentials resolve
+    /// to no app instance.
+    pub fn list_tools(&self, credentials: &Credentials<'_>) -> Result<Vec<ListedTool>, ListError> {
+        if self.resolve(credentials).is_none() {
+            return Err(ListError::UnknownCredential);
+        }
+        // Build step 4 lists the granted tools of each running upstream.
+        Ok(Vec::new())
+    }
+
+    /// Decide one call and write its audit records. `name` is the exposed
+    /// name as the app sent it.
+    pub fn call_tool(
+        &self,
+        credentials: &Credentials<'_>,
+        name: &str,
+        arguments: BTreeMap<String, ArgValue>,
+    ) -> CallOutcome {
+        let started_at = self.clock.now();
+        let caller = self.resolve(credentials);
+        let app = caller.as_ref().map(|caller| &caller.app);
+        let Some((call, calls_this_minute)) = self.begin(app, started_at) else {
+            // Without a call number no record can be written (G6).
+            return CallOutcome::Failed(CallFault::AuditFailed);
+        };
+        let audit = CallAudit::new(
+            self.run,
+            call,
+            started_at,
+            AuditApp::lookup(app, Some(&self.policy)),
+            AuditTool::lookup(name, Some(&self.policy)),
+            ArgumentsDigest::of(&arguments),
+        );
+
+        let Ok(exposed) = ExposedName::parse(name) else {
+            return self.fail_before_decision(audit, CallFault::UnknownTool);
+        };
+        let Some(decision) = self.decide(caller, exposed, arguments, calls_this_minute, started_at)
+        else {
+            return self.fail_before_decision(audit, CallFault::NoDecision);
+        };
+
+        let sink = self.audit.as_ref();
+        let next = match audit.decided(decision, self.clock.now(), sink) {
+            Ok(next) => next,
+            Err(_) => return CallOutcome::Failed(CallFault::AuditFailed),
+        };
+        match next {
+            AfterDecision::Denied(reason) => CallOutcome::Denied(reason),
+            AfterDecision::Allowed(call) => {
+                // Build step 4 runs the call. No upstream runs yet.
+                let fault = CallFault::NotConnected;
+                outcome(call.failed(fault, self.clock.now(), sink), fault)
+            }
+            AfterDecision::Gated(call) => {
+                // Build step 6 asks the approval channel. None answers yet.
+                let fault = CallFault::NoApprovalChannel;
+                outcome(call.failed(fault, self.clock.now(), sink), fault)
+            }
+        }
+    }
+
+    /// Run the identity hook. A hook that panics resolves to nothing, as a
+    /// fence that panics denies (G2). The payload is dropped unread, because
+    /// it can hold a token (G9).
+    fn resolve(&self, credentials: &Credentials<'_>) -> Option<Caller> {
+        // DESIGN-QUESTION: docs/design.md 5 bounds the time of no hook. The
+        // identity hook runs on the caller's thread, because `Credentials`
+        // borrows the request. A hook that never returns holds this one
+        // call. A bound would need an owned copy of the bearer token.
+        let policy = &self.policy;
+        panic::catch_unwind(AssertUnwindSafe(|| {
+            self.identity.resolve(credentials, policy)
+        }))
+        .unwrap_or(None)
+    }
+
+    /// Take the next call number and count the call for `app`. `None` means
+    /// the call counter is exhausted.
+    fn begin(&self, app: Option<&AppId>, now: Timestamp) -> Option<(CallNumber, u32)> {
+        // The guarded data stays whole through a panic of another caller,
+        // so a poisoned lock is taken back.
+        let mut counters = self.counters.lock().unwrap_or_else(PoisonError::into_inner);
+        let call = counters.next_call?;
+        counters.next_call = call.checked_next();
+        let calls_this_minute = app.map_or(0, |app| counters.rates.count(app, now));
+        Some((call, calls_this_minute))
+    }
+
+    /// Decide on another thread and wait up to the budget. `None` means the
+    /// decision did not return in time, or did not return at all.
+    fn decide(
+        &self,
+        caller: Option<Caller>,
+        name: ExposedName,
+        arguments: BTreeMap<String, ArgValue>,
+        calls_this_minute: u32,
+        now: Timestamp,
+    ) -> Option<Decision> {
+        let policy = Arc::clone(&self.policy);
+        let (sender, receiver) = mpsc::sync_channel(1);
+        let spawned = thread::Builder::new()
+            .name("decide".to_owned())
+            .spawn(move || {
+                // Build step 6 keeps the gate state. No gate exists yet.
+                let no_gates = BTreeMap::new();
+                let decision = chaperone_core::decide(
+                    Some(&policy),
+                    &Request {
+                        caller: caller.as_ref(),
+                        upstream: name.upstream(),
+                        tool: name.tool(),
+                        arguments: &arguments,
+                        calls_this_minute,
+                        gates: Gates {
+                            pending: &no_gates,
+                            approved: &no_gates,
+                            denied: &no_gates,
+                        },
+                        now,
+                    },
+                );
+                // A caller that gave up has dropped the receiver. The
+                // decision is then dropped too.
+                let _ = sender.send(decision);
+            });
+        if spawned.is_err() {
+            return None;
+        }
+        receiver.recv_timeout(self.budget).ok()
+    }
+
+    /// Write the only record of a call that fails before a decision, and
+    /// answer.
+    fn fail_before_decision(&self, audit: CallAudit, fault: CallFault) -> CallOutcome {
+        let written = audit.failed_before_decision(fault, self.clock.now(), self.audit.as_ref());
+        outcome(written, fault)
+    }
+}
+
+/// The answer after the final record of a failed call: the fault, or the
+/// audit fault when the record is not durable (G6).
+fn outcome(written: Result<(), AuditError>, fault: CallFault) -> CallOutcome {
+    match written {
+        Ok(()) => CallOutcome::Failed(fault),
+        Err(_) => CallOutcome::Failed(CallFault::AuditFailed),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_rate_book_counts_within_a_minute_and_starts_over_after_it() {
+        let app = AppId::try_new("librechat").unwrap();
+        let other = AppId::try_new("other").unwrap();
+        let mut book = RateBook::default();
+        let start = Timestamp::from_unix_millis(120_000);
+        assert_eq!(book.count(&app, start), 0);
+        assert_eq!(book.count(&app, Timestamp::from_unix_millis(179_999)), 1);
+        assert_eq!(book.count(&other, start), 0);
+        assert_eq!(book.count(&app, Timestamp::from_unix_millis(180_000)), 0);
+    }
+}

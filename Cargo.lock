@@ -96,6 +96,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "chaperone"
+version = "0.0.0"
+dependencies = [
+ "chaperone-core",
+ "chaperone-plugin-audit-jsonl",
+ "chaperone-plugin-bearer",
+ "getrandom",
+ "hex",
+ "sha2",
+ "tempfile",
+ "thiserror",
+]
+
+[[package]]
 name = "chaperone-core"
 version = "0.0.0"
 dependencies = [
