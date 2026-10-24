@@ -18,13 +18,13 @@ This report rates Rust tools for this repository. Each tool ran against the real
 |---|---|---|---|---|
 | Toolchain 1.99.1 | 0 format changes, 0 new lints, 80 of 80 tests pass | 1 line | Adopt now | All |
 | cargo-deny | `main` passes. Step 3 fails: `rand` and `chacha20` ship through `rmcp`. `subtle` needs `BSD-3-Clause`. | 1 file, about 15 s of CI | Adopt now | Rule 9, G2 |
-| Extra clippy lints | 4 hits in core library code, 0 print or `dbg!` hits, 1 pedantic hit. Step 3 adds 7 pedantic hits. | 3 small code fixes | Adopt now | G2, G9 |
+| Extra clippy lints | 4 hits in core library code, 0 print or `dbg!` hits, 1 pedantic hit. Step 3 adds 7 pedantic hits. Core uses a `HashSet`, which reads OS randomness. | 4 small code fixes | Adopt now | G2, G3, G9 |
 | zizmor | 3 findings, none high | 3 YAML edits, under 10 s of CI | Adopt now | G5 |
 | actionlint | 0 findings | under 5 s | Later | None |
 | cargo-mutants | 54 of 215 viable mutants survive. 2 survivors break G7 fences. | 162 s locally | Adopt the tests now. Run the tool later, on demand. | G7, G2 |
 | cargo-fuzz | 82 million runs, 0 crashes | Nightly toolchain, 4 targets | Later, as a scheduled job | G2 |
 | bolero | Runs on stable. Does not reuse proptest strategies. | 1 harness | Skip | G2 |
-| Kani | See section 9 | Nightly toolchain, about 30 lines per proof | See section 9 | G7, G2 |
+| Kani | No proof finished: out of memory, or no verdict within the cap, in 7 runs | Nightly toolchain, 12 to 90 lines per proof, up to 30 minutes per run | Skip | G7, G2 |
 | cargo-llvm-cov | 92.7 % of lines, 89.3 % of functions | 13 s | Later, as a report | G2 |
 | cargo-nextest | No speed gain at 80 tests | none | Later | None |
 | cargo-shear | 1 unused workspace dependency: `schemars` | under 1 s | Later | None |
@@ -220,9 +220,38 @@ No target found a crash or a failed assertion. Two limits apply:
 
 ## 9. Kani pilot
 
-**Trial.** Kani 0.68.0. The harnesses are in `crates/core/src/proofs.rs`, behind `#[cfg(kani)]`. Normal builds do not compile them. Two crate-private helpers, also behind `#[cfg(kani)]`, build a policy without JSON (`policy::proof_policy`) and a fixed gate ID (`GateId::from_bytes`).
+**Trial.** Kani 0.68.0. The reader and G7 harnesses are in `crates/core/src/proofs.rs`. The fence-table harnesses are in a module at the end of `crates/core/src/decide.rs`, because `passes` is private. All of them are behind `#[cfg(kani)]`. Normal builds do not compile them. Two crate-private helpers, also behind `#[cfg(kani)]`, build a policy without JSON (`policy::proof_policy`) and a fixed gate ID (`GateId::from_bytes`).
 
-KANI_RESULTS_PLACEHOLDER
+**Setup.** `cargo install --locked kani-verifier` took 19 s. `cargo kani setup` took 21 s and wrote 352 MB to `~/.kani`. Kani brings its own nightly toolchain. A G7 proof needs `-Z stubbing`.
+
+**Harness effort.** The G7 proof has about 90 lines, most of them fixture. The policy helper has 36 lines. The reader proof has 12 lines. The fence-table proof in `decide.rs` has about 50 lines. Each proof took under 30 minutes to write. The runs took the time.
+
+**Result.** No proof finished with a verdict. Each run had a cap of 30 minutes or less, and a watchdog stopped each run that reached its cap.
+
+| Proof | Bound | Result | Time |
+|---|---|---|---|
+| (a) The strict reader does not panic on any 2-byte input | `unwind(4)` | No verdict. Symbolic execution did not end. At the stop it was inside `memchr`, which `serde_json` uses to count lines for an error position. | Stopped at 2 h 46 min. A watchdog fault let it run past its cap. |
+| (b) G7 with the real gate hash | `unwind(3)` | Fails on an unwinding assertion inside `hybrid-array`, where `sha2` sets up its state. Kani also lists the aarch64 SHA instructions of `sha2` as unsupported. | 91 s |
+| (b) G7, gate hash replaced by a fixed ID | `unwind(5)` | No verdict. At the stop it was still in symbolic execution, in the drop code of the policy's `BTreeMap`. | Stopped at 28 min |
+| (b) G7, fixed ID, one-character names | `unwind(3)` | CBMC ran out of memory | 13.6 min |
+| (b) G7, fixed ID, drops skipped with `mem::forget` | `unwind(3)` | Symbolic execution ended in 84 s: 835 772 steps, 10 342 checks after simplification. CBMC then ran out of memory while it built the solver formula. | 13.4 min |
+| Fence table, all scalar kinds | `unwind(3)` | No verdict | Stopped at 10 min |
+| Fence table, booleans and integers only | `unwind(3)` | CBMC ran out of memory | 128 s |
+
+The G7 runs and the first fence run shared the 32 GiB of the machine. A run alone may need less memory than that. The last fence run ran alone and still ran out of memory.
+
+**Where Kani stops.**
+
+1. `sha2`. On aarch64, `sha2` uses the SHA instructions of the CPU. Kani does not support them. The loops of `hybrid-array` also need a large unwind bound. A stub of `GateId::from_call` removes both. The G7 proof decides one call twice, so one fixed ID stands for any ID of that call. The stub does not weaken the proof.
+2. `serde_json`. A reader proof on 2 bytes did not leave symbolic execution in 2 h 46 min. The float writer of `serde_json` (the `zmij` crate) uses NEON instructions that Kani does not support. Only the canonical text of a float reaches that code.
+3. `std` maps and the recursive `ArgValue`. `ArgValue::Object` holds a `BTreeMap<String, ArgValue>`. The drop code of that type recurses. The fence-table proof builds no map, but its log shows that Kani unwound this drop code and the `BTreeMap` drop code. That run then ran out of memory.
+
+**Recommendation.** Skip. Kani cannot prove a property of `decide()` or of the strict reader in under 30 minutes on this machine. The proptest property `g7_a_new_fence_only_narrows` already tests G7 on random fences in under 1 s. The mutation tests of section 7 close the gaps that it leaves. Look at Kani again in one of two cases:
+
+1. Core gains a small kernel with no map, no string and no recursive type, such as the gate state machine of design section 5.3.
+2. A Kani release reports better support for `BTreeMap` and for recursive drop code.
+
+The harnesses stay on `tooling-eval` for that later attempt.
 
 ## 10. Brief notes
 
@@ -254,6 +283,7 @@ These items need a change in the code or the tests, independent of any tool:
 3. The test `refuses_a_duplicate_key_written_with_an_escape` (`strict.rs:297`) uses the same input as `refuses_a_duplicate_key`: `{"a": 1, "a": 2}`. It does not write the key with an escape. The intended input is likely `{"a": 1, "a": 2}`.
 4. The rustdoc of `strict` links to a private item (section 3).
 5. The `rand` crate ships through `rmcp` in step 3 (section 4).
+6. The strict reader checks duplicate keys with a `HashSet` (`strict.rs:230`). `HashSet::new` uses `RandomState`, which reads random keys from the OS. The result stays deterministic, but core then reads OS randomness, which `crates/core/AGENTS.md` refuses (G3). The core clippy bans do not list `HashMap` or `HashSet`. Commit `5ec90e9` uses a `BTreeSet` and adds both types to `disallowed-types`. All 80 tests pass.
 
 ## 12. The follow-up pull request
 
@@ -388,6 +418,12 @@ Then:
 1. Apply the 3 library fixes of section 5, from commit `0d88733`.
 2. Add `clippy::arithmetic_side_effects` and `clippy::string_slice` to the `#![allow]` list of `crates/core/tests/decide.rs`.
 3. Fix the 7 step 3 hits of section 5 as the table there says.
+4. In `crates/core/src/strict.rs`, use `BTreeSet` in place of `HashSet`. Add these lines to `disallowed-types` in `crates/core/clippy.toml`:
+
+```toml
+  { path = "std::collections::HashMap", reason = "G3: RandomState reads OS randomness. Use BTreeMap" },
+  { path = "std::collections::HashSet", reason = "G3: RandomState reads OS randomness. Use BTreeSet" },
+```
 
 About 1 hour.
 
@@ -442,7 +478,7 @@ Ten minutes. Run the bump first in the pull request, so that the lints of change
 
 1. cargo-fuzz as a scheduled job: after step 3, with a front door target (section 8).
 2. cargo-mutants as a weekly job (section 7).
-3. Kani: see section 9.
+3. Kani: skip (section 9).
 4. Coverage as a CI report (section 10).
 
 ## 13. Trial commits on `tooling-eval`
@@ -455,7 +491,10 @@ Ten minutes. Run the bump first in the pull request, so that the lints of change
 | `fa8d8b8` | zizmor fixes in `ci.yml` |
 | `c1e0948` | The proposed `deny.toml`, which also passes on step 3 |
 | `7fb6b8c` | cargo-fuzz targets and the bolero harness |
-| KANI_COMMIT_PLACEHOLDER | Kani harnesses |
+| `aba251e` | Kani proofs of the strict reader and of G7 |
+| `1ef9746` | The first draft of this report |
+| `8531f09` | Kani proofs of the argument-fence table |
+| `5ec90e9` | A `BTreeSet` in the strict reader, and a ban on hash collections in core |
 
 ## 14. Questions for a maintainer
 
