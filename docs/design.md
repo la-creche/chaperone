@@ -156,7 +156,7 @@ All configuration is JSON. The strict reader reads every file. It refuses duplic
 
 Rules:
 
-- Each file names its schema in `$schema`.
+- Each file can name its schema in `$schema`. Step 8 publishes the schemas. It then fixes the value of `$schema` for each file and makes the field required.
 - Grants and install entries take a typed `note` field for the reason. JSON has no comments.
 - The policy file names a plugin by name only. It cannot launch a binary or bind a secret.
 - The editor's OS user cannot write `install.json`.
@@ -323,4 +323,5 @@ One pull request per step:
 | The exact framing of the secret message on stdin | Step 4 |
 | The adapter traits: front door, secret source, audit sink | Steps 3 and 5 |
 | JSON Schema generation for the editor | Step 8 |
+| The published `$schema` value of each file, and the step that makes it required | Step 8 |
 | Stage (b): sandbox per app instance, the OpenHands runtime, the model pass-through | After version 1 |
