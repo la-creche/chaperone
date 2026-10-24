@@ -3,6 +3,7 @@
 //! refuses start (G2).
 
 use std::fmt;
+use std::net::SocketAddr;
 use std::path::Path;
 use std::sync::Arc;
 
@@ -57,6 +58,10 @@ pub enum StartError {
     SecretsNotReady { plugin: PluginName },
     #[error("the OS random source failed: {0}")]
     Random(getrandom::Error),
+    #[error(
+        "the front door address {0} is not loopback, and TLS is not set up (docs/design.md 7.6)"
+    )]
+    NotLoopback(SocketAddr),
 }
 
 /// A fact the operator must see at each start. It does not refuse start.
@@ -145,6 +150,18 @@ pub fn load(
         audit,
         warnings,
     })
+}
+
+/// Refuse a front door address that is not loopback (`docs/design.md` 7.6).
+///
+/// # Errors
+///
+/// Returns [`StartError::NotLoopback`] for every other address.
+pub fn check_listen(address: SocketAddr) -> Result<(), StartError> {
+    if address.ip().is_loopback() {
+        return Ok(());
+    }
+    Err(StartError::NotLoopback(address))
 }
 
 fn slot_plugin(setup: &Setup, slot: Slot) -> Result<&PluginName, StartError> {
