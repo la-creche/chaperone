@@ -9,7 +9,7 @@ This directory holds one plugin for each required slot. chaperone does not start
 | Slot | Kind | Plugin | Behavior |
 |---|---|---|---|
 | front door | adapter | MCP over streamable HTTP | Serves the manifest and tool calls to an app |
-| identity | decision | bearer token | Resolves a bearer token to an app instance by its SHA-256 digest. Constant-time compare. |
+| identity | decision | bearer token | Resolves a bearer token to an app instance by its SHA-256 digest. Constant-time compare. Refuses text that is not a 64-character hex token. |
 | secret source | adapter | secret files | One file per secret, mode 0600, owner checked |
 | audit sink | adapter | JSONL file | Appends one line per call and syncs it before return |
 | approval channel | effect | deny all | Answers `Denied("no approval channel")` to every request |

@@ -248,8 +248,10 @@ In version 1, the default front door serves plain HTTP only on a loopback addres
 `chaperone token new <app>` creates a bearer token for an app instance:
 
 1. It takes 32 bytes from the OS random source, through `getrandom`.
-2. It prints the token once.
-3. It stores only the SHA-256 digest in `policy.json`, through `sha2`.
+2. It writes the bytes as 64 lower-case hex characters. This text is the token. It prints the token once.
+3. It stores only the SHA-256 digest of the token text in `policy.json`, through `sha2`.
+
+The `bearer` identity plugin refuses bearer text that is not 64 lower-case hex characters. A digest of any other text in `policy.json` authenticates nothing.
 
 Each app instance can hold two digests, so a token can rotate with no downtime. chaperone compares digests in constant time, through `subtle`. chaperone uses no cryptography code of its own.
 
