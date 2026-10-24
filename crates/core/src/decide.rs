@@ -236,7 +236,8 @@ enum FenceOutcome {
 /// Run every fence in plugin name order. The first deny wins. A fence that
 /// panics is a deny (G2). The panic payload is dropped unread, because it
 /// can hold argument text (G9). A fence that does not return blocks the
-/// decision. The host bounds the time of a decision.
+/// decision: core has no clock. The `chaperone` program bounds the time
+/// of a decision (`docs/design.md` section 13, step 3.2).
 fn run_fences(app: &App, call: &ToolCall<'_>) -> Result<FenceOutcome, DenyReason> {
     let mut outcome = FenceOutcome::Clear;
     for active in app.fences() {

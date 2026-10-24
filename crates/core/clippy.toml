@@ -35,6 +35,6 @@ disallowed-types = [
   { path = "std::sync::RwLock", reason = "G3: no hidden state in core" },
   { path = "std::os::unix::net::UnixStream", reason = "G3: no I/O in core" },
   { path = "std::os::unix::net::UnixListener", reason = "G3: no I/O in core" },
-  { path = "std::collections::HashMap", reason = "G3: a random hash seed; use BTreeMap" },
-  { path = "std::collections::HashSet", reason = "G3: a random hash seed; use BTreeSet" },
+  { path = "std::collections::HashMap", reason = "G3: a random hash seed. Use BTreeMap" },
+  { path = "std::collections::HashSet", reason = "G3: a random hash seed. Use BTreeSet" },
 ]

@@ -35,7 +35,8 @@ impl Finite {
     }
 }
 
-/// One JSON value, built only by the strict reader.
+/// One JSON value. The strict reader builds it from a text. Other code can
+/// build one too, and every value it can build has a JSON text.
 #[derive(Debug, Clone, PartialEq)]
 pub enum ArgValue {
     Null,

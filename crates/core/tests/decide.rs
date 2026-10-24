@@ -41,7 +41,7 @@ fn put(catalog: &mut Catalog, location: Location, text: &str) {
 }
 
 /// The defaults, the `ha-call` pair, a `vikunja` upstream and one extra
-/// fence, `zz-extra`, used by the G7 property.
+/// fence, `zz-extra`, used by the G7 property and the fault test.
 fn catalog() -> Catalog {
     let mut catalog = Catalog::new();
     for (plugin, kind, slot) in [
@@ -174,7 +174,8 @@ impl PreparedFence for PreparedEntities {
     }
 }
 
-/// The extra fence of the G7 property. Its verdict depends on argument `n`.
+/// The extra fence. Its verdict is fixed, depends on argument `n`, or is a
+/// panic.
 #[derive(Debug, Clone, Copy)]
 enum Behavior {
     Pass,

@@ -86,8 +86,8 @@ fn open_no_follow(path: &Path) -> Result<File, OpenError> {
     }
 }
 
-/// Check the opened file, not the path, so a swap between the two steps
-/// cannot pass.
+/// Check the opened file, not the path. A file swapped in after the open
+/// is checked too.
 fn check_file(file: &File) -> Result<(), OpenError> {
     let metadata = file.metadata()?;
     if !FileType::is_file(&metadata.file_type()) {
