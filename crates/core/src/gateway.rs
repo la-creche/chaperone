@@ -29,11 +29,23 @@ pub struct ListedTool {
 /// text. [`ToolOutput::read`] checks it against the official schema of that
 /// version, so a value of this type is a valid result. chaperone passes it
 /// on unchanged, except that it blanks each exact secret value (G9).
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct ToolOutput {
     raw: Box<RawValue>,
     version: ProtocolVersion,
     is_error: bool,
+}
+
+/// Shows the version, the error flag and the size, never the result text,
+/// because the result can hold a secret before redaction (G9).
+impl std::fmt::Debug for ToolOutput {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ToolOutput")
+            .field("version", &self.version)
+            .field("is_error", &self.is_error)
+            .field("bytes", &self.raw.get().len())
+            .finish()
+    }
 }
 
 /// The largest upstream result chaperone passes on.
@@ -274,12 +286,38 @@ mod tests {
             read(version, r#"{"content":[]}"#),
             Err(OutputError::Schema(_))
         ));
-        for version in ProtocolVersion::ALL {
-            let other = r#"{"content":[],"resultType":"input_required"}"#;
-            assert_eq!(read(version, other).unwrap_err(), OutputError::NotComplete);
+        let other = r#"{"content":[],"resultType":"input_required"}"#;
+        assert_eq!(
+            read(ProtocolVersion::V2026_07_28, other).unwrap_err(),
+            OutputError::NotComplete
+        );
+        // Versions before 2026-07-28 do not define resultType at all.
+        for old in [ProtocolVersion::V2025_06_18, ProtocolVersion::V2025_11_25] {
+            assert!(matches!(read(old, other), Err(OutputError::Schema(_))));
         }
         // Older versions have no resultType, so absent means complete.
         assert!(read(ProtocolVersion::V2025_06_18, r#"{"content":[]}"#).is_ok());
+    }
+
+    #[test]
+    fn debug_never_shows_result_text() {
+        let version = ProtocolVersion::V2025_06_18;
+        let text = format!(r#"{{"content":[{{"type":"text","text":"{SECRET}"}}]}}"#);
+        let output = read(version, &text).unwrap();
+        assert!(!format!("{output:?}").contains(SECRET), "{output:?}");
+        let outcome = CallOutcome::Ran(output);
+        assert!(!format!("{outcome:?}").contains(SECRET), "{outcome:?}");
+    }
+
+    #[test]
+    fn an_unknown_top_level_field_is_refused() {
+        for version in ProtocolVersion::ALL {
+            let text = result(version, TEXT, r#","unexpected":true"#);
+            assert!(
+                matches!(read(version, &text), Err(OutputError::Schema(_))),
+                "{version}"
+            );
+        }
     }
 
     #[test]

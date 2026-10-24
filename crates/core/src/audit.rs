@@ -129,6 +129,7 @@ pub enum AuditEvent {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AuditRecord {
     facts: CallFacts,
+    at: Timestamp,
     event: AuditEvent,
 }
 
@@ -143,9 +144,17 @@ impl AuditRecord {
         self.facts.call
     }
 
+    /// When the call started. Every record of one call has the same value.
+    #[must_use]
+    pub fn started_at(&self) -> Timestamp {
+        self.facts.started_at
+    }
+
+    /// When this record's event happened. A final record carries the time
+    /// the call ended, not the time it started.
     #[must_use]
     pub fn time(&self) -> Timestamp {
-        self.facts.time
+        self.at
     }
 
     /// The app instance, or `None` when the credentials resolve to none.
@@ -185,14 +194,15 @@ impl AuditRecord {
 struct CallFacts {
     run: RunId,
     call: CallNumber,
-    time: Timestamp,
+    started_at: Timestamp,
     app: Option<AppId>,
     tool: AuditTool,
     arguments: ArgumentsDigest,
 }
 
-/// The audit of one call, before its first record.
-#[derive(Debug, Clone, PartialEq, Eq)]
+/// The audit of one call, before its first record. It is not `Clone`, so
+/// one call cannot yield two decision records.
+#[derive(Debug, PartialEq, Eq)]
 #[must_use]
 pub struct CallAudit(CallFacts);
 
@@ -225,7 +235,7 @@ impl CallAudit {
     pub fn new(
         run: RunId,
         call: CallNumber,
-        time: Timestamp,
+        started_at: Timestamp,
         app: Option<AppId>,
         tool: AuditTool,
         arguments: ArgumentsDigest,
@@ -233,7 +243,7 @@ impl CallAudit {
         Self(CallFacts {
             run,
             call,
-            time,
+            started_at,
             app,
             tool,
             arguments,
@@ -242,18 +252,22 @@ impl CallAudit {
 
     /// The only record of a call that fails before a decision.
     #[must_use]
-    pub fn failed_before_decision(self, fault: CallFault) -> AuditRecord {
+    pub fn failed_before_decision(self, fault: CallFault, at: Timestamp) -> AuditRecord {
         AuditRecord {
             facts: self.0,
+            at,
             event: AuditEvent::Failed(fault),
         }
     }
 
     /// The decision record, and what must follow it. The decision moves
-    /// into the result, so the caller acts on what was recorded.
-    pub fn decided(self, decision: Decision) -> (AuditRecord, AfterDecision) {
+    /// into the result, so the caller acts on what was recorded. Ignoring
+    /// the result is a compile error under `-D warnings`.
+    #[must_use = "write the decision record, then act on the AfterDecision"]
+    pub fn decided(self, decision: Decision, at: Timestamp) -> (AuditRecord, AfterDecision) {
         let record = AuditRecord {
             facts: self.0.clone(),
+            at,
             event: AuditEvent::Decided(decision.clone()),
         };
         let next = match decision {
@@ -266,40 +280,44 @@ impl CallAudit {
 }
 
 impl AllowedCall {
-    /// Final: the upstream ran the call.
+    /// Final: the upstream ran the call. `at` is when it ended.
     #[must_use]
-    pub fn ran(self, is_error: bool) -> AuditRecord {
+    pub fn ran(self, is_error: bool, at: Timestamp) -> AuditRecord {
         AuditRecord {
             facts: self.0,
+            at,
             event: AuditEvent::Ran { is_error },
         }
     }
 
-    /// Final: chaperone could not run the call.
+    /// Final: chaperone could not run the call. `at` is when it gave up.
     #[must_use]
-    pub fn failed(self, fault: CallFault) -> AuditRecord {
+    pub fn failed(self, fault: CallFault, at: Timestamp) -> AuditRecord {
         AuditRecord {
             facts: self.0,
+            at,
             event: AuditEvent::Failed(fault),
         }
     }
 }
 
 impl GatedCall {
-    /// Final: the wait window ended with no answer.
+    /// Final: the wait window ended with no answer. `at` is when it ended.
     #[must_use]
-    pub fn waiting(self) -> AuditRecord {
+    pub fn waiting(self, at: Timestamp) -> AuditRecord {
         AuditRecord {
             event: AuditEvent::Waiting(self.1),
+            at,
             facts: self.0,
         }
     }
 
-    /// Final: chaperone could not get an approval.
+    /// Final: chaperone could not get an approval. `at` is when it gave up.
     #[must_use]
-    pub fn failed(self, fault: CallFault) -> AuditRecord {
+    pub fn failed(self, fault: CallFault, at: Timestamp) -> AuditRecord {
         AuditRecord {
             facts: self.0,
+            at,
             event: AuditEvent::Failed(fault),
         }
     }
@@ -311,9 +329,20 @@ impl GatedCall {
 }
 
 /// Why an audit sink could not write a record. The call then fails (G6).
-#[derive(Debug, thiserror::Error)]
-#[error("the audit sink could not write the record: {0}")]
-pub struct AuditError(pub String);
+/// It holds a closed set of causes, so no input text can reach a log
+/// through it (G9).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
+pub enum AuditError {
+    /// The operating system refused a write, a sync or an open.
+    #[error("io: the audit write failed ({0:?})")]
+    Io(std::io::ErrorKind),
+    /// A lock that guards the sink is poisoned.
+    #[error("lock: the audit sink lock is poisoned")]
+    LockPoisoned,
+    /// The sink could not encode the record.
+    #[error("encode: the audit record could not be encoded")]
+    Encode,
+}
 
 /// The audit-sink hook. It fills the audit sink slot.
 pub trait AuditSink: Send + Sync + std::fmt::Debug {
@@ -329,11 +358,18 @@ pub trait AuditSink: Send + Sync + std::fmt::Debug {
 mod tests {
     use super::*;
 
+    const START: Timestamp = Timestamp::from_unix_millis(1_000);
+    const END: Timestamp = Timestamp::from_unix_millis(61_000);
+
+    static_assertions::assert_not_impl_any!(CallAudit: Clone);
+    static_assertions::assert_not_impl_any!(AllowedCall: Clone);
+    static_assertions::assert_not_impl_any!(GatedCall: Clone);
+
     fn audit() -> CallAudit {
         CallAudit::new(
             RunId::from_bytes([1; 16]),
             CallNumber(1),
-            Timestamp::from_unix_millis(0),
+            START,
             None,
             AuditTool(None),
             ArgumentsDigest::of(&BTreeMap::new()),
@@ -349,7 +385,7 @@ mod tests {
     #[test]
     fn a_deny_has_one_record() {
         let decision = Decision::Deny(DenyReason::ToolNotGranted);
-        let (record, next) = audit().decided(decision.clone());
+        let (record, next) = audit().decided(decision.clone(), START);
         assert!(matches!(
             next,
             AfterDecision::Denied(DenyReason::ToolNotGranted)
@@ -359,11 +395,11 @@ mod tests {
 
     #[test]
     fn an_allow_has_a_decision_and_one_final_record() {
-        let (first, next) = audit().decided(Decision::Allow);
+        let (first, next) = audit().decided(Decision::Allow, START);
         let AfterDecision::Allowed(call) = next else {
             panic!("an allow must need a final record");
         };
-        let last = call.ran(false);
+        let last = call.ran(false, END);
         assert_eq!(
             events(&[first, last]),
             [
@@ -376,27 +412,38 @@ mod tests {
     #[test]
     fn a_gate_ends_in_waiting_failed_or_an_allowed_run() {
         let gate = Decision::Gate(GATE);
-        let gated = || match audit().decided(gate.clone()) {
+        let gated = || match audit().decided(gate.clone(), START) {
             (_, AfterDecision::Gated(call)) => call,
             (_, AfterDecision::Denied(_) | AfterDecision::Allowed(_)) => {
                 panic!("a gate must need a final record")
             }
         };
-        assert_eq!(gated().waiting().event(), &AuditEvent::Waiting(GATE));
+        assert_eq!(gated().waiting(END).event(), &AuditEvent::Waiting(GATE));
         assert_eq!(
-            gated().failed(CallFault::NoApprovalChannel).event(),
+            gated().failed(CallFault::NoApprovalChannel, END).event(),
             &AuditEvent::Failed(CallFault::NoApprovalChannel)
         );
         assert_eq!(
-            gated().approved().ran(true).event(),
+            gated().approved().ran(true, END).event(),
             &AuditEvent::Ran { is_error: true }
         );
     }
 
     #[test]
     fn a_failure_before_a_decision_has_one_record() {
-        let record = audit().failed_before_decision(CallFault::UnknownTool);
+        let record = audit().failed_before_decision(CallFault::UnknownTool, START);
         assert_eq!(record.event(), &AuditEvent::Failed(CallFault::UnknownTool));
+    }
+
+    #[test]
+    fn a_final_record_carries_the_end_time() {
+        let (first, next) = audit().decided(Decision::Gate(GATE), START);
+        let AfterDecision::Gated(call) = next else {
+            panic!("a gate");
+        };
+        let last = call.waiting(END);
+        assert_eq!((first.started_at(), first.time()), (START, START));
+        assert_eq!((last.started_at(), last.time()), (START, END));
     }
 
     #[test]

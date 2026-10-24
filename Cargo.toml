@@ -26,6 +26,7 @@ subtle = "2.6.1"
 tempfile = "3.27.0"
 thiserror = "2.0.21"
 time = { version = "0.3.55", features = ["formatting"] }
+trybuild = "1.0.122"
 
 [workspace.lints.rust]
 unsafe_code = "forbid"

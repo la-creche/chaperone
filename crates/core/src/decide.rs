@@ -70,8 +70,7 @@ pub struct Gates<'a> {
     pub denied: &'a BTreeMap<GateId, Timestamp>,
 }
 
-/// One request to decide.
-#[derive(Debug)]
+/// One request to decide. `Debug` shows the argument names only (G9).
 pub struct Request<'a> {
     /// The result of the identity hook.
     pub caller: Option<&'a Caller>,
@@ -82,6 +81,20 @@ pub struct Request<'a> {
     pub calls_this_minute: u32,
     pub gates: Gates<'a>,
     pub now: Timestamp,
+}
+
+impl fmt::Debug for Request<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Request")
+            .field("caller", &self.caller)
+            .field("upstream", &self.upstream)
+            .field("tool", &self.tool)
+            .field("argument_names", &self.arguments.keys().collect::<Vec<_>>())
+            .field("calls_this_minute", &self.calls_this_minute)
+            .field("gates", &self.gates)
+            .field("now", &self.now)
+            .finish()
+    }
 }
 
 /// Why a call is denied.

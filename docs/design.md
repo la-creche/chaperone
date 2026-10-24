@@ -131,7 +131,7 @@ Only the approval channel can complete a gate. It can complete only a gate that 
 | Gate, then no approval channel can answer | `decided`, `failed` |
 | Gate, then the approval comes, then the call runs or fails | `decided`, then `ran` or `failed` |
 
-Each record holds the run ID, the call number, the time, the app instance, the tool and the arguments digest. The tool is the exposed name only when the policy configures that tool. Any other text becomes `<unknown>`. The arguments digest is the SHA-256 of the canonical arguments.
+Each record holds the run ID, the call number, the start time of the call, the time of its own event, the app instance, the tool and the arguments digest. A final record carries the time the call ended. `CallAudit` is not `Clone`, and ignoring the result of `decided` does not compile, so one call cannot yield two decision records or skip its final record. `crates/core/tests/ui` proves both at compile time. The tool is the exposed name only when the policy configures that tool. Any other text becomes `<unknown>`. The arguments digest is the SHA-256 of the canonical arguments.
 
 ## 6. Configuration
 
@@ -229,6 +229,7 @@ In version 1, the default front door serves plain HTTP only on a loopback addres
 An upstream result is valid only when it is an MCP `CallToolResult` of the protocol version that the upstream negotiated.
 
 - chaperone checks it against the official JSON Schema of that version. `crates/core/schemas/mcp/` holds the schemas, copied without change: 2025-06-18, 2025-11-25 and 2026-07-28.
+- The official schema leaves unknown fields open. chaperone refuses a top-level field that the version's `CallToolResult` does not define. It reads the list of fields from the copied schema itself. Nested shapes follow the official schema.
 - On top of the schema, chaperone applies one rule from the spec text: `resultType` must be `complete`, or absent in a version before 2026-07-28.
 - A result that fails either check fails the call.
 

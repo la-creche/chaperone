@@ -1,0 +1,5 @@
+error[E0599]: no method named `clone` found for struct `CallAudit` in the current scope
+  --> tests/ui/call_audit_clone.rs:19:25
+   |
+19 |     let _second = first.clone();
+   |                         ^^^^^ method not found in `CallAudit`

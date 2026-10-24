@@ -21,3 +21,4 @@ thiserror = { workspace = true }
 [dev-dependencies]
 proptest = { workspace = true }
 static_assertions = { workspace = true }
+trybuild = { workspace = true }

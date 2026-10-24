@@ -44,10 +44,11 @@ Each line cites the guarantee it protects. A pull request that does one of these
 
 - Parse at the edge. The strict reader turns bytes into typed values. No `serde_json::Value` passes beyond the reader.
 - Give each ID its own newtype: `AppId`, `ToolName`, `PluginName`, `SecretName`, `GateId`. Do not pass a bare `String` where a newtype exists.
-- Put `#[serde(deny_unknown_fields)]` on every type that a config file or a wire message fills.
+- Put `#[serde(deny_unknown_fields)]` on every type that a config file or a wire message fills. A wire body that an external schema defines, such as an MCP result, is checked against that schema, and an unknown top-level field is refused. Its nested shapes follow the external schema, because that schema composes them with `allOf` and `anyOf`, and a closed nested object would refuse valid bodies.
 - Use an enum, not a boolean, for a choice. Use an enum, not an `Option`, when "nothing" has more than one meaning.
 - Match every variant of our own enums by name. Do not use a `_ =>` arm on them, so that a new variant breaks the build where it must be handled.
-- Make an invalid state impossible to build. A constructor that can fail returns `Result`. Fields stay private.
+- Make an invalid state impossible to build. A constructor that can fail returns `Result`. Fields stay private, also on error types: a public `String` field lets any caller put a secret in it.
+- A type that holds untrusted text, such as a header, an argument or an upstream result, gets a hand-written `Debug` that shows names, sizes or codes only. Do not derive `Debug` on it.
 
 ### Rust style guide
 

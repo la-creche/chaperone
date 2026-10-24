@@ -15,13 +15,22 @@ use crate::strict::StrictError;
 use crate::time::Timestamp;
 use crate::value::ArgValue;
 
-/// What an app presents with a call.
-#[derive(Debug)]
+/// What an app presents with a call. `Debug` shows the header names only,
+/// because a header value can hold a secret (G9).
 pub struct Credentials<'a> {
     /// The bearer token, if the request carried one.
     pub bearer: Option<&'a Bearer>,
     /// The request headers, with lower-case names.
     pub headers: &'a BTreeMap<String, String>,
+}
+
+impl fmt::Debug for Credentials<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Credentials")
+            .field("bearer", &self.bearer)
+            .field("header_names", &self.headers.keys().collect::<Vec<_>>())
+            .finish()
+    }
 }
 
 /// What a caller may reach, within its app instance's grant (G4).
@@ -48,8 +57,8 @@ pub trait Identity: Send + Sync + fmt::Debug {
     fn resolve(&self, credentials: &Credentials<'_>, policy: &Policy) -> Option<Caller>;
 }
 
-/// One tool call, as a fence sees it.
-#[derive(Debug)]
+/// One tool call, as a fence sees it. `Debug` shows the argument names
+/// only, because an argument value can hold a secret (G9).
 pub struct ToolCall<'a> {
     pub app: &'a AppId,
     pub upstream: &'a PluginName,
@@ -58,10 +67,23 @@ pub struct ToolCall<'a> {
     pub now: Timestamp,
 }
 
-/// Why a fence denies a call. At most [`FenceReason::MAX`] bytes. It must
-/// not contain a secret or an argument value.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct FenceReason(String);
+impl fmt::Debug for ToolCall<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("ToolCall")
+            .field("app", &self.app)
+            .field("upstream", &self.upstream)
+            .field("tool", &self.tool)
+            .field("argument_names", &self.arguments.keys().collect::<Vec<_>>())
+            .field("now", &self.now)
+            .finish()
+    }
+}
+
+/// Why a fence denies a call: fixed text that the plugin owns. It takes a
+/// `&'static str`, so a reason cannot be built at run time from an
+/// argument or a secret (G9). At most [`FenceReason::MAX`] bytes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct FenceReason(&'static str);
 
 impl FenceReason {
     /// The longest reason, in bytes.
@@ -69,17 +91,17 @@ impl FenceReason {
 
     /// Wrap `text`, cut at a character boundary to [`Self::MAX`] bytes.
     #[must_use]
-    pub fn new(text: &str) -> Self {
+    pub fn new(text: &'static str) -> Self {
         let mut end = text.len().min(Self::MAX);
         while !text.is_char_boundary(end) {
             end -= 1;
         }
-        Self(text[..end].to_owned())
+        Self(text.get(..end).unwrap_or_default())
     }
 
     #[must_use]
-    pub fn as_str(&self) -> &str {
-        &self.0
+    pub fn as_str(&self) -> &'static str {
+        self.0
     }
 }
 
@@ -182,9 +204,36 @@ mod tests {
     }
 
     #[test]
+    fn debug_never_shows_header_or_argument_values() {
+        const SECRET: &str = "tok_live_do_not_log_this";
+        let headers = BTreeMap::from([("cookie".to_owned(), SECRET.to_owned())]);
+        let bearer = Bearer::new(SECRET.to_owned());
+        let credentials = Credentials {
+            bearer: Some(&bearer),
+            headers: &headers,
+        };
+        assert!(!format!("{credentials:?}").contains(SECRET));
+
+        let arguments = BTreeMap::from([("token".to_owned(), ArgValue::String(SECRET.into()))]);
+        let app = AppId::try_new("librechat").unwrap();
+        let upstream = PluginName::try_new("vikunja").unwrap();
+        let tool = ToolName::try_new("list_tasks").unwrap();
+        let call = ToolCall {
+            app: &app,
+            upstream: &upstream,
+            tool: &tool,
+            arguments: &arguments,
+            now: Timestamp::from_unix_millis(0),
+        };
+        let shown = format!("{call:?}");
+        assert!(!shown.contains(SECRET), "{shown}");
+        assert!(shown.contains("token"), "{shown}");
+    }
+
+    #[test]
     fn a_fence_reason_is_cut_at_a_character_boundary() {
-        let long = "é".repeat(150);
-        let reason = FenceReason::new(&long);
+        const LONG: &str = "éééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééé";
+        let reason = FenceReason::new(LONG);
         assert!(reason.as_str().len() <= FenceReason::MAX);
         assert!(reason.as_str().chars().all(|c| c == 'é'));
     }
