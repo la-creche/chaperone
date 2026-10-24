@@ -1,8 +1,7 @@
 //! The call path of the program: resolve the caller, count the call,
-//! decide, write the audit and answer. In build step 3 no upstream runs and
-//! no approval channel answers, so an allowed call fails with
-//! `not_connected` and a gated call fails with `no_approval_channel`. Both
-//! fail closed (G2).
+//! decide, write the audit and answer. In build step 3 no upstream runs, so
+//! an allowed call fails with `not_connected`. No approval channel answers,
+//! so a gated call fails with `no_approval_channel`. Both fail closed (G2).
 
 use std::collections::BTreeMap;
 use std::panic::{self, AssertUnwindSafe};
@@ -278,8 +277,8 @@ fn outcome(written: Result<(), AuditError>, fault: CallFault) -> CallOutcome {
 
 /// The gateway as a front door holds it. The identity hook runs on the
 /// calling thread, because `Credentials` borrows the request. The rest of
-/// the call runs on a blocking thread, because the audit sink syncs each
-/// record to disk and the decision waits up to its budget.
+/// the call runs on a blocking thread. There, the audit sink syncs each
+/// record to disk, and the decision waits up to its budget.
 #[derive(Debug, Clone)]
 pub struct SharedGateway(Arc<ChaperoneGateway>);
 

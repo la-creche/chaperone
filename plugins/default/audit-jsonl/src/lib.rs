@@ -5,10 +5,10 @@
 //! Each write ends with `sync_all`. A new file and its parent directory are
 //! also synced, so the new directory entry survives a crash.
 //!
-//! The sink refuses an unsafe audit path: a symbolic link, a file that is
-//! not a regular file, or a file with a mode other than 0600. A link could
-//! send the records elsewhere, and a wider mode would let another OS user
-//! read or change them.
+//! The sink refuses an unsafe audit path. It refuses a symbolic link, a
+//! file that is not a regular file, and a file with a mode other than 0600.
+//! A link could send the records elsewhere. A wider mode would let another
+//! OS user read or change them.
 
 use std::fs::{File, FileType, OpenOptions};
 use std::io::{ErrorKind, Write};
@@ -37,7 +37,6 @@ pub enum OpenError {
     Mode { found: u32 },
 }
 
-/// The JSONL audit sink.
 #[derive(Debug)]
 pub struct JsonlAudit {
     file: Mutex<File>,

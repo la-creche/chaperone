@@ -50,7 +50,6 @@ impl<K: NameKind> Name<K> {
         Self::try_from(text.to_owned())
     }
 
-    /// The name as text.
     #[must_use]
     pub fn as_str(&self) -> &str {
         &self.text
@@ -120,7 +119,6 @@ fn is_tool_name(text: &str) -> bool {
             .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-' || c == '.')
 }
 
-/// The kind of [`AppId`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum AppIdKind {}
 
@@ -135,7 +133,6 @@ impl NameKind for AppIdKind {
     }
 }
 
-/// The kind of [`PluginName`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum PluginNameKind {}
 
@@ -155,7 +152,6 @@ impl NameKind for PluginNameKind {
     }
 }
 
-/// The kind of [`SecretName`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum SecretNameKind {}
 
@@ -170,7 +166,6 @@ impl NameKind for SecretNameKind {
     }
 }
 
-/// The kind of [`ToolName`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum ToolNameKind {}
 
@@ -185,7 +180,6 @@ impl NameKind for ToolNameKind {
     }
 }
 
-/// The kind of [`ArgName`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum ArgNameKind {}
 
@@ -213,7 +207,6 @@ fn is_param(text: &str) -> bool {
         && text.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
 }
 
-/// The kind of [`SecretParam`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum SecretParamKind {}
 
