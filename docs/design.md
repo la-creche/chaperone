@@ -145,6 +145,13 @@ The record keeps the arguments only as the SHA-256 of their canonical form. Clos
 
 `CallAudit` writes each record through the audit sink as it changes state. The next state exists only after the sink reports the record durable (G6). No other code holds a record, so no call can run before its decision record. The next state can make only the applicable final records. The transition from a gated call to an allowed call arrives with the approval answer type in step 6.
 
+### 5.5 Time bounds
+
+| Part | Bound | Why |
+|---|---|---|
+| The decision | 5 seconds. A decision that takes longer fails the call with `no_decision` (G2). | A pure function over a policy file takes far less. A larger bound holds a caller longer on a stuck fence. A smaller bound fails a call on a slow host. |
+| The identity hook | None | The hook runs on the caller's thread, because `Credentials` borrows the request. A hook that never returns holds only that one call. A bound would need an owned copy of the bearer token. The hook is compiled code that the operator chooses in `install.json`. |
+
 ## 6. Configuration
 
 All configuration is JSON. The strict reader reads every file. It refuses duplicate keys, a byte order mark, invalid UTF-8, unknown fields and input over the size cap. The Rust types are the source of truth. chaperone generates the JSON Schema from the types.
@@ -310,13 +317,13 @@ One pull request per step:
 2. `core`, in two pull requests:
    1. The workspace, CI, the strict reader, the name types, `Secret`, argument values and time.
    2. The config types, slot resolution, the decision, the hook traits and the property tests.
-3. In two pull requests:
-   1. The `Gateway` contract, exposed names, the `bearer` identity plugin and the `audit-jsonl` audit sink. The audit sink moves here from step 5, so the first program that runs already writes the audit (G6).
+3. In four pull requests:
+   1. The `Gateway` contract, exposed names, the `bearer` identity plugin and the `audit-jsonl` audit sink. The audit sink comes this early, so the first program that runs already writes the audit (G6).
    2. The `chaperone` program and the `mcp-http` front door.
    3. The registry of compiled plugins.
    4. The clock slot and the `system-clock` adapter.
-4. The effect host, the upstream result check and the Vikunja upstream.
-5. The secret source.
+4. The secret source. It comes before the effect host, because the Vikunja upstream needs a secret.
+5. The effect host, the upstream result check and the Vikunja upstream.
 6. Gates, the approval hook and `ha-approval`.
 7. `ha-call`, both halves.
 8. The admin socket, the CLI and the editor.
@@ -326,8 +333,8 @@ One pull request per step:
 | Item | Settle in |
 |---|---|
 | The final name of the approval hook, and its answer type | Step 6 |
-| The exact framing of the secret message on stdin | Step 4 |
-| The adapter traits: front door, secret source, audit sink | Steps 3 and 5 |
+| The exact framing of the secret message on stdin | Step 5 |
+| The adapter traits: front door, secret source, audit sink | Steps 3 and 4 |
 | JSON Schema generation for the editor | Step 8 |
 | The published `$schema` value of each file, and the step that makes it required | Step 8 |
 | Stage (b): sandbox per app instance, the OpenHands runtime, the model pass-through | After version 1 |

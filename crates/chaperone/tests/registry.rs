@@ -1,6 +1,6 @@
-//! The contract between the registry and the plugin tree: every slot plugin
-//! that ships with chaperone has a row, every row names a plugin that
-//! ships, and each row builds what its slot needs.
+//! The contract between the registry and the plugin tree. Every slot plugin
+//! that ships with chaperone has a row. Every row names a plugin that
+//! ships. Each row builds what its slot needs.
 
 #![allow(
     clippy::unwrap_used,

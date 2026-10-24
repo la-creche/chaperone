@@ -105,7 +105,7 @@ pub enum FenceVerdict {
 
 /// A fence with its policy section for one app instance already read.
 pub trait PreparedFence: Send + Sync + fmt::Debug {
-    /// Judge one call.
+    /// The verdict on one call. Like every decision hook, it is pure (G3).
     fn check(&self, call: &ToolCall<'_>) -> FenceVerdict;
 }
 

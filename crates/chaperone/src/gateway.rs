@@ -1,13 +1,12 @@
 //! The call path of the program: resolve the caller, count the call,
-//! decide, write the audit and answer. In build step 3 no upstream runs and
-//! no approval channel answers, so an allowed call fails with
-//! `not_connected` and a gated call fails with `no_approval_channel`. Both
-//! fail closed (G2).
+//! decide, write the audit and answer. In build step 3 no upstream runs, so
+//! an allowed call fails with `not_connected`. No approval channel answers,
+//! so a gated call fails with `no_approval_channel`. Both fail closed (G2).
 
 use std::collections::BTreeMap;
 use std::panic::{self, AssertUnwindSafe};
 use std::sync::mpsc;
-use std::sync::{Arc, Mutex, PoisonError};
+use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::Duration;
 
@@ -19,12 +18,8 @@ use chaperone_core::{
 
 use crate::clock::Clock;
 
-/// The longest the program waits for one decision. A decision that takes
-/// longer fails the call with `no_decision` (G2).
-// DESIGN-QUESTION: docs/design.md 5 sets no bound for a decision. Five
-// seconds is far above the time of a pure function over a policy file. A
-// larger bound holds a caller longer on a stuck fence. A smaller bound
-// fails a call on a slow host.
+/// The longest the program waits for one decision (`docs/design.md` 5.5).
+/// A decision that takes longer fails the call with `no_decision` (G2).
 pub const DECISION_BUDGET: Duration = Duration::from_secs(5);
 
 const MINUTE_MILLIS: i64 = 60_000;
@@ -66,6 +61,29 @@ struct Counters {
     rates: RateBook,
     /// The number of the next call, or `None` once the counter is exhausted.
     next_call: Option<CallNumber>,
+}
+
+/// Why a call could not take a call number.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum BeginFault {
+    /// The call counter is exhausted.
+    Exhausted,
+    /// A panic left the counters lock poisoned. The program does not reach
+    /// inside a poisoned lock, so every later call fails (G2).
+    Poisoned,
+}
+
+/// Take the next call number and count the call for `app`.
+fn begin(
+    counters: &Mutex<Counters>,
+    app: Option<&AppId>,
+    now: Timestamp,
+) -> Result<(CallNumber, u32), BeginFault> {
+    let mut counters = counters.lock().map_err(|_| BeginFault::Poisoned)?;
+    let call = counters.next_call.ok_or(BeginFault::Exhausted)?;
+    counters.next_call = call.checked_next();
+    let calls_this_minute = app.map_or(0, |app| counters.rates.count(app, now));
+    Ok((call, calls_this_minute))
 }
 
 /// The program's side of the gateway. It decides each call through core and
@@ -116,7 +134,7 @@ impl ChaperoneGateway {
         if self.resolve(credentials).is_none() {
             return Err(ListError::UnknownCredential);
         }
-        // Build step 4 lists the granted tools of each running upstream.
+        // Build step 5 lists the granted tools of each running upstream.
         Ok(Vec::new())
     }
 
@@ -142,9 +160,14 @@ impl ChaperoneGateway {
     ) -> CallOutcome {
         let started_at = self.clock.now();
         let app = caller.as_ref().map(|caller| &caller.app);
-        let Some((call, calls_this_minute)) = self.begin(app, started_at) else {
+        let (call, calls_this_minute) = match begin(&self.counters, app, started_at) {
+            Ok(begun) => begun,
             // Without a call number no record can be written (G6).
-            return CallOutcome::Failed(CallFault::AuditFailed);
+            Err(BeginFault::Exhausted) => return CallOutcome::Failed(CallFault::AuditFailed),
+            Err(BeginFault::Poisoned) => {
+                tracing::error!("the call counters are poisoned, so every call fails");
+                return CallOutcome::Failed(CallFault::Halted);
+            }
         };
         let audit = CallAudit::new(
             self.run,
@@ -174,7 +197,7 @@ impl ChaperoneGateway {
         match next {
             AfterDecision::Denied(reason) => CallOutcome::Denied(reason),
             AfterDecision::Allowed(call) => {
-                // Build step 4 runs the call. No upstream runs yet.
+                // Build step 5 runs the call. No upstream runs yet.
                 let fault = CallFault::NotConnected;
                 outcome(call.failed(fault, self.clock.now(), sink), fault)
             }
@@ -190,27 +213,12 @@ impl ChaperoneGateway {
     /// fence that panics denies (G2). The payload is dropped unread, because
     /// it can hold a token (G9).
     pub(crate) fn resolve(&self, credentials: &Credentials<'_>) -> Option<Caller> {
-        // DESIGN-QUESTION: docs/design.md 5 bounds the time of no hook. The
-        // identity hook runs on the caller's thread, because `Credentials`
-        // borrows the request. A hook that never returns holds this one
-        // call. A bound would need an owned copy of the bearer token.
+        // The identity hook has no time bound (`docs/design.md` 5.5).
         let policy = &self.policy;
         panic::catch_unwind(AssertUnwindSafe(|| {
             self.identity.resolve(credentials, policy)
         }))
         .unwrap_or(None)
-    }
-
-    /// Take the next call number and count the call for `app`. `None` means
-    /// the call counter is exhausted.
-    fn begin(&self, app: Option<&AppId>, now: Timestamp) -> Option<(CallNumber, u32)> {
-        // The guarded data stays whole through a panic of another caller,
-        // so a poisoned lock is taken back.
-        let mut counters = self.counters.lock().unwrap_or_else(PoisonError::into_inner);
-        let call = counters.next_call?;
-        counters.next_call = call.checked_next();
-        let calls_this_minute = app.map_or(0, |app| counters.rates.count(app, now));
-        Some((call, calls_this_minute))
     }
 
     /// Decide on another thread and wait up to the budget. `None` means the
@@ -278,8 +286,8 @@ fn outcome(written: Result<(), AuditError>, fault: CallFault) -> CallOutcome {
 
 /// The gateway as a front door holds it. The identity hook runs on the
 /// calling thread, because `Credentials` borrows the request. The rest of
-/// the call runs on a blocking thread, because the audit sink syncs each
-/// record to disk and the decision waits up to its budget.
+/// the call runs on a blocking thread. There, the audit sink syncs each
+/// record to disk, and the decision waits up to its budget.
 #[derive(Debug, Clone)]
 pub struct SharedGateway(Arc<ChaperoneGateway>);
 
@@ -323,6 +331,40 @@ impl Gateway for SharedGateway {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn fresh() -> Mutex<Counters> {
+        Mutex::new(Counters {
+            rates: RateBook::default(),
+            next_call: Some(CallNumber::FIRST),
+        })
+    }
+
+    #[test]
+    fn begin_numbers_each_call() {
+        let counters = fresh();
+        let now = Timestamp::from_unix_millis(0);
+        let (first, _) = begin(&counters, None, now).unwrap();
+        let (second, _) = begin(&counters, None, now).unwrap();
+        assert_eq!(first, CallNumber::FIRST);
+        assert_eq!(Some(second), first.checked_next());
+    }
+
+    #[test]
+    fn a_poisoned_lock_fails_every_later_call() {
+        let counters = std::sync::Arc::new(fresh());
+        let held = std::sync::Arc::clone(&counters);
+        let panicked = std::thread::spawn(move || {
+            let _guard = held.lock().unwrap();
+            panic!("a panic while the lock is held");
+        })
+        .join();
+        assert!(panicked.is_err());
+
+        let now = Timestamp::from_unix_millis(0);
+        for _ in 0..2 {
+            assert_eq!(begin(&counters, None, now), Err(BeginFault::Poisoned));
+        }
+    }
 
     #[test]
     fn the_rate_book_counts_within_a_minute_and_starts_over_after_it() {

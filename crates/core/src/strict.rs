@@ -41,7 +41,6 @@ impl ByteCap {
         Self(bytes)
     }
 
-    /// The cap in bytes.
     #[must_use]
     pub const fn bytes(self) -> usize {
         self.0
