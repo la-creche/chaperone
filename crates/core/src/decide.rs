@@ -237,7 +237,7 @@ enum FenceOutcome {
 /// panics is a deny (G2). The panic payload is dropped unread, because it
 /// can hold argument text (G9). A fence that does not return blocks the
 /// decision: core has no clock. The `chaperone` program bounds the time
-/// of a decision (`docs/design.md` section 13, step 3.2).
+/// of a decision with its decision budget.
 fn run_fences(app: &App, call: &ToolCall<'_>) -> Result<FenceOutcome, DenyReason> {
     let mut outcome = FenceOutcome::Clear;
     for active in app.fences() {

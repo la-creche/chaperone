@@ -25,10 +25,10 @@ const BEARER: &str = "bearer";
 /// The audit sink this build has code for.
 const AUDIT_JSONL: &str = "audit-jsonl";
 
-/// The plugin this build accepts in each slot that no code serves yet. The
-/// front door comes in build step 3.2, the approval channel in steps 4 and
-/// 6, and the secret source in step 5. Another plugin in one of these slots
-/// refuses start now, so a later step never finds a slot it cannot serve.
+/// The one plugin this build runs in each of these slots. `main` serves the
+/// `mcp-http` front door. The secret source comes in build step 5, and the
+/// approval channel in build step 6. Any other plugin in one of these slots
+/// refuses start (G2).
 const ACCEPTED: [(Slot, &str); 3] = [
     (Slot::FrontDoor, "mcp-http"),
     (Slot::SecretSource, "secret-files"),

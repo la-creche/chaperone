@@ -4,7 +4,7 @@
 //! has the rules.
 //!
 //! This crate holds the parts of the program that serve no connection. The
-//! front door of build step 3.2 serves them over MCP.
+//! `mcp-http` front door plugin serves them over MCP.
 
 pub mod catalog;
 pub mod clock;

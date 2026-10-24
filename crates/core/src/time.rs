@@ -14,7 +14,6 @@ impl Timestamp {
         Self(millis)
     }
 
-    /// Milliseconds since the Unix epoch.
     #[must_use]
     pub const fn unix_millis(self) -> i64 {
         self.0

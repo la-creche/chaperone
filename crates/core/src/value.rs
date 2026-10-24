@@ -4,10 +4,10 @@
 
 use std::collections::BTreeMap;
 
-/// A finite `f64`. NaN and the infinities have no JSON text, so a value
-/// that held one would share the canonical text `null` with
-/// [`ArgValue::Null`], and two different calls would share one gate ID.
-/// The type makes such a value impossible to build.
+/// A finite `f64`. NaN and the infinities have no JSON text. A value that
+/// held one would share the canonical text `null` with [`ArgValue::Null`],
+/// so two different calls would share one gate ID. The type makes such a
+/// value impossible to build.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Finite(f64);
 
@@ -104,7 +104,7 @@ impl ArgValue {
             return Self::UInt(uint);
         }
         // Without the arbitrary_precision feature, every other number is a
-        // finite f64. The fallback cannot happen; it keeps the value finite.
+        // finite f64. The fallback cannot happen. It keeps the value finite.
         Self::Float(
             number
                 .as_f64()
