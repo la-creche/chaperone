@@ -172,6 +172,11 @@ impl Setup {
     pub fn binding(&self, plugin: &PluginName) -> Option<&Binding> {
         self.bindings.get(plugin)
     }
+
+    /// Every active plugin with its secret binding, in name order.
+    pub fn bindings(&self) -> impl Iterator<Item = (&PluginName, &Binding)> {
+        self.bindings.iter()
+    }
 }
 
 /// Why the install file and the plugins on disk do not form a valid setup.
@@ -511,6 +516,27 @@ pub(crate) mod tests {
         );
         let vikunja = setup.binding(&name("vikunja")).unwrap();
         assert_eq!(vikunja.delivery, SecretDelivery::Env);
+    }
+
+    #[test]
+    fn bindings_cover_every_active_plugin_in_name_order() {
+        let setup = resolve(&install(V1_INSTALL), &v1_catalog()).unwrap();
+        let names: Vec<&str> = setup.bindings().map(|(name, _)| name.as_str()).collect();
+        assert_eq!(
+            names,
+            [
+                "audit-jsonl",
+                "bearer",
+                "ha-approval",
+                "ha-call",
+                "mcp-http",
+                "secret-files",
+                "vikunja"
+            ]
+        );
+        for (name, binding) in setup.bindings() {
+            assert_eq!(setup.binding(name), Some(binding));
+        }
     }
 
     #[test]

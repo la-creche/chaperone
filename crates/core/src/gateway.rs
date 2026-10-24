@@ -29,6 +29,9 @@ pub enum CallFault {
     NotConnected,
     /// The call needs an approval, and no approval channel can answer yet.
     NoApprovalChannel,
+    /// The decision did not return inside the bound that the `chaperone`
+    /// program sets, or did not return at all (G2).
+    NoDecision,
     /// chaperone could not write an audit record. It did not run the call or
     /// return its result (G6).
     AuditFailed,
@@ -42,6 +45,7 @@ impl CallFault {
             Self::UnknownTool => "unknown_tool",
             Self::NotConnected => "not_connected",
             Self::NoApprovalChannel => "no_approval_channel",
+            Self::NoDecision => "no_decision",
             Self::AuditFailed => "audit_failed",
         }
     }
@@ -84,4 +88,25 @@ pub trait Gateway: Send + Sync + 'static {
         name: &str,
         arguments: BTreeMap<String, ArgValue>,
     ) -> impl Future<Output = CallOutcome> + Send;
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::BTreeSet;
+
+    use super::*;
+
+    #[test]
+    fn each_fault_has_its_own_code() {
+        let faults = [
+            CallFault::UnknownTool,
+            CallFault::NotConnected,
+            CallFault::NoApprovalChannel,
+            CallFault::NoDecision,
+            CallFault::AuditFailed,
+        ];
+        let codes: BTreeSet<&str> = faults.iter().map(|fault| fault.code()).collect();
+        assert_eq!(codes.len(), faults.len());
+        assert_eq!(CallFault::NoDecision.code(), "no_decision");
+    }
 }
