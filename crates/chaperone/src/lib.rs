@@ -10,6 +10,7 @@ pub mod catalog;
 pub mod clock;
 mod files;
 pub mod gateway;
+pub mod registry;
 pub mod startup;
 
 pub use files::ReadError;
