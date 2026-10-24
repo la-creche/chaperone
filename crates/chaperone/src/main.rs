@@ -52,7 +52,7 @@ struct Serve {
 const LOOPBACK_HOSTS: [&str; 3] = ["localhost", "127.0.0.1", "::1"];
 
 fn main() -> ExitCode {
-    // A second subscriber would refuse; the first one then keeps logging.
+    // A second subscriber would refuse. The first one then keeps logging.
     let _ = tracing_subscriber::fmt()
         .with_writer(std::io::stderr)
         .try_init();

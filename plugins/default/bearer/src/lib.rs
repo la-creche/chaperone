@@ -5,8 +5,8 @@
 //!
 //! A token is the 64 lower-case hex characters of 32 random bytes
 //! (`docs/design.md` section 9). The plugin refuses bearer text in any
-//! other form before it hashes, so a digest of a short or hand-made text
-//! in the policy file never authenticates anything.
+//! other form before it hashes. A digest of a short or hand-made text in
+//! the policy file therefore never authenticates anything.
 
 use chaperone_core::{Caller, Credentials, Identity, Policy, Reach};
 use sha2::{Digest, Sha256};
@@ -23,7 +23,6 @@ fn is_token(text: &str) -> bool {
             .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
 }
 
-/// The bearer identity plugin.
 #[derive(Debug, Default, Clone, Copy)]
 pub struct BearerIdentity;
 
@@ -41,7 +40,8 @@ impl Identity for BearerIdentity {
         let digest = Sha256::digest(text.as_bytes());
 
         // Compare against every digest, so the time does not depend on
-        // which app instance matches. The policy holds each digest once.
+        // which app instance matches (`docs/design.md` section 9). The
+        // policy holds each digest once.
         let mut found = None;
         for (id, app) in policy.apps() {
             for known in app.digests() {

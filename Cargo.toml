@@ -3,6 +3,7 @@ resolver = "3"
 members = [
   "crates/chaperone",
   "crates/core",
+  "crates/lint",
   "plugins/default/audit-jsonl",
   "plugins/default/bearer",
   "plugins/default/mcp-http",

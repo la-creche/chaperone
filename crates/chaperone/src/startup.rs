@@ -39,7 +39,7 @@ pub enum StartError {
     EmptySlot(Slot),
     #[error("this build has no code for {plugin} in the slot {slot}")]
     NoCode { slot: Slot, plugin: PluginName },
-    #[error("{plugin} needs secrets, and the secret source comes in build step 5")]
+    #[error("{plugin} needs secrets, and the secret source comes in build step 4")]
     SecretsNotReady { plugin: PluginName },
     #[error("the OS random source failed: {0}")]
     Random(getrandom::Error),

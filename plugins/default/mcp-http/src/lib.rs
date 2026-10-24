@@ -1,10 +1,13 @@
 //! The default front door: MCP over streamable HTTP, built on `rmcp`.
 //!
-//! It reads each request body through the strict reader before `rmcp`
-//! parses it, reads the bearer token from the `Authorization` header of
-//! every request, passes the request to the [`Gateway`], and turns the
-//! answer into an MCP result. It decides nothing and caches nothing
-//! (`plugins/adapter/AGENTS.md`).
+//! For each request, the front door does these steps:
+//!
+//! 1. It reads the body through the strict reader, before `rmcp` parses it.
+//! 2. It reads the bearer token from the `Authorization` header.
+//! 3. It passes the request to the [`Gateway`].
+//! 4. It turns the answer into an MCP result.
+//!
+//! It decides nothing and caches nothing (`plugins/adapter/AGENTS.md`).
 
 use std::collections::BTreeMap;
 use std::sync::Arc;
@@ -111,7 +114,7 @@ fn error_text(text: String) -> CallToolResult {
     CallToolResult::error(vec![ContentBlock::text(text)])
 }
 
-/// The MCP result of one outcome. Build step 4 adds the result of a call
+/// The MCP result of one outcome. Build step 5 adds the result of a call
 /// that ran.
 fn render(outcome: CallOutcome) -> CallToolResult {
     match outcome {

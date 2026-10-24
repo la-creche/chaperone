@@ -170,8 +170,9 @@ async fn the_front_door_decides_and_audits_each_call() {
 
     let audit = served.stop().await;
     let lines: Vec<&str> = audit.lines().collect();
-    // allowed: decided + failed. ungranted: decided. gated: decided + failed.
-    // bad name: failed. stranger: decided.
+    // An allowed call writes `decided` and `failed`. An ungranted call writes
+    // `decided`. A gated call writes `decided` and `failed`. A bad name
+    // writes `failed`. An unknown caller writes `decided`.
     assert_eq!(lines.len(), 7, "{audit}");
     assert!(
         lines[0].contains(r#""event":"decided","detail":"allow""#),

@@ -8,6 +8,5 @@ use crate::time::Timestamp;
 
 /// A source of the current time.
 pub trait Clock: Send + Sync + fmt::Debug {
-    /// The current time.
     fn now(&self) -> Timestamp;
 }

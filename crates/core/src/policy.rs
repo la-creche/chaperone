@@ -311,7 +311,7 @@ impl Policy {
         Ok(Self { apps })
     }
 
-    /// One app instance.
+    /// The app instance `id`, or `None` when the policy does not hold it.
     #[must_use]
     pub fn app(&self, id: &AppId) -> Option<&App> {
         self.apps.get(id)

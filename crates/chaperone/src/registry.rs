@@ -24,9 +24,9 @@ pub enum Build {
     /// A front door. `chaperone serve` starts it over the gateway after the
     /// configuration is loaded, so load time constructs nothing.
     FrontDoor,
-    /// A plugin whose code a later build step adds. The slot accepts only
-    /// this plugin until then, so a later step never meets a slot it cannot
-    /// serve.
+    /// A plugin whose code comes in build step 4 (the secret source) or
+    /// build step 6 (the approval channel). The slot accepts only this
+    /// plugin until then, so that step never meets a slot it cannot serve.
     Later,
 }
 
