@@ -236,7 +236,7 @@ An app sees one MCP server with the tools of every granted upstream. Each tool h
 
 Version 1 configures the LibreChat MCP server name as `chaperone`. This name has nine characters. A 50-character exposed name becomes 64 characters after LibreChat adds its suffix.
 
-The front door reads each request body through the strict reader before the MCP library parses it, with a cap of 1 MiB. It accepts only loopback `Host` headers, to stop DNS rebinding.
+`chaperone serve` starts the front door. It takes `--config-dir` (the directory of `install.json` and `policy.json`), `--plugins-dir`, `--audit-file` and `--listen`. The front door reads each request body through the strict reader before the MCP library parses it, with a cap of 1 MiB. It accepts only loopback `Host` headers, to stop DNS rebinding. Each `--allowed-host` adds one more, such as `host.docker.internal:8300` for an app in Docker.
 
 In version 1, the default front door serves plain HTTP only on a loopback address. chaperone refuses to start when the front door address is not loopback and TLS is not set up. TLS comes before the move to the host.
 

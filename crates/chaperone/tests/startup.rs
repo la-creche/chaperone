@@ -202,6 +202,17 @@ fn another_plugin_in_a_slot_refuses_start() {
 }
 
 #[test]
+fn a_front_door_address_that_is_not_loopback_refuses_start() {
+    let lan = "192.0.2.10:8300".parse().unwrap();
+    assert!(matches!(
+        startup::check_listen(lan),
+        Err(StartError::NotLoopback(_))
+    ));
+    assert!(startup::check_listen("127.0.0.1:8300".parse().unwrap()).is_ok());
+    assert!(startup::check_listen("[::1]:8300".parse().unwrap()).is_ok());
+}
+
+#[test]
 fn an_unsafe_audit_file_refuses_start() {
     let root = tempfile::tempdir().unwrap();
     let plugins = plugin_tree(root.path());
