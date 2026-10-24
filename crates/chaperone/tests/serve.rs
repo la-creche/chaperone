@@ -1,5 +1,6 @@
 //! End to end: an MCP client talks to the front door over HTTP, and the
-//! audit file records each call. A raw request checks the `Host` check.
+//! audit file records each call. Raw requests check the strict body read
+//! and the `Host` check.
 
 #![allow(
     clippy::unwrap_used,
@@ -17,6 +18,7 @@ use std::sync::Arc;
 use chaperone::clock::SystemClock;
 use chaperone::gateway::{ChaperoneGateway, DECISION_BUDGET, SharedGateway};
 use chaperone::startup;
+use chaperone_plugin_mcp_http::BODY_CAP;
 use rmcp::ServiceExt;
 use rmcp::model::CallToolRequestParams;
 use rmcp::transport::StreamableHttpClientTransport;
@@ -187,6 +189,27 @@ async fn the_front_door_decides_and_audits_each_call() {
         !audit.contains(TOKEN) && !audit.contains(OTHER_TOKEN),
         "a token must never reach the audit file"
     );
+}
+
+#[tokio::test]
+async fn a_body_that_is_not_strict_json_is_refused_before_the_parser() {
+    let served = serve().await;
+    let host = served.address.to_string();
+
+    let duplicate = br#"{"jsonrpc":"2.0","id":1,"method":"ping","params":{"a":1,"a":2}}"#;
+    let status = raw_post(served.address, &host, duplicate.to_vec()).await;
+    assert!(status.starts_with("HTTP/1.1 400"), "{status}");
+
+    let bom = b"\xef\xbb\xbf{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"ping\"}";
+    let status = raw_post(served.address, &host, bom.to_vec()).await;
+    assert!(status.starts_with("HTTP/1.1 400"), "{status}");
+
+    let large = vec![b' '; BODY_CAP.bytes() + 1];
+    let status = raw_post(served.address, &host, large).await;
+    assert!(status.starts_with("HTTP/1.1 413"), "{status}");
+
+    let audit = served.stop().await;
+    assert!(audit.is_empty(), "no call reached the gateway: {audit}");
 }
 
 #[tokio::test]

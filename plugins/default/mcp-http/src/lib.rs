@@ -1,14 +1,21 @@
 //! The default front door: MCP over streamable HTTP, built on `rmcp`.
 //!
-//! It reads the bearer token from the `Authorization` header of every
-//! request, passes the request to the [`Gateway`], and turns the answer
-//! into an MCP result. It decides nothing and caches nothing
+//! It reads each request body through the strict reader before `rmcp`
+//! parses it, reads the bearer token from the `Authorization` header of
+//! every request, passes the request to the [`Gateway`], and turns the
+//! answer into an MCP result. It decides nothing and caches nothing
 //! (`plugins/adapter/AGENTS.md`).
 
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
+use axum::body::{Body, to_bytes};
+use axum::extract::Request;
+use axum::middleware::{self, Next};
+use axum::response::{IntoResponse, Response};
+use chaperone_core::strict::{self, ByteCap};
 use chaperone_core::{ArgValue, Bearer, CallOutcome, Credentials, Gateway, ListedTool};
+use http::{Method, StatusCode};
 use rmcp::model::{
     CallToolRequestParams, CallToolResponse, CallToolResult, ContentBlock, ListToolsResult,
     PaginatedRequestParams, ServerCapabilities, ServerConfig, Tool,
@@ -22,6 +29,9 @@ use tokio_util::sync::CancellationToken;
 
 /// The path where the front door serves MCP.
 pub const MCP_PATH: &str = "/mcp";
+
+/// The largest request body the front door reads (`docs/design.md` 7.6).
+pub const BODY_CAP: ByteCap = ByteCap::new(1024 * 1024);
 
 /// The MCP server that one front door runs.
 #[derive(Debug)]
@@ -119,7 +129,8 @@ fn render(outcome: CallOutcome) -> CallToolResult {
     }
 }
 
-/// The top-level arguments of a call, as `rmcp` parsed them.
+/// The top-level arguments of a call. `rmcp` parsed them from a body that
+/// [`strict_body`] already checked.
 fn arguments(request: &CallToolRequestParams) -> BTreeMap<String, ArgValue> {
     let Some(members) = &request.arguments else {
         return BTreeMap::new();
@@ -170,6 +181,25 @@ impl<G: Gateway> ServerHandler for Front<G> {
     }
 }
 
+/// Refuse a `POST` body that is not strict JSON, or that is over
+/// [`BODY_CAP`], before `rmcp` sees it. A duplicate key, a byte order mark
+/// or invalid UTF-8 never reaches the parser. Other methods carry no body
+/// that `rmcp` reads.
+async fn strict_body(request: Request, next: Next) -> Response {
+    if request.method() != Method::POST {
+        return next.run(request).await;
+    }
+    let (parts, body) = request.into_parts();
+    let Ok(bytes) = to_bytes(body, BODY_CAP.bytes()).await else {
+        return StatusCode::PAYLOAD_TOO_LARGE.into_response();
+    };
+    if let Err(error) = strict::read_value(&bytes, BODY_CAP) {
+        return (StatusCode::BAD_REQUEST, error.to_string()).into_response();
+    }
+    next.run(Request::from_parts(parts, Body::from(bytes)))
+        .await
+}
+
 /// Serve MCP on `listener` until `shutdown` is cancelled. `allowed_hosts`
 /// lists the `Host` values to accept. `rmcp` refuses every other host, to
 /// stop DNS rebinding.
@@ -192,7 +222,9 @@ pub async fn serve<G: Gateway>(
         Arc::new(LocalSessionManager::default()),
         config,
     );
-    let router = axum::Router::new().nest_service(MCP_PATH, service);
+    let router = axum::Router::new()
+        .nest_service(MCP_PATH, service)
+        .layer(middleware::from_fn(strict_body));
     axum::serve(listener, router)
         .with_graceful_shutdown(async move { shutdown.cancelled_owned().await })
         .await
