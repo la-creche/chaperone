@@ -78,6 +78,8 @@ It returns one of:
 - `Deny(reason)`
 - `Gate(gate_id)`: the call waits for an approval
 
+The `chaperone` program bounds the time of one decision. A decision that does not return inside the bound fails the call before a decision, with the fault `no_decision` (G2).
+
 ### 5.2 Order
 
 The rows apply in this order. The first row that matches decides.
