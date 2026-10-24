@@ -7,6 +7,7 @@ members = [
   "plugins/default/audit-jsonl",
   "plugins/default/bearer",
   "plugins/default/mcp-http",
+  "plugins/default/system-clock",
 ]
 
 [workspace.package]

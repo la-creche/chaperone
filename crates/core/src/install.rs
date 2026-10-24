@@ -420,7 +420,7 @@ pub(crate) mod tests {
         );
     }
 
-    /// The five defaults, as `plugins/default/` will hold them.
+    /// The six defaults, as `plugins/default/` holds them.
     pub(crate) fn defaults() -> Catalog {
         let mut catalog = Catalog::new();
         for (name, kind, slot, hook) in [
@@ -428,6 +428,7 @@ pub(crate) mod tests {
             ("bearer", "decision", "identity", "identity"),
             ("secret-files", "adapter", "secret_source", "secret_source"),
             ("audit-jsonl", "adapter", "audit_sink", "audit_sink"),
+            ("system-clock", "adapter", "clock", "clock"),
         ] {
             put(
                 &mut catalog,
@@ -531,6 +532,7 @@ pub(crate) mod tests {
                 "ha-call",
                 "mcp-http",
                 "secret-files",
+                "system-clock",
                 "vikunja"
             ]
         );

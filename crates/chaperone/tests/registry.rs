@@ -79,14 +79,20 @@ fn each_row_builds_what_its_slot_needs() {
             (Slot::Identity, Build::Identity(_))
             | (Slot::AuditSink, Build::AuditSink(_))
             | (Slot::FrontDoor, Build::FrontDoor)
+            | (Slot::Clock, Build::Clock(_))
             | (Slot::SecretSource | Slot::ApprovalChannel, Build::Later) => true,
             (
                 Slot::Identity
                 | Slot::AuditSink
                 | Slot::FrontDoor
                 | Slot::SecretSource
-                | Slot::ApprovalChannel,
-                Build::Identity(_) | Build::AuditSink(_) | Build::FrontDoor | Build::Later,
+                | Slot::ApprovalChannel
+                | Slot::Clock,
+                Build::Identity(_)
+                | Build::AuditSink(_)
+                | Build::Clock(_)
+                | Build::FrontDoor
+                | Build::Later,
             ) => false,
         };
         assert!(

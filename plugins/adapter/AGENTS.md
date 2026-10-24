@@ -2,7 +2,7 @@
 
 Rules for adapter plugins. Read `plugins/AGENTS.md` first.
 
-An adapter plugin is a Rust crate that implements an adapter trait from `crates/core`. chaperone compiles it in. An adapter does I/O, but it never changes a decision. The three adapter slots are the front door, the secret source and the audit sink.
+An adapter plugin is a Rust crate that implements an adapter trait from `crates/core`. chaperone compiles it in. An adapter does I/O, but it never changes a decision. The four adapter slots are the front door, the secret source, the audit sink and the clock.
 
 ## Rules
 
@@ -15,6 +15,7 @@ An adapter plugin is a Rust crate that implements an adapter trait from `crates/
 - **Front door.** Accept the app's connection. Pass the credential, the tool and the arguments to the core. Return the core's answer. Do not decide anything yourself. Do not cache a decision.
 - **Secret source.** Return a `Secret` for a name. Check the owner and the mode of a secret file before you read it. Never return a value as a `String`.
 - **Audit sink.** Write one record. Return success only after the record is durable. A write that fails returns an error, and the call fails (G6).
+- **Clock.** Return the current time. Read nothing else. The program passes this time to the decision (G3).
 
 ## Never do these
 

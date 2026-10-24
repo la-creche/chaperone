@@ -10,15 +10,17 @@
 use std::path::Path;
 use std::sync::Arc;
 
-use chaperone_core::{AuditSink, Identity, PluginName, Slot};
+use chaperone_core::{AuditSink, Clock, Identity, PluginName, Slot};
 use chaperone_plugin_audit_jsonl::{JsonlAudit, OpenError};
 use chaperone_plugin_bearer::BearerIdentity;
+use chaperone_plugin_system_clock::SystemClock;
 
 /// How this build constructs the plugin of one row.
 #[derive(Debug, Clone, Copy)]
 pub enum Build {
     Identity(fn() -> Box<dyn Identity>),
     AuditSink(fn(&Path) -> Result<Arc<dyn AuditSink>, OpenError>),
+    Clock(fn() -> Box<dyn Clock>),
     /// A front door. `chaperone serve` starts it over the gateway after the
     /// configuration is loaded, so load time constructs nothing.
     FrontDoor,
@@ -63,6 +65,11 @@ pub const ENTRIES: &[Entry] = &[
         slot: Slot::ApprovalChannel,
         build: Build::Later,
     },
+    Entry {
+        name: "system-clock",
+        slot: Slot::Clock,
+        build: Build::Clock(system_clock),
+    },
 ];
 
 /// The row for `plugin` in `slot`, if this build has one.
@@ -75,6 +82,10 @@ pub fn find(slot: Slot, plugin: &PluginName) -> Option<&'static Entry> {
 
 fn bearer() -> Box<dyn Identity> {
     Box::new(BearerIdentity)
+}
+
+fn system_clock() -> Box<dyn Clock> {
+    Box::new(SystemClock)
 }
 
 fn audit_jsonl(file: &Path) -> Result<Arc<dyn AuditSink>, OpenError> {

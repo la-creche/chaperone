@@ -13,6 +13,7 @@ This directory holds one plugin for each required slot. chaperone does not start
 | secret source | adapter | secret files | One file per secret, mode 0600, owner checked |
 | audit sink | adapter | JSONL file | Appends one line per call and syncs it before return. Refuses a link, a non-regular file and a mode other than 0600. |
 | approval channel | effect | deny all | Answers `Denied("no approval channel")` to every request |
+| clock | adapter | system clock | Reads the OS clock on each call. A time before the Unix epoch reads as the epoch. |
 
 The build steps in `docs/design.md` section 13 add each plugin.
 

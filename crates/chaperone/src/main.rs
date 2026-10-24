@@ -6,7 +6,6 @@ use std::path::PathBuf;
 use std::process::ExitCode;
 use std::sync::Arc;
 
-use chaperone::clock::SystemClock;
 use chaperone::gateway::{ChaperoneGateway, DECISION_BUDGET, SharedGateway};
 use chaperone::startup;
 use clap::{Parser, Subcommand};
@@ -114,7 +113,7 @@ async fn run(args: Serve) -> ExitCode {
         loaded.policy,
         loaded.identity,
         loaded.audit,
-        Box::new(SystemClock),
+        loaded.clock,
         DECISION_BUDGET,
     )));
     let shutdown = CancellationToken::new();

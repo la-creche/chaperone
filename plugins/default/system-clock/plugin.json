@@ -1,0 +1,7 @@
+{
+  "name": "system-clock",
+  "version": "1.0.0",
+  "kind": "adapter",
+  "slot": "clock",
+  "hooks": ["clock"]
+}

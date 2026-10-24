@@ -272,6 +272,7 @@ dependencies = [
  "chaperone-plugin-audit-jsonl",
  "chaperone-plugin-bearer",
  "chaperone-plugin-mcp-http",
+ "chaperone-plugin-system-clock",
  "clap",
  "getrandom 0.4.3",
  "hex",
@@ -336,6 +337,13 @@ dependencies = [
  "serde_json",
  "tokio",
  "tokio-util",
+]
+
+[[package]]
+name = "chaperone-plugin-system-clock"
+version = "0.0.0"
+dependencies = [
+ "chaperone-core",
 ]
 
 [[package]]

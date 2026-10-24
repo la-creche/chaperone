@@ -179,7 +179,7 @@ Rules:
 | Kind | How it runs | Purity | Example jobs |
 |---|---|---|---|
 | decision | Compiled into chaperone | Pure. The purity lint applies. | Identity, argument fences |
-| adapter | Compiled into chaperone | Does I/O | Front door, secret source, audit sink |
+| adapter | Compiled into chaperone | Does I/O | Front door, secret source, audit sink, clock |
 | effect | A separate process. chaperone speaks MCP to it over stdio. | Does I/O | Approval channel, upstream tools |
 
 ### 7.2 Slots
@@ -193,8 +193,11 @@ A slot is a job that exactly one plugin must do. chaperone refuses to start when
 | secret source | adapter | One file per secret |
 | audit sink | adapter | Append-only JSONL file |
 | approval channel | effect | Answers `Denied("no approval channel")` to every request |
+| clock | adapter | The OS clock |
 
 The default approval channel makes every gated call fail closed until the operator enables a real channel.
+
+The clock plugin is the one source of the time that the program passes to the decision (G3). It is trusted code, like every adapter. A clock that runs slow or backwards weakens the rate limit and the gate expiry, so the default reads the OS clock and nothing else.
 
 Fences and upstreams are not slots. The install file can enable any number of them.
 

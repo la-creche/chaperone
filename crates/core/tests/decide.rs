@@ -49,6 +49,7 @@ fn catalog() -> Catalog {
         ("bearer", "decision", "identity"),
         ("secret-files", "adapter", "secret_source"),
         ("audit-jsonl", "adapter", "audit_sink"),
+        ("system-clock", "adapter", "clock"),
     ] {
         put(
             &mut catalog,

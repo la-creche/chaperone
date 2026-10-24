@@ -30,7 +30,7 @@ fn load(root: &Path, install: &str, policy: &str) -> Result<Loaded, StartError> 
 }
 
 #[test]
-fn the_repository_plugin_tree_holds_the_five_defaults() {
+fn the_repository_plugin_tree_holds_the_six_defaults() {
     let catalog = catalog::discover(&repo_plugins()).unwrap();
     let names: Vec<&str> = catalog.keys().map(|key| key.name.as_str()).collect();
     assert_eq!(
@@ -40,6 +40,7 @@ fn the_repository_plugin_tree_holds_the_five_defaults() {
             "audit-jsonl",
             "mcp-http",
             "secret-files",
+            "system-clock",
             "deny-all"
         ]
     );
@@ -104,6 +105,8 @@ fn the_defaults_load_and_open_the_audit_file() {
     let loaded = load(root.path(), INSTALL, &policy_text(30)).unwrap();
     assert_eq!(loaded.setup.slot(Slot::Identity), Some(&name("bearer")));
     assert!(format!("{:?}", loaded.identity).contains("BearerIdentity"));
+    assert_eq!(loaded.setup.slot(Slot::Clock), Some(&name("system-clock")));
+    assert!(format!("{:?}", loaded.clock).contains("SystemClock"));
     assert!(loaded.warnings.is_empty());
     let mode = std::fs::metadata(root.path().join("audit.jsonl"))
         .unwrap()

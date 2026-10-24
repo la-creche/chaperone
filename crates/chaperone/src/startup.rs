@@ -8,8 +8,8 @@ use std::path::Path;
 use std::sync::Arc;
 
 use chaperone_core::{
-    AuditSink, INSTALL_FILE_CAP, Identity, InstallError, InstallFile, POLICY_FILE_CAP, PluginName,
-    Policy, PolicyError, RunId, SecretDelivery, Setup, SetupError, Slot, resolve,
+    AuditSink, Clock, INSTALL_FILE_CAP, Identity, InstallError, InstallFile, POLICY_FILE_CAP,
+    PluginName, Policy, PolicyError, RunId, SecretDelivery, Setup, SetupError, Slot, resolve,
 };
 use chaperone_plugin_audit_jsonl::OpenError;
 
@@ -76,6 +76,7 @@ pub struct Loaded {
     pub policy: Policy,
     pub identity: Box<dyn Identity>,
     pub audit: Arc<dyn AuditSink>,
+    pub clock: Box<dyn Clock>,
     pub warnings: Vec<Warning>,
 }
 
@@ -101,6 +102,7 @@ pub fn load(
     }
     let identity = identity_for(&setup)?;
     let audit = audit_for(&setup, audit_file)?;
+    let clock = clock_for(&setup)?;
 
     let mut warnings = Vec::new();
     for (plugin, binding) in setup.bindings() {
@@ -127,6 +129,7 @@ pub fn load(
         policy,
         identity,
         audit,
+        clock,
         warnings,
     })
 }
@@ -163,7 +166,7 @@ fn identity_for(setup: &Setup) -> Result<Box<dyn Identity>, StartError> {
     let (plugin, entry) = entry_for(setup, Slot::Identity)?;
     match entry.build {
         Build::Identity(build) => Ok(build()),
-        Build::AuditSink(_) | Build::FrontDoor | Build::Later => {
+        Build::AuditSink(_) | Build::Clock(_) | Build::FrontDoor | Build::Later => {
             Err(no_code(Slot::Identity, plugin))
         }
     }
@@ -175,8 +178,19 @@ fn audit_for(setup: &Setup, audit_file: &Path) -> Result<Arc<dyn AuditSink>, Sta
     let (plugin, entry) = entry_for(setup, Slot::AuditSink)?;
     match entry.build {
         Build::AuditSink(open) => Ok(open(audit_file)?),
-        Build::Identity(_) | Build::FrontDoor | Build::Later => {
+        Build::Identity(_) | Build::Clock(_) | Build::FrontDoor | Build::Later => {
             Err(no_code(Slot::AuditSink, plugin))
+        }
+    }
+}
+
+/// The clock of the setup, built from its registry row.
+fn clock_for(setup: &Setup) -> Result<Box<dyn Clock>, StartError> {
+    let (plugin, entry) = entry_for(setup, Slot::Clock)?;
+    match entry.build {
+        Build::Clock(build) => Ok(build()),
+        Build::Identity(_) | Build::AuditSink(_) | Build::FrontDoor | Build::Later => {
+            Err(no_code(Slot::Clock, plugin))
         }
     }
 }

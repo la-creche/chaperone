@@ -25,6 +25,7 @@ The directory names the kind. Put a plugin only in the directory of its kind.
 | front door | adapter | front door (required) | Inbound connections | Calls the `Gateway` trait in `crates/core` |
 | secret source | adapter | secret source (required) | A secret name | A `Secret` |
 | audit sink | adapter | audit sink (required) | One audit record | Written, or an error |
+| clock | adapter | clock (required) | Nothing | The current time, as a `Timestamp` |
 | approval | effect | approval channel (required) | Gate ID, app instance, summary | `Approved`, `Denied(reason)`, or an error |
 | upstream tools | effect | none, any number | An MCP `tools/call` | An MCP result |
 

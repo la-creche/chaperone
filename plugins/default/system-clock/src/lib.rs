@@ -1,17 +1,12 @@
-//! The clock of the program. Core takes the time as an argument (G3), so
-//! the program reads it here and passes it on.
+//! The default clock plugin. It reads the OS clock and nothing else. Core
+//! takes the time as an argument (G3), so the program reads it here and
+//! passes it on.
 
-use std::fmt;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use chaperone_core::Timestamp;
+use chaperone_core::{Clock, Timestamp};
 
-/// A source of the current time.
-pub trait Clock: Send + Sync + fmt::Debug {
-    fn now(&self) -> Timestamp;
-}
-
-/// The system clock. A time before the Unix epoch reads as the epoch, and a
+/// The OS clock. A time before the Unix epoch reads as the epoch, and a
 /// time past the range of a [`Timestamp`] reads as its maximum.
 #[derive(Debug, Default, Clone, Copy)]
 pub struct SystemClock;

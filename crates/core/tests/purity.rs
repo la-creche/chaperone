@@ -9,6 +9,7 @@
 /// Each source file of the crate, outside its `#[cfg(test)]` module.
 const SOURCES: &[(&str, &str)] = &[
     ("audit", include_str!("../src/audit.rs")),
+    ("clock", include_str!("../src/clock.rs")),
     ("decide", include_str!("../src/decide.rs")),
     ("exposed", include_str!("../src/exposed.rs")),
     ("gateway", include_str!("../src/gateway.rs")),

@@ -7,7 +7,6 @@
 //! `mcp-http` front door plugin serves them over MCP.
 
 pub mod catalog;
-pub mod clock;
 mod files;
 pub mod gateway;
 pub mod registry;
