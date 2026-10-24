@@ -100,6 +100,8 @@ A comment stands on its own. A reader with the code and `docs/design.md` underst
 3. Do not describe what the code did before a change. Describe a later change only when `docs/design.md` section 13 names the step.
 4. Do not repeat the name of the item. A doc comment on a public item says what the caller gets.
 
+`crates/lint` checks the mechanical parts of rules 2 and 3 and the writing standard's sentence rules in `cargo test`. Rules 1 and 4 need a human reader.
+
 ## Every change
 
 - `cargo fmt --check`, `cargo clippy --all-targets -- -D warnings` and `cargo test` pass. CI runs all three and is the merge gate.
