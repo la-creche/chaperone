@@ -248,3 +248,89 @@ fn decide_gate(app: &App, call: &ToolCall<'_>, gates: Gates<'_>, now: Timestamp)
     }
     Decision::Gate(id)
 }
+
+/// Kani proof of the argument-fence table (`docs/design.md` 5.2, row 4).
+#[cfg(kani)]
+mod proofs {
+    use super::passes;
+    use crate::policy::{ArgumentFence, Scalar};
+    use crate::value::ArgValue;
+
+    fn any_scalar() -> Scalar {
+        let pick: u8 = kani::any();
+        kani::assume(pick < 3);
+        match pick {
+            0 => Scalar::Bool(kani::any()),
+            1 => Scalar::Int(kani::any()),
+            _ => Scalar::String(if kani::any() { "x" } else { "y" }.to_owned()),
+        }
+    }
+
+    fn any_value() -> ArgValue {
+        let pick: u8 = kani::any();
+        kani::assume(pick < 6);
+        match pick {
+            0 => ArgValue::Bool(kani::any()),
+            1 => ArgValue::Int(kani::any()),
+            2 => ArgValue::UInt(kani::any()),
+            3 => ArgValue::String(if kani::any() { "x" } else { "y" }.to_owned()),
+            4 => ArgValue::Null,
+            _ => ArgValue::Array(Vec::new()),
+        }
+    }
+
+    fn same(scalar: &Scalar, value: &ArgValue) -> bool {
+        match (scalar, value) {
+            (Scalar::Bool(a), ArgValue::Bool(b)) => a == b,
+            (Scalar::Int(a), ArgValue::Int(b)) => a == b,
+            (Scalar::String(a), ArgValue::String(b)) => a == b,
+            (Scalar::Bool(_) | Scalar::Int(_) | Scalar::String(_), _) => false,
+        }
+    }
+
+    /// An allow fence passes exactly the listed value. A deny fence refuses
+    /// the listed value and every array, and passes a missing argument.
+    #[kani::proof]
+    #[kani::unwind(3)]
+    fn argument_fence_table() {
+        let scalar = any_scalar();
+        let value = any_value();
+        let present = kani::any::<bool>();
+        let found = if present { Some(&value) } else { None };
+        let is_array = matches!(value, ArgValue::Array(_));
+
+        let allow = passes(&ArgumentFence::Allow(vec![scalar.clone()]), found);
+        assert_eq!(allow, present && same(&scalar, &value));
+
+        let deny = passes(&ArgumentFence::Deny(vec![scalar.clone()]), found);
+        assert_eq!(deny, !present || (!is_array && !same(&scalar, &value)));
+    }
+
+    /// The same table, with booleans and integers only.
+    /// An allow fence passes exactly the listed value. A deny fence refuses
+    /// the listed value and every array, and passes a missing argument.
+    #[kani::proof]
+    #[kani::unwind(3)]
+    fn argument_fence_table_no_strings() {
+        let scalar = if kani::any() {
+            Scalar::Bool(kani::any())
+        } else {
+            Scalar::Int(kani::any())
+        };
+        let value = match kani::any::<u8>() {
+            0 => ArgValue::Bool(kani::any()),
+            1 => ArgValue::Null,
+            2 => ArgValue::Array(Vec::new()),
+            _ => ArgValue::Int(kani::any()),
+        };
+        let present = kani::any::<bool>();
+        let found = if present { Some(&value) } else { None };
+        let is_array = matches!(value, ArgValue::Array(_));
+
+        let allow = passes(&ArgumentFence::Allow(vec![scalar.clone()]), found);
+        assert_eq!(allow, present && same(&scalar, &value));
+
+        let deny = passes(&ArgumentFence::Deny(vec![scalar.clone()]), found);
+        assert_eq!(deny, !present || (!is_array && !same(&scalar, &value)));
+    }
+}
