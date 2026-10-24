@@ -22,7 +22,7 @@
 use std::collections::BTreeMap;
 use std::fmt;
 
-use crate::decide::{Decision, GateId};
+use crate::decide::{Decision, DenyReason, GateId};
 use crate::exposed::ExposedName;
 use crate::gateway::CallFault;
 use crate::ids::AppId;
@@ -201,7 +201,7 @@ pub struct CallAudit(CallFacts);
 #[must_use]
 pub enum AfterDecision {
     /// The call was denied. The decision record was the last one.
-    Denied,
+    Denied(DenyReason),
     /// The call may run. One final record follows.
     Allowed(AllowedCall),
     /// The call waits for an approval. One final record follows, or the
@@ -249,16 +249,17 @@ impl CallAudit {
         }
     }
 
-    /// The decision record, and what must follow it.
-    pub fn decided(self, decision: &Decision) -> (AuditRecord, AfterDecision) {
+    /// The decision record, and what must follow it. The decision moves
+    /// into the result, so the caller acts on what was recorded.
+    pub fn decided(self, decision: Decision) -> (AuditRecord, AfterDecision) {
         let record = AuditRecord {
             facts: self.0.clone(),
             event: AuditEvent::Decided(decision.clone()),
         };
         let next = match decision {
-            Decision::Deny(_) => AfterDecision::Denied,
+            Decision::Deny(reason) => AfterDecision::Denied(reason),
             Decision::Allow => AfterDecision::Allowed(AllowedCall(self.0)),
-            Decision::Gate(id) => AfterDecision::Gated(GatedCall(self.0, *id)),
+            Decision::Gate(id) => AfterDecision::Gated(GatedCall(self.0, id)),
         };
         (record, next)
     }
@@ -327,7 +328,6 @@ pub trait AuditSink: Send + Sync + std::fmt::Debug {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::decide::DenyReason;
 
     fn audit() -> CallAudit {
         CallAudit::new(
@@ -349,14 +349,17 @@ mod tests {
     #[test]
     fn a_deny_has_one_record() {
         let decision = Decision::Deny(DenyReason::ToolNotGranted);
-        let (record, next) = audit().decided(&decision);
-        assert!(matches!(next, AfterDecision::Denied));
+        let (record, next) = audit().decided(decision.clone());
+        assert!(matches!(
+            next,
+            AfterDecision::Denied(DenyReason::ToolNotGranted)
+        ));
         assert_eq!(events(&[record]), [&AuditEvent::Decided(decision)]);
     }
 
     #[test]
     fn an_allow_has_a_decision_and_one_final_record() {
-        let (first, next) = audit().decided(&Decision::Allow);
+        let (first, next) = audit().decided(Decision::Allow);
         let AfterDecision::Allowed(call) = next else {
             panic!("an allow must need a final record");
         };
@@ -373,9 +376,9 @@ mod tests {
     #[test]
     fn a_gate_ends_in_waiting_failed_or_an_allowed_run() {
         let gate = Decision::Gate(GATE);
-        let gated = || match audit().decided(&gate) {
+        let gated = || match audit().decided(gate.clone()) {
             (_, AfterDecision::Gated(call)) => call,
-            (_, AfterDecision::Denied | AfterDecision::Allowed(_)) => {
+            (_, AfterDecision::Denied(_) | AfterDecision::Allowed(_)) => {
                 panic!("a gate must need a final record")
             }
         };

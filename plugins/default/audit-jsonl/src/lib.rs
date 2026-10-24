@@ -162,13 +162,13 @@ mod tests {
     }
 
     fn decided(call: u64, decision: &Decision) -> AuditRecord {
-        audit(call).decided(decision).0
+        audit(call).decided(decision.clone()).0
     }
 
     fn allowed(call: u64) -> chaperone_core::AllowedCall {
-        match audit(call).decided(&Decision::Allow).1 {
+        match audit(call).decided(Decision::Allow).1 {
             AfterDecision::Allowed(allowed) => allowed,
-            AfterDecision::Denied | AfterDecision::Gated(_) => panic!("an allow"),
+            AfterDecision::Denied(_) | AfterDecision::Gated(_) => panic!("an allow"),
         }
     }
 
