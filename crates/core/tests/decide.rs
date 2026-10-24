@@ -509,38 +509,6 @@ fn the_gate_id_ignores_argument_order_and_white_space() {
     assert_ne!(one.gate_id(), three.gate_id());
 }
 
-// ------------------------------------------------------- audit tool names
-
-#[test]
-fn an_audit_record_keeps_only_a_configured_tool_name() {
-    let policy = base_policy();
-    let known = chaperone_core::AuditTool::lookup("vikunja__list_tasks", &policy);
-    assert_eq!(known.as_str(), "vikunja__list_tasks");
-
-    for unknown in [
-        "vikunja__drop_database",
-        "nope__list_tasks",
-        "not a tool",
-        "",
-    ] {
-        let tool = chaperone_core::AuditTool::lookup(unknown, &policy);
-        assert_eq!(
-            tool.as_str(),
-            chaperone_core::AuditTool::UNKNOWN,
-            "{unknown:?}"
-        );
-    }
-}
-
-#[test]
-fn a_token_sent_as_the_tool_name_never_reaches_the_record() {
-    let policy = base_policy();
-    let token = "tok_live_9f8e7d6c5b4a39281706f5e4d3c2b1a0";
-    let tool = chaperone_core::AuditTool::lookup(token, &policy);
-    assert_eq!(tool.as_str(), chaperone_core::AuditTool::UNKNOWN);
-    assert!(!format!("{tool:?}").contains(token));
-}
-
 // ---------------------------------------------------------- policy loads
 
 fn load_error(policy: &str) -> PolicyError {

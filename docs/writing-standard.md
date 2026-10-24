@@ -25,7 +25,7 @@ This repository applies the writing rules in full. It does not reproduce the dic
 
 | Rule | Do | Do not |
 |---|---|---|
-| Active voice | "chaperone writes the audit record." | "The audit record is written." |
+| Active voice | "chaperone writes the audit line." | "The audit line is written." |
 | One instruction per sentence | "Open the file. Read line 3." | "Open the file and read line 3, then check it." |
 | Sentence length | 20 words or less in an instruction. 25 words or less in a description. | Compound sentences with stacked clauses. |
 | Simple tenses | Present, past, future, imperative. | Present perfect and progressive forms, unless the simple form loses meaning. |
@@ -66,7 +66,7 @@ Use each name as it is written here. Do not use a synonym for one.
 | front door | The adapter that receives an app's connection. |
 | policy file | `policy.json`. |
 | install file | `install.json`. |
-| audit record | One entry in the audit file. A call has a decision record and a final record. |
+| audit line | One record of one call, written before the result returns. |
 | secret | A credential that chaperone holds for a plugin. |
 | the operator | The person who runs a deployment. |
 | the host | The machine that runs a deployment. |

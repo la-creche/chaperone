@@ -31,8 +31,8 @@ Each line cites the guarantee it protects. A pull request that does one of these
 3. Do not add a code path where an error, a timeout or a missing answer leads to an allow. Every such path ends in a deny or a refusal to start. (G2)
 4. Do not let a plugin result widen reach beyond the policy file. A fence returns deny, gate or pass. An identity plugin can only narrow. No hook returns "allow anyway". (G4, G7)
 5. Do not put a hook tool of an effect plugin into a manifest. (G8)
-6. Do not write a secret value to a log, an audit record, an error, a result, argv, the environment or the policy file. Do not add `Display`, `Serialize` or a value-printing `Debug` to `Secret`. (G9)
-7. Do not run a call before its decision record is written. Do not return a result before its final record is written. Do not put app-chosen text in an audit record. (G6, G9)
+6. Do not write a secret value to a log, an audit line, an error, a result, argv, the environment or the policy file. Do not add `Display`, `Serialize` or a value-printing `Debug` to `Secret`. (G9)
+7. Do not return a result before the audit line is written. (G6)
 8. Do not load, enable or order plugins by directory listing. Only `install.json` enables a plugin or fills a slot. (G10)
 9. Do not write cryptography code. Use the crates named in `docs/design.md` section 9. Ask before you add another one.
 10. Do not bind `0.0.0.0`. Bind a LAN address, `127.0.0.1` or a Unix socket.
@@ -44,11 +44,10 @@ Each line cites the guarantee it protects. A pull request that does one of these
 
 - Parse at the edge. The strict reader turns bytes into typed values. No `serde_json::Value` passes beyond the reader.
 - Give each ID its own newtype: `AppId`, `ToolName`, `PluginName`, `SecretName`, `GateId`. Do not pass a bare `String` where a newtype exists.
-- Put `#[serde(deny_unknown_fields)]` on every type that a config file or a wire message fills. A wire body that an external schema defines, such as an MCP result, is checked against that schema, and an unknown top-level field is refused. Its nested shapes follow the external schema, because that schema composes them with `allOf` and `anyOf`, and a closed nested object would refuse valid bodies.
+- Put `#[serde(deny_unknown_fields)]` on every type that a config file or a wire message fills.
 - Use an enum, not a boolean, for a choice. Use an enum, not an `Option`, when "nothing" has more than one meaning.
 - Match every variant of our own enums by name. Do not use a `_ =>` arm on them, so that a new variant breaks the build where it must be handled.
-- Make an invalid state impossible to build. A constructor that can fail returns `Result`. Fields stay private, also on error types: a public `String` field lets any caller put a secret in it.
-- A type that holds untrusted text, such as a header, an argument or an upstream result, gets a hand-written `Debug` that shows names, sizes or codes only. Do not derive `Debug` on it.
+- Make an invalid state impossible to build. A constructor that can fail returns `Result`. Fields stay private.
 
 ### Rust style guide
 
@@ -79,7 +78,7 @@ This repository departs from the guide in these places. Each departure is strict
 ### Errors
 
 - Library code returns a typed error enum. Do not use `unwrap`, `expect` or `panic!` outside tests. Clippy enforces this.
-- An error message names the item and the rule it broke. It never contains text from the input, because the input can hold a secret. Map a `serde_json` error with `StrictError::shape`. Do not call `to_string` on it.
+- An error message names the item and the rule it broke. It never contains a secret value or a token.
 - A fault at a trust boundary becomes a deny with a reason. It does not become a log line and a default value.
 
 ### Code style

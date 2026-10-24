@@ -6,9 +6,12 @@
 use std::collections::BTreeMap;
 use std::future::Future;
 
+use serde_json::value::RawValue;
+
 use crate::decide::{DenyReason, GateId};
 use crate::exposed::ExposedName;
 use crate::hook::Credentials;
+use crate::strict::{self, ByteCap, StrictError};
 use crate::value::ArgValue;
 
 /// One tool in the list that an app sees.
@@ -20,6 +23,32 @@ pub struct ListedTool {
     pub input_schema: BTreeMap<String, ArgValue>,
 }
 
+/// The result an upstream returned for one call: an MCP `CallToolResult`,
+/// as strict JSON text. chaperone passes it on unchanged, except that it
+/// blanks each exact secret value (G9).
+#[derive(Debug, Clone)]
+pub struct ToolOutput(Box<RawValue>);
+
+/// The largest upstream result chaperone passes on.
+pub const OUTPUT_CAP: ByteCap = ByteCap::new(4 * 1024 * 1024);
+
+impl ToolOutput {
+    /// Read an upstream result.
+    ///
+    /// # Errors
+    ///
+    /// Returns a [`StrictError`] when the bytes are not strict JSON.
+    pub fn read(bytes: &[u8]) -> Result<Self, StrictError> {
+        strict::read(bytes, OUTPUT_CAP).map(Self)
+    }
+
+    /// The result as JSON text.
+    #[must_use]
+    pub fn as_json(&self) -> &str {
+        self.0.get()
+    }
+}
+
 /// Why chaperone could not run an allowed call, or could not decide it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CallFault {
@@ -29,7 +58,7 @@ pub enum CallFault {
     NotConnected,
     /// The call needs an approval, and no approval channel can answer yet.
     NoApprovalChannel,
-    /// chaperone could not write an audit record, so it did not run the call or return its result (G6).
+    /// chaperone could not write the audit line, so it did not run the call (G6).
     AuditFailed,
 }
 
@@ -46,10 +75,11 @@ impl CallFault {
     }
 }
 
-/// The answer to one tool call. Build step 4 adds `Ran`, with the
-/// upstream's checked result.
+/// The answer to one tool call.
 #[derive(Debug, Clone)]
 pub enum CallOutcome {
+    /// The call ran. The upstream's result.
+    Ran(ToolOutput),
     /// The decision denied the call.
     Denied(DenyReason),
     /// The call waits for an approval. Call again with the same arguments.

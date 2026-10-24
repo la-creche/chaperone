@@ -309,14 +309,6 @@ impl Policy {
         self.apps.get(id)
     }
 
-    /// Whether some app instance is granted this tool of this upstream.
-    #[must_use]
-    pub fn configures(&self, upstream: &PluginName, tool: &ToolName) -> bool {
-        self.apps
-            .values()
-            .any(|app| app.grant(upstream, tool).is_some())
-    }
-
     /// Every app instance, in ID order.
     pub fn apps(&self) -> impl Iterator<Item = (&AppId, &App)> {
         self.apps.iter()

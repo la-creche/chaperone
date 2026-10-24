@@ -11,7 +11,7 @@ This directory holds one plugin for each required slot. chaperone does not start
 | front door | adapter | MCP over streamable HTTP | Serves the manifest and tool calls to an app |
 | identity | decision | bearer token | Resolves a bearer token to an app instance by its SHA-256 digest. Constant-time compare. |
 | secret source | adapter | secret files | One file per secret, mode 0600, owner checked |
-| audit sink | adapter | JSONL file | Appends one line per audit record and ends each write with `sync_all`. When it creates the file, it also syncs the parent directory. `docs/design.md` 5.4 lists the records of each path. |
+| audit sink | adapter | JSONL file | Appends one line per call and syncs it before return |
 | approval channel | effect | deny all | Answers `Denied("no approval channel")` to every request |
 
 The build steps in `docs/design.md` section 13 add each plugin.

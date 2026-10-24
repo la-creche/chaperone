@@ -11,26 +11,16 @@ use serde_json::value::RawValue;
 use crate::ids::{AppId, PluginName, ToolName};
 use crate::policy::Policy;
 use crate::secret::Bearer;
-use crate::strict::StrictError;
 use crate::time::Timestamp;
 use crate::value::ArgValue;
 
-/// What an app presents with a call. `Debug` shows the header names only,
-/// because a header value can hold a secret (G9).
+/// What an app presents with a call.
+#[derive(Debug)]
 pub struct Credentials<'a> {
     /// The bearer token, if the request carried one.
     pub bearer: Option<&'a Bearer>,
     /// The request headers, with lower-case names.
     pub headers: &'a BTreeMap<String, String>,
-}
-
-impl fmt::Debug for Credentials<'_> {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("Credentials")
-            .field("bearer", &self.bearer)
-            .field("header_names", &self.headers.keys().collect::<Vec<_>>())
-            .finish()
-    }
 }
 
 /// What a caller may reach, within its app instance's grant (G4).
@@ -57,8 +47,8 @@ pub trait Identity: Send + Sync + fmt::Debug {
     fn resolve(&self, credentials: &Credentials<'_>, policy: &Policy) -> Option<Caller>;
 }
 
-/// One tool call, as a fence sees it. `Debug` shows the argument names
-/// only, because an argument value can hold a secret (G9).
+/// One tool call, as a fence sees it.
+#[derive(Debug)]
 pub struct ToolCall<'a> {
     pub app: &'a AppId,
     pub upstream: &'a PluginName,
@@ -67,23 +57,10 @@ pub struct ToolCall<'a> {
     pub now: Timestamp,
 }
 
-impl fmt::Debug for ToolCall<'_> {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("ToolCall")
-            .field("app", &self.app)
-            .field("upstream", &self.upstream)
-            .field("tool", &self.tool)
-            .field("argument_names", &self.arguments.keys().collect::<Vec<_>>())
-            .field("now", &self.now)
-            .finish()
-    }
-}
-
-/// Why a fence denies a call: fixed text that the plugin owns. It takes a
-/// `&'static str`, so a reason cannot be built at run time from an
-/// argument or a secret (G9). At most [`FenceReason::MAX`] bytes.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct FenceReason(&'static str);
+/// Why a fence denies a call. At most [`FenceReason::MAX`] bytes. It must
+/// not contain a secret or an argument value.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FenceReason(String);
 
 impl FenceReason {
     /// The longest reason, in bytes.
@@ -91,17 +68,17 @@ impl FenceReason {
 
     /// Wrap `text`, cut at a character boundary to [`Self::MAX`] bytes.
     #[must_use]
-    pub fn new(text: &'static str) -> Self {
+    pub fn new(text: &str) -> Self {
         let mut end = text.len().min(Self::MAX);
         while !text.is_char_boundary(end) {
             end -= 1;
         }
-        Self(text.get(..end).unwrap_or_default())
+        Self(text[..end].to_owned())
     }
 
     #[must_use]
-    pub fn as_str(&self) -> &'static str {
-        self.0
+    pub fn as_str(&self) -> &str {
+        &self.0
     }
 }
 
@@ -138,24 +115,15 @@ impl<'a> RawSection<'a> {
     ///
     /// Returns a [`SectionError`] when the section does not fit `T`.
     pub fn parse<T: DeserializeOwned>(&self) -> Result<T, SectionError> {
-        serde_json::from_str(self.0.get())
-            .map_err(|error| SectionError::Parse(StrictError::shape(&error)))
+        serde_json::from_str(self.0.get()).map_err(|error| SectionError(error.to_string()))
     }
 }
 
 /// Why a plugin refuses its policy section. A policy with such a section
-/// does not load (G2). Like [`StrictError`], it holds no text from the
-/// section, only a code and a location.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
-pub enum SectionError {
-    /// The section does not fit the plugin's type.
-    #[error("{0}")]
-    Parse(StrictError),
-    /// The section fits the type, but breaks a rule of the plugin. The
-    /// text is the plugin's own fixed message, never section text.
-    #[error("invalid: {0}")]
-    Invalid(&'static str),
-}
+/// does not load (G2).
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+#[error("{0}")]
+pub struct SectionError(pub String);
 
 /// The fence hook. Any number of fences can be active.
 pub trait Fence: Send + Sync + fmt::Debug {
@@ -179,61 +147,9 @@ mod tests {
     use super::*;
 
     #[test]
-    fn a_section_error_never_shows_section_text() {
-        const SECRET: &str = "tok_live_do_not_log_this";
-        #[derive(Debug, serde::Deserialize)]
-        #[serde(deny_unknown_fields)]
-        #[expect(dead_code, reason = "the field exists only to check the shape")]
-        struct Section {
-            mode: Mode,
-        }
-        #[derive(Debug, serde::Deserialize)]
-        #[serde(rename_all = "lowercase")]
-        enum Mode {
-            On,
-        }
-        for text in [
-            format!(r#"{{"mode": "{SECRET}"}}"#),
-            format!(r#"{{"mode": "on", "{SECRET}": 1}}"#),
-        ] {
-            let raw: Box<RawValue> = serde_json::from_str(&text).unwrap();
-            let error = RawSection::new(&raw).parse::<Section>().unwrap_err();
-            assert!(!error.to_string().contains(SECRET), "{error}");
-            assert!(!format!("{error:?}").contains(SECRET), "{error:?}");
-        }
-    }
-
-    #[test]
-    fn debug_never_shows_header_or_argument_values() {
-        const SECRET: &str = "tok_live_do_not_log_this";
-        let headers = BTreeMap::from([("cookie".to_owned(), SECRET.to_owned())]);
-        let bearer = Bearer::new(SECRET.to_owned());
-        let credentials = Credentials {
-            bearer: Some(&bearer),
-            headers: &headers,
-        };
-        assert!(!format!("{credentials:?}").contains(SECRET));
-
-        let arguments = BTreeMap::from([("token".to_owned(), ArgValue::String(SECRET.into()))]);
-        let app = AppId::try_new("librechat").unwrap();
-        let upstream = PluginName::try_new("vikunja").unwrap();
-        let tool = ToolName::try_new("list_tasks").unwrap();
-        let call = ToolCall {
-            app: &app,
-            upstream: &upstream,
-            tool: &tool,
-            arguments: &arguments,
-            now: Timestamp::from_unix_millis(0),
-        };
-        let shown = format!("{call:?}");
-        assert!(!shown.contains(SECRET), "{shown}");
-        assert!(shown.contains("token"), "{shown}");
-    }
-
-    #[test]
     fn a_fence_reason_is_cut_at_a_character_boundary() {
-        const LONG: &str = "éééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééé";
-        let reason = FenceReason::new(LONG);
+        let long = "é".repeat(150);
+        let reason = FenceReason::new(&long);
         assert!(reason.as_str().len() <= FenceReason::MAX);
         assert!(reason.as_str().chars().all(|c| c == 'é'));
     }

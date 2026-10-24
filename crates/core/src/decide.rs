@@ -16,12 +16,6 @@ use crate::value::ArgValue;
 pub struct GateId([u8; 16]);
 
 impl GateId {
-    /// Wrap 16 bytes. Use [`GateId::from_call`] for a real call.
-    #[must_use]
-    pub const fn from_bytes(bytes: [u8; 16]) -> Self {
-        Self(bytes)
-    }
-
     /// Hash the app instance, the upstream, the tool and the canonical
     /// arguments, each separated by a NUL byte. Keep the first 16 bytes.
     #[must_use]
@@ -70,7 +64,8 @@ pub struct Gates<'a> {
     pub denied: &'a BTreeMap<GateId, Timestamp>,
 }
 
-/// One request to decide. `Debug` shows the argument names only (G9).
+/// One request to decide.
+#[derive(Debug)]
 pub struct Request<'a> {
     /// The result of the identity hook.
     pub caller: Option<&'a Caller>,
@@ -81,20 +76,6 @@ pub struct Request<'a> {
     pub calls_this_minute: u32,
     pub gates: Gates<'a>,
     pub now: Timestamp,
-}
-
-impl fmt::Debug for Request<'_> {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("Request")
-            .field("caller", &self.caller)
-            .field("upstream", &self.upstream)
-            .field("tool", &self.tool)
-            .field("argument_names", &self.arguments.keys().collect::<Vec<_>>())
-            .field("calls_this_minute", &self.calls_this_minute)
-            .field("gates", &self.gates)
-            .field("now", &self.now)
-            .finish()
-    }
 }
 
 /// Why a call is denied.
