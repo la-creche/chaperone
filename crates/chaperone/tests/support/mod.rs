@@ -50,7 +50,8 @@ pub fn digest(token: &str) -> String {
 }
 
 /// A policy with one app instance, `librechat`, that may list tasks and
-/// needs an approval to create one.
+/// needs an approval to create one. The other grants reach the test tools
+/// of the fake upstream.
 pub fn policy_text(calls_per_minute: u32) -> String {
     let digest = digest(TOKEN);
     format!(
@@ -59,7 +60,11 @@ pub fn policy_text(calls_per_minute: u32) -> String {
             "limits":{{"calls_per_minute":{calls_per_minute},"max_pending_gates":1}},
             "grants":{{"vikunja":{{"tools":{{
                 "list_tasks":{{}},
-                "create_task":{{"approval":"required"}}
+                "create_task":{{"approval":"required"}},
+                "picture":{{}},
+                "big":{{}},
+                "broken":{{}},
+                "slow":{{}}
             }}}}}}}}}}}}"#
     )
 }

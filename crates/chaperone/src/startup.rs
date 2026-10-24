@@ -9,9 +9,9 @@ use std::path::Path;
 use std::sync::Arc;
 
 use chaperone_core::{
-    AuditSink, Clock, INSTALL_FILE_CAP, Identity, InstallError, InstallFile, POLICY_FILE_CAP,
-    PluginName, Policy, PolicyError, RunId, Secret, SecretDelivery, SecretError, SecretName,
-    SecretParam, SecretSource, Setup, SetupError, Slot, resolve,
+    AuditSink, Catalog, Clock, INSTALL_FILE_CAP, Identity, InstallError, InstallFile,
+    POLICY_FILE_CAP, PluginName, Policy, PolicyError, RunId, Secret, SecretDelivery, SecretError,
+    SecretName, SecretParam, SecretSource, Setup, SetupError, Slot, resolve,
 };
 use chaperone_plugin_audit_jsonl::OpenError;
 
@@ -83,6 +83,7 @@ pub type Secrets = BTreeMap<PluginName, BTreeMap<SecretParam, Secret>>;
 #[derive(Debug)]
 pub struct Loaded {
     pub run: RunId,
+    pub catalog: Catalog,
     pub setup: Setup,
     pub policy: Policy,
     pub identity: Box<dyn Identity>,
@@ -149,6 +150,7 @@ pub fn load(
     let run = run_id()?;
     Ok(Loaded {
         run,
+        catalog,
         setup,
         policy,
         identity,
