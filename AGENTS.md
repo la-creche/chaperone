@@ -91,6 +91,15 @@ This repository departs from the guide in these places. Each departure is strict
 - A layer talks only to the layer directly below it. Do not call through a layer.
 - Edit only the lines the change needs. Do not add a comment to code you did not change.
 
+### Comments
+
+A comment stands on its own. A reader with the code and `docs/design.md` understands it with nothing else.
+
+1. State what the code does. State why only when the code cannot show it, in one sentence, and cite the guarantee ID or the section of `docs/design.md`.
+2. Do not lean on outside context. Do not name a review, a finding, a pull request, a conversation, a date or "the fix".
+3. Do not describe what the code did before a change. Describe a later change only when `docs/design.md` section 13 names the step.
+4. Do not repeat the name of the item. A doc comment on a public item says what the caller gets.
+
 ## Every change
 
 - `cargo fmt --check`, `cargo clippy --all-targets -- -D warnings` and `cargo test` pass. CI runs all three and is the merge gate.
