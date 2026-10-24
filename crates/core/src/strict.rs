@@ -60,9 +60,10 @@ pub enum StrictError {
     /// Rule 2.
     #[error("the text starts with a byte order mark")]
     ByteOrderMark,
-    /// Rule 5.
-    #[error("the key {key:?} appears twice in one object")]
-    DuplicateKey { key: String },
+    /// Rule 5. The error holds the position, not the key: a key of an
+    /// untrusted body can be a token (G9).
+    #[error("a key appears twice in the object at line {line}, column {column}")]
+    DuplicateKey { line: usize, column: usize },
     /// Rule 6.
     #[error("the text nests deeper than {DEPTH_MAX} levels")]
     TooDeep,
@@ -73,13 +74,11 @@ pub enum StrictError {
         column: usize,
         message: String,
     },
-    /// The text is strict JSON, but it does not fit the type.
-    #[error("the value does not fit at line {line}, column {column}: {message}")]
-    Shape {
-        line: usize,
-        column: usize,
-        message: String,
-    },
+    /// The text is strict JSON, but it does not fit the type. The error
+    /// holds the position only: the message of `serde` can copy the
+    /// rejected value (G9).
+    #[error("the value does not fit at line {line}, column {column}")]
+    Shape { line: usize, column: usize },
 }
 
 /// Read `bytes` as strict JSON into a `T`.
@@ -128,7 +127,11 @@ fn check(bytes: &[u8], cap: ByteCap) -> Result<&str, StrictError> {
 
     match (checked, fault) {
         (Ok(()), _) => Ok(text),
-        (Err(_), Some(fault)) => Err(fault),
+        (Err(error), Some(Fault::DuplicateKey)) => Err(StrictError::DuplicateKey {
+            line: error.line(),
+            column: error.column(),
+        }),
+        (Err(_), Some(Fault::TooDeep)) => Err(StrictError::TooDeep),
         (Err(error), None) => Err(syntax(&error)),
     }
 }
@@ -145,8 +148,14 @@ fn shape(error: &serde_json::Error) -> StrictError {
     StrictError::Shape {
         line: error.line(),
         column: error.column(),
-        message: error.to_string(),
     }
+}
+
+/// A rule that the first pass found broken. `serde_json` adds the position.
+#[derive(Debug, Clone, Copy)]
+enum Fault {
+    DuplicateKey,
+    TooDeep,
 }
 
 /// The first pass. It visits every value, checks keys and depth, and keeps
@@ -154,7 +163,7 @@ fn shape(error: &serde_json::Error) -> StrictError {
 /// tell it apart from a syntax error of `serde_json`.
 struct Check<'a> {
     depth: usize,
-    fault: &'a mut Option<StrictError>,
+    fault: &'a mut Option<Fault>,
 }
 
 impl Check<'_> {
@@ -169,10 +178,12 @@ impl Check<'_> {
         self.depth >= DEPTH_MAX
     }
 
-    fn fail<E: de::Error>(&mut self, fault: StrictError) -> E {
-        let error = E::custom(&fault);
+    fn fail<E: de::Error>(&mut self, fault: Fault) -> E {
         *self.fault = Some(fault);
-        error
+        E::custom(match fault {
+            Fault::DuplicateKey => "duplicate key",
+            Fault::TooDeep => "too deep",
+        })
     }
 }
 
@@ -217,7 +228,7 @@ impl<'de> Visitor<'de> for Check<'_> {
 
     fn visit_seq<A: SeqAccess<'de>>(mut self, mut seq: A) -> Result<(), A::Error> {
         if self.at_limit() {
-            return Err(self.fail(StrictError::TooDeep));
+            return Err(self.fail(Fault::TooDeep));
         }
         while seq.next_element_seed(self.child())?.is_some() {}
         Ok(())
@@ -225,14 +236,13 @@ impl<'de> Visitor<'de> for Check<'_> {
 
     fn visit_map<A: MapAccess<'de>>(mut self, mut map: A) -> Result<(), A::Error> {
         if self.at_limit() {
-            return Err(self.fail(StrictError::TooDeep));
+            return Err(self.fail(Fault::TooDeep));
         }
         let mut keys = BTreeSet::new();
         while let Some(key) = map.next_key::<String>()? {
-            if keys.contains(&key) {
-                return Err(self.fail(StrictError::DuplicateKey { key }));
+            if !keys.insert(key) {
+                return Err(self.fail(Fault::DuplicateKey));
             }
-            keys.insert(key);
             map.next_value_seed(self.child())?;
         }
         Ok(())
@@ -286,27 +296,38 @@ mod tests {
     }
 
     #[test]
-    fn refuses_a_duplicate_key() {
+    fn refuses_a_duplicate_key_and_names_its_position() {
         assert_eq!(
-            err(br#"{"a": 1, "a": 2}"#),
-            StrictError::DuplicateKey { key: "a".into() }
+            err(b"{\"a\": 1,\n \"a\": 2}"),
+            StrictError::DuplicateKey { line: 2, column: 4 }
         );
     }
 
     #[test]
     fn refuses_a_duplicate_key_written_with_an_escape() {
-        assert_eq!(
-            err(br#"{"a": 1, "\u0061": 2}"#),
-            StrictError::DuplicateKey { key: "a".into() }
-        );
+        assert!(matches!(
+            err(br#"{"a": 1, "a": 2}"#),
+            StrictError::DuplicateKey { .. }
+        ));
     }
 
     #[test]
     fn refuses_a_duplicate_key_in_a_nested_object() {
-        assert_eq!(
+        assert!(matches!(
             err(br#"[{"x": {"k": 1, "k": 1}}]"#),
-            StrictError::DuplicateKey { key: "k".into() }
-        );
+            StrictError::DuplicateKey { .. }
+        ));
+    }
+
+    #[test]
+    fn errors_do_not_copy_a_key_or_a_value_from_the_text() {
+        let duplicate = err(br#"{"SECRET-key": 1, "SECRET-key": 2}"#);
+        let shape = read::<Pair>(br#"{"a": "SECRET-value", "b": "x"}"#, CAP).unwrap_err();
+        let unknown = read::<Pair>(br#"{"a": 1, "b": "x", "SECRET-field": 0}"#, CAP).unwrap_err();
+        for error in [duplicate, shape, unknown] {
+            let shown = format!("{error} {error:?}");
+            assert!(!shown.contains("SECRET"), "{shown}");
+        }
     }
 
     #[test]
