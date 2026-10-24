@@ -11,12 +11,15 @@
 mod support;
 
 use std::os::unix::fs::PermissionsExt;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use chaperone::catalog::{self, CatalogError};
 use chaperone::startup::{self, Loaded, StartError, Warning};
-use chaperone_core::{INSTALL_FILE_CAP, PluginKind, PluginName, Slot};
-use support::{INSTALL, config_dir, plugin_tree, policy_text, repo_plugins, write_manifest};
+use chaperone_core::{INSTALL_FILE_CAP, PluginKind, PluginName, SecretError, SecretParam, Slot};
+use support::{
+    INSTALL, config_dir, plugin_tree, policy_text, repo_plugins, secrets_dir, write_manifest,
+    write_secret,
+};
 
 fn name(text: &str) -> PluginName {
     PluginName::try_new(text).unwrap()
@@ -26,7 +29,8 @@ fn name(text: &str) -> PluginName {
 fn load(root: &Path, install: &str, policy: &str) -> Result<Loaded, StartError> {
     let plugins = plugin_tree(root);
     let config = config_dir(root, install, policy);
-    startup::load(&config, &plugins, &root.join("audit.jsonl"))
+    let secrets = secrets_dir(root);
+    startup::load(&config, &plugins, &root.join("audit.jsonl"), &secrets)
 }
 
 #[test]
@@ -122,7 +126,14 @@ fn a_missing_install_file_refuses_start() {
     let plugins = plugin_tree(root.path());
     let config = config_dir(root.path(), INSTALL, &policy_text(30));
     std::fs::remove_file(config.join("install.json")).unwrap();
-    let error = startup::load(&config, &plugins, &root.path().join("audit.jsonl")).unwrap_err();
+    let secrets = secrets_dir(root.path());
+    let error = startup::load(
+        &config,
+        &plugins,
+        &root.path().join("audit.jsonl"),
+        &secrets,
+    )
+    .unwrap_err();
     assert!(matches!(error, StartError::Read(_)), "{error}");
 }
 
@@ -146,10 +157,10 @@ fn a_policy_that_does_not_parse_refuses_start() {
     assert!(matches!(error, StartError::Policy(_)), "{error}");
 }
 
-#[test]
-fn an_active_plugin_with_secrets_refuses_start() {
-    let root = tempfile::tempdir().unwrap();
-    let plugins = plugin_tree(root.path());
+/// A tree where `vikunja` declares one secret, and an install file that
+/// binds it to the secret file `vikunja_token`.
+fn tree_with_a_bound_secret(root: &Path) -> (PathBuf, PathBuf) {
+    let plugins = plugin_tree(root);
     write_manifest(
         &plugins,
         "effect/added/vikunja",
@@ -158,12 +169,68 @@ fn an_active_plugin_with_secrets_refuses_start() {
     );
     let install =
         r#"{"version":1,"plugins":{"vikunja":{"secrets":{"VIKUNJA_TOKEN":"vikunja_token"}}}}"#;
-    let config = config_dir(root.path(), install, &policy_text(30));
-    let error = startup::load(&config, &plugins, &root.path().join("audit.jsonl")).unwrap_err();
+    let config = config_dir(root, install, &policy_text(30));
+    (plugins, config)
+}
+
+#[test]
+fn a_bound_secret_is_read_at_start() {
+    let root = tempfile::tempdir().unwrap();
+    let (plugins, config) = tree_with_a_bound_secret(root.path());
+    let secrets = secrets_dir(root.path());
+    write_secret(&secrets, "vikunja_token", "tok-123");
+    let loaded = startup::load(
+        &config,
+        &plugins,
+        &root.path().join("audit.jsonl"),
+        &secrets,
+    )
+    .unwrap();
+    let vikunja = loaded.secrets.get(&name("vikunja")).unwrap();
+    let secret = vikunja
+        .get(&SecretParam::try_new("VIKUNJA_TOKEN").unwrap())
+        .unwrap();
+    assert_eq!(secret.name().as_str(), "vikunja_token");
+    #[expect(clippy::disallowed_methods, reason = "the test checks the value")]
+    let value = secret.expose();
+    assert_eq!(value, "tok-123");
+    assert!(!format!("{loaded:?}").contains("tok-123"));
+}
+
+#[test]
+fn a_bound_secret_that_is_missing_refuses_start() {
+    let root = tempfile::tempdir().unwrap();
+    let (plugins, config) = tree_with_a_bound_secret(root.path());
+    let secrets = secrets_dir(root.path());
+    let error = startup::load(
+        &config,
+        &plugins,
+        &root.path().join("audit.jsonl"),
+        &secrets,
+    )
+    .unwrap_err();
     assert!(
-        matches!(error, StartError::SecretsNotReady { ref plugin } if plugin == &name("vikunja")),
+        matches!(
+            error,
+            StartError::Secret {
+                ref plugin,
+                error: SecretError::Missing,
+                ..
+            } if plugin == &name("vikunja")
+        ),
         "{error}"
     );
+    assert!(error.to_string().contains("vikunja_token"), "{error}");
+}
+
+#[test]
+fn a_setup_without_secrets_never_needs_the_directory() {
+    let root = tempfile::tempdir().unwrap();
+    let plugins = plugin_tree(root.path());
+    let config = config_dir(root.path(), INSTALL, &policy_text(30));
+    let none = root.path().join("no-such-dir");
+    let loaded = startup::load(&config, &plugins, &root.path().join("audit.jsonl"), &none).unwrap();
+    assert!(loaded.secrets.is_empty());
 }
 
 #[test]
@@ -191,7 +258,14 @@ fn another_plugin_in_a_slot_refuses_start() {
     let install = r#"{"version":1,"plugins":{"other-identity":{},"vikunja":{}},
         "slots":{"identity":"other-identity"}}"#;
     let config = config_dir(root.path(), install, &policy_text(30));
-    let error = startup::load(&config, &plugins, &root.path().join("audit.jsonl")).unwrap_err();
+    let secrets = secrets_dir(root.path());
+    let error = startup::load(
+        &config,
+        &plugins,
+        &root.path().join("audit.jsonl"),
+        &secrets,
+    )
+    .unwrap_err();
     assert!(
         matches!(
             error,
@@ -223,6 +297,7 @@ fn an_unsafe_audit_file_refuses_start() {
     let audit = root.path().join("audit.jsonl");
     std::fs::write(&audit, b"").unwrap();
     std::fs::set_permissions(&audit, std::fs::Permissions::from_mode(0o644)).unwrap();
-    let error = startup::load(&config, &plugins, &audit).unwrap_err();
+    let secrets = secrets_dir(root.path());
+    let error = startup::load(&config, &plugins, &audit, &secrets).unwrap_err();
     assert!(matches!(error, StartError::Audit(_)), "{error}");
 }

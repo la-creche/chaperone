@@ -1,0 +1,18 @@
+[package]
+name = "chaperone-plugin-secret-files"
+description = "The default secret source: one file per secret, mode 0600, owner checked"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+chaperone-core = { path = "../../../crates/core" }
+libc = { workspace = true }
+rustix = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }

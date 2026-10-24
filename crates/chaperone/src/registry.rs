@@ -10,9 +10,10 @@
 use std::path::Path;
 use std::sync::Arc;
 
-use chaperone_core::{AuditSink, Clock, Identity, PluginName, Slot};
+use chaperone_core::{AuditSink, Clock, Identity, PluginName, SecretSource, Slot};
 use chaperone_plugin_audit_jsonl::{JsonlAudit, OpenError};
 use chaperone_plugin_bearer::BearerIdentity;
+use chaperone_plugin_secret_files::FileSecrets;
 use chaperone_plugin_system_clock::SystemClock;
 
 /// How this build constructs the plugin of one row.
@@ -21,12 +22,13 @@ pub enum Build {
     Identity(fn() -> Box<dyn Identity>),
     AuditSink(fn(&Path) -> Result<Arc<dyn AuditSink>, OpenError>),
     Clock(fn() -> Box<dyn Clock>),
+    SecretSource(fn(&Path) -> Box<dyn SecretSource>),
     /// A front door. `chaperone serve` starts it over the gateway after the
     /// configuration is loaded, so load time constructs nothing.
     FrontDoor,
-    /// A plugin whose code comes in build step 4 (the secret source) or
-    /// build step 6 (the approval channel). The slot accepts only this
-    /// plugin until then, so that step never meets a slot it cannot serve.
+    /// A plugin whose code comes in build step 6 (the approval channel).
+    /// The slot accepts only this plugin until then, so that step never
+    /// meets a slot it cannot serve.
     Later,
 }
 
@@ -53,7 +55,7 @@ pub const ENTRIES: &[Entry] = &[
     Entry {
         name: "secret-files",
         slot: Slot::SecretSource,
-        build: Build::Later,
+        build: Build::SecretSource(secret_files),
     },
     Entry {
         name: "audit-jsonl",
@@ -86,6 +88,10 @@ fn bearer() -> Box<dyn Identity> {
 
 fn system_clock() -> Box<dyn Clock> {
     Box::new(SystemClock)
+}
+
+fn secret_files(dir: &Path) -> Box<dyn SecretSource> {
+    Box::new(FileSecrets::new(dir.to_owned()))
 }
 
 fn audit_jsonl(file: &Path) -> Result<Arc<dyn AuditSink>, OpenError> {

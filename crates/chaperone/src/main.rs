@@ -39,6 +39,10 @@ struct Serve {
     /// The audit file. chaperone creates it with mode 0600.
     #[arg(long)]
     audit_file: PathBuf,
+    /// The secrets directory: one file per secret, mode 0600, owned by the
+    /// user that runs chaperone.
+    #[arg(long)]
+    secrets_dir: PathBuf,
     /// The front door address. Only loopback in version 1.
     #[arg(long, default_value = "127.0.0.1:8300")]
     listen: SocketAddr,
@@ -81,6 +85,7 @@ async fn run(args: Serve) -> ExitCode {
         config_dir,
         plugins_dir,
         audit_file,
+        secrets_dir,
         listen,
         mut allowed_hosts,
     } = args;
@@ -89,7 +94,7 @@ async fn run(args: Serve) -> ExitCode {
         tracing::error!(%error, "refusing to start");
         return ExitCode::FAILURE;
     }
-    let loaded = match startup::load(&config_dir, &plugins_dir, &audit_file) {
+    let loaded = match startup::load(&config_dir, &plugins_dir, &audit_file, &secrets_dir) {
         Ok(loaded) => loaded,
         Err(error) => {
             tracing::error!(%error, "refusing to start");

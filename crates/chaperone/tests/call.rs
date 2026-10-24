@@ -22,7 +22,7 @@ use chaperone_core::{
     FenceVerdict, Gateway, Identity, InstallFile, ListError, PluginName, Policy, PreparedFence,
     RawSection, RunId, SectionError, Timestamp, ToolCall,
 };
-use support::{INSTALL, TOKEN, config_dir, plugin_tree, policy_text, write_manifest};
+use support::{INSTALL, TOKEN, config_dir, plugin_tree, policy_text, secrets_dir, write_manifest};
 
 const RUN: RunId = RunId::from_bytes([9; 16]);
 const START: Timestamp = Timestamp::from_unix_millis(1_761_264_000_000);
@@ -116,7 +116,8 @@ impl PreparedFence for PreparedHang {
 fn loaded(root: &std::path::Path, calls_per_minute: u32) -> startup::Loaded {
     let plugins = plugin_tree(root);
     let config = config_dir(root, INSTALL, &policy_text(calls_per_minute));
-    startup::load(&config, &plugins, &root.join("audit.jsonl")).unwrap()
+    let secrets = secrets_dir(root);
+    startup::load(&config, &plugins, &root.join("audit.jsonl"), &secrets).unwrap()
 }
 
 struct Harness {

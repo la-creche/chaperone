@@ -64,6 +64,21 @@ pub fn policy_text(calls_per_minute: u32) -> String {
     )
 }
 
+/// An empty secrets directory under `root`.
+pub fn secrets_dir(root: &Path) -> PathBuf {
+    let secrets = root.join("secrets");
+    std::fs::create_dir_all(&secrets).unwrap();
+    secrets
+}
+
+/// Write `value` as the secret `name` under `secrets`, mode 0600.
+pub fn write_secret(secrets: &Path, name: &str, value: &str) {
+    use std::os::unix::fs::PermissionsExt;
+    let path = secrets.join(name);
+    std::fs::write(&path, value).unwrap();
+    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).unwrap();
+}
+
 /// A configuration directory under `root` with these two files.
 pub fn config_dir(root: &Path, install: &str, policy: &str) -> PathBuf {
     let config = root.join("config");

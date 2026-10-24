@@ -272,6 +272,7 @@ dependencies = [
  "chaperone-plugin-audit-jsonl",
  "chaperone-plugin-bearer",
  "chaperone-plugin-mcp-http",
+ "chaperone-plugin-secret-files",
  "chaperone-plugin-system-clock",
  "clap",
  "getrandom 0.4.3",
@@ -337,6 +338,16 @@ dependencies = [
  "serde_json",
  "tokio",
  "tokio-util",
+]
+
+[[package]]
+name = "chaperone-plugin-secret-files"
+version = "0.0.0"
+dependencies = [
+ "chaperone-core",
+ "libc",
+ "rustix",
+ "tempfile",
 ]
 
 [[package]]

@@ -248,13 +248,15 @@ An app sees one MCP server with the tools of every granted upstream. Each tool h
 
 Version 1 configures the LibreChat MCP server name as `chaperone`. This name has nine characters. A 50-character exposed name becomes 64 characters after LibreChat adds its suffix.
 
-`chaperone serve` starts the front door. It takes `--config-dir` (the directory of `install.json` and `policy.json`), `--plugins-dir`, `--audit-file` and `--listen`. The front door reads each request body through the strict reader before the MCP library parses it, with a cap of 1 MiB. It accepts only loopback `Host` headers, to stop DNS rebinding. Each `--allowed-host` adds one more, such as `host.docker.internal:8300` for an app in Docker.
+`chaperone serve` starts the front door. It takes `--config-dir` (the directory of `install.json` and `policy.json`), `--plugins-dir`, `--audit-file`, `--secrets-dir` and `--listen`. The front door reads each request body through the strict reader before the MCP library parses it, with a cap of 1 MiB. It accepts only loopback `Host` headers, to stop DNS rebinding. Each `--allowed-host` adds one more, such as `host.docker.internal:8300` for an app in Docker.
 
 In version 1, the default front door serves plain HTTP only on a loopback address. chaperone refuses to start when the front door address is not loopback and TLS is not set up. TLS comes before the move to the host.
 
 ## 8. Secrets
 
-- A secret is one file, mode 0600. chaperone checks the owner and the mode before it reads the file.
+- A secret is one file in the secrets directory, named after the secret, mode 0600. chaperone opens the file without following a symbolic link. It then checks the opened file: a regular file, mode 0600, owned by the user that runs chaperone. A file that fails a check refuses start.
+- A secret value is one line of UTF-8, at most 4096 bytes, with no control character and no white space at either end. A file that ends with a newline refuses start, so a value never reaches an upstream with a stray character.
+- chaperone reads every bound secret at start, through the secret source slot. A secret it cannot read refuses start (G2). The error names the plugin, the parameter and the secret. It never shows the value or the path (G9).
 - In production, a dedicated `chaperone` OS user owns the secrets directory. Agents that edit code run as a different user and cannot read it.
 - In code, a secret is a `Secret` value. It has no `Display` and no `Serialize`. Its `Debug` prints only the name. One named method exposes the value. The memory is wiped when the value is dropped.
 - chaperone replaces each exact secret value in a tool result with `[redacted]`. It does this before it returns the result and before it writes the final audit record.
@@ -340,7 +342,6 @@ One pull request per step:
 |---|---|
 | The final name of the approval hook, and its answer type | Step 6 |
 | The exact framing of the secret message on stdin | Step 5 |
-| The adapter traits: front door, secret source, audit sink | Steps 3 and 4 |
 | JSON Schema generation for the editor | Step 8 |
 | The published `$schema` value of each file, and the step that makes it required | Step 8 |
 | Stage (b): sandbox per app instance, the OpenHands runtime, the model pass-through | After version 1 |

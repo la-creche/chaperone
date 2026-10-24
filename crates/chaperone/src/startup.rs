@@ -1,7 +1,8 @@
-//! Load the configuration, find the plugins, resolve the slots and open the
-//! audit file before chaperone serves anything. Every check that fails
-//! refuses start (G2).
+//! Load the configuration, find the plugins, resolve the slots, open the
+//! audit file and read every bound secret before chaperone serves anything.
+//! Every check that fails refuses start (G2).
 
+use std::collections::BTreeMap;
 use std::fmt;
 use std::net::SocketAddr;
 use std::path::Path;
@@ -9,7 +10,8 @@ use std::sync::Arc;
 
 use chaperone_core::{
     AuditSink, Clock, INSTALL_FILE_CAP, Identity, InstallError, InstallFile, POLICY_FILE_CAP,
-    PluginName, Policy, PolicyError, RunId, SecretDelivery, Setup, SetupError, Slot, resolve,
+    PluginName, Policy, PolicyError, RunId, Secret, SecretDelivery, SecretError, SecretName,
+    SecretParam, SecretSource, Setup, SetupError, Slot, resolve,
 };
 use chaperone_plugin_audit_jsonl::OpenError;
 
@@ -39,8 +41,13 @@ pub enum StartError {
     EmptySlot(Slot),
     #[error("this build has no code for {plugin} in the slot {slot}")]
     NoCode { slot: Slot, plugin: PluginName },
-    #[error("{plugin} needs secrets, and the secret source comes in build step 4")]
-    SecretsNotReady { plugin: PluginName },
+    #[error("the secret {name} for {plugin} ({param}) cannot be read: {error}")]
+    Secret {
+        plugin: PluginName,
+        param: SecretParam,
+        name: SecretName,
+        error: SecretError,
+    },
     #[error("the OS random source failed: {0}")]
     Random(getrandom::Error),
     #[error(
@@ -67,8 +74,12 @@ impl fmt::Display for Warning {
     }
 }
 
-/// The checked configuration, the plugins that serve the slots and the ID
-/// of this run.
+/// The secrets of every active plugin, by plugin and by the parameter the
+/// plugin receives each one under.
+pub type Secrets = BTreeMap<PluginName, BTreeMap<SecretParam, Secret>>;
+
+/// The checked configuration, the plugins that serve the slots, every
+/// bound secret and the ID of this run.
 #[derive(Debug)]
 pub struct Loaded {
     pub run: RunId,
@@ -77,12 +88,14 @@ pub struct Loaded {
     pub identity: Box<dyn Identity>,
     pub audit: Arc<dyn AuditSink>,
     pub clock: Box<dyn Clock>,
+    pub secrets: Secrets,
     pub warnings: Vec<Warning>,
 }
 
 /// Load `install.json` and `policy.json` from `config_dir` and every plugin
-/// under `plugins_dir`. Open `audit_file`. Check that this build can run
-/// the setup.
+/// under `plugins_dir`. Open `audit_file`. Read every bound secret through
+/// the secret source over `secrets_dir`. Check that this build can run the
+/// setup.
 ///
 /// # Errors
 ///
@@ -91,6 +104,7 @@ pub fn load(
     config_dir: &Path,
     plugins_dir: &Path,
     audit_file: &Path,
+    secrets_dir: &Path,
 ) -> Result<Loaded, StartError> {
     let catalog = catalog::discover(plugins_dir)?;
     let install_bytes = files::read_capped(&config_dir.join(INSTALL_FILE), INSTALL_FILE_CAP)?;
@@ -103,13 +117,23 @@ pub fn load(
     let identity = identity_for(&setup)?;
     let audit = audit_for(&setup, audit_file)?;
     let clock = clock_for(&setup)?;
+    let source = secret_source_for(&setup, secrets_dir)?;
 
+    let mut secrets = Secrets::new();
     let mut warnings = Vec::new();
     for (plugin, binding) in setup.bindings() {
-        if !binding.secrets.is_empty() {
-            return Err(StartError::SecretsNotReady {
+        let mut read = BTreeMap::new();
+        for (param, name) in &binding.secrets {
+            let secret = source.read(name).map_err(|error| StartError::Secret {
                 plugin: plugin.clone(),
-            });
+                param: param.clone(),
+                name: name.clone(),
+                error,
+            })?;
+            read.insert(param.clone(), secret);
+        }
+        if !read.is_empty() {
+            secrets.insert(plugin.clone(), read);
         }
         if binding.delivery == SecretDelivery::Env {
             warnings.push(Warning::EnvDelivery {
@@ -130,6 +154,7 @@ pub fn load(
         identity,
         audit,
         clock,
+        secrets,
         warnings,
     })
 }
@@ -166,9 +191,11 @@ fn identity_for(setup: &Setup) -> Result<Box<dyn Identity>, StartError> {
     let (plugin, entry) = entry_for(setup, Slot::Identity)?;
     match entry.build {
         Build::Identity(build) => Ok(build()),
-        Build::AuditSink(_) | Build::Clock(_) | Build::FrontDoor | Build::Later => {
-            Err(no_code(Slot::Identity, plugin))
-        }
+        Build::AuditSink(_)
+        | Build::Clock(_)
+        | Build::SecretSource(_)
+        | Build::FrontDoor
+        | Build::Later => Err(no_code(Slot::Identity, plugin)),
     }
 }
 
@@ -178,9 +205,11 @@ fn audit_for(setup: &Setup, audit_file: &Path) -> Result<Arc<dyn AuditSink>, Sta
     let (plugin, entry) = entry_for(setup, Slot::AuditSink)?;
     match entry.build {
         Build::AuditSink(open) => Ok(open(audit_file)?),
-        Build::Identity(_) | Build::Clock(_) | Build::FrontDoor | Build::Later => {
-            Err(no_code(Slot::AuditSink, plugin))
-        }
+        Build::Identity(_)
+        | Build::Clock(_)
+        | Build::SecretSource(_)
+        | Build::FrontDoor
+        | Build::Later => Err(no_code(Slot::AuditSink, plugin)),
     }
 }
 
@@ -189,9 +218,28 @@ fn clock_for(setup: &Setup) -> Result<Box<dyn Clock>, StartError> {
     let (plugin, entry) = entry_for(setup, Slot::Clock)?;
     match entry.build {
         Build::Clock(build) => Ok(build()),
-        Build::Identity(_) | Build::AuditSink(_) | Build::FrontDoor | Build::Later => {
-            Err(no_code(Slot::Clock, plugin))
-        }
+        Build::Identity(_)
+        | Build::AuditSink(_)
+        | Build::SecretSource(_)
+        | Build::FrontDoor
+        | Build::Later => Err(no_code(Slot::Clock, plugin)),
+    }
+}
+
+/// The secret source of the setup over `secrets_dir`, built from its
+/// registry row.
+fn secret_source_for(
+    setup: &Setup,
+    secrets_dir: &Path,
+) -> Result<Box<dyn SecretSource>, StartError> {
+    let (plugin, entry) = entry_for(setup, Slot::SecretSource)?;
+    match entry.build {
+        Build::SecretSource(build) => Ok(build(secrets_dir)),
+        Build::Identity(_)
+        | Build::AuditSink(_)
+        | Build::Clock(_)
+        | Build::FrontDoor
+        | Build::Later => Err(no_code(Slot::SecretSource, plugin)),
     }
 }
 

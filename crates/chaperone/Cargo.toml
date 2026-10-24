@@ -14,6 +14,7 @@ chaperone-core = { path = "../core" }
 chaperone-plugin-audit-jsonl = { path = "../../plugins/default/audit-jsonl" }
 chaperone-plugin-bearer = { path = "../../plugins/default/bearer" }
 chaperone-plugin-mcp-http = { path = "../../plugins/default/mcp-http" }
+chaperone-plugin-secret-files = { path = "../../plugins/default/secret-files" }
 chaperone-plugin-system-clock = { path = "../../plugins/default/system-clock" }
 clap = { workspace = true }
 getrandom = { workspace = true }
