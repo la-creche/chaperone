@@ -190,12 +190,9 @@ mod tests {
         )
     }
 
-    fn decided(call: CallNumber, decision: Decision) -> AuditRecord {
-        audit(call).decided(decision, START).0
-    }
-
-    fn allowed(call: CallNumber) -> chaperone_core::AllowedCall {
-        match audit(call).decided(Decision::Allow, START).1 {
+    /// Write the decision record of an allow and return the next state.
+    fn allowed(call: CallNumber, sink: &JsonlAudit) -> chaperone_core::AllowedCall {
+        match audit(call).decided(Decision::Allow, START, sink).unwrap() {
             AfterDecision::Allowed(allowed) => allowed,
             AfterDecision::Denied(_) | AfterDecision::Gated(_) => panic!("an allow"),
         }
@@ -209,11 +206,13 @@ mod tests {
         let first = CallNumber::FIRST;
         let second = first.checked_next().unwrap();
 
-        sink.write(&decided(first, Decision::Allow)).unwrap();
-        sink.write(&allowed(first).failed(CallFault::NotConnected, END))
+        allowed(first, &sink)
+            .failed(CallFault::NotConnected, END, &sink)
             .unwrap();
-        sink.write(&decided(second, Decision::Deny(DenyReason::ToolNotGranted)))
+        let denied = audit(second)
+            .decided(Decision::Deny(DenyReason::ToolNotGranted), START, &sink)
             .unwrap();
+        assert!(matches!(denied, AfterDecision::Denied(_)));
 
         let text = std::fs::read_to_string(&path).unwrap();
         let lines: Vec<&str> = text.lines().collect();
@@ -268,15 +267,12 @@ mod tests {
         let first = CallNumber::FIRST;
         let second = first.checked_next().unwrap();
 
-        JsonlAudit::open(&path)
-            .unwrap()
-            .write(&allowed(first).ran(false, END))
-            .unwrap();
-        JsonlAudit::open(&path)
-            .unwrap()
-            .write(&allowed(second).ran(true, END))
-            .unwrap();
+        let sink = JsonlAudit::open(&path).unwrap();
+        allowed(first, &sink).ran(false, END, &sink).unwrap();
+        drop(sink);
+        let sink = JsonlAudit::open(&path).unwrap();
+        allowed(second, &sink).ran(true, END, &sink).unwrap();
 
-        assert_eq!(std::fs::read_to_string(&path).unwrap().lines().count(), 2);
+        assert_eq!(std::fs::read_to_string(&path).unwrap().lines().count(), 4);
     }
 }

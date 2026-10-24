@@ -2,6 +2,11 @@
 //!
 //! [`CallAudit`] is the only way to build an [`AuditRecord`]. Its consuming
 //! methods define the valid record sequences in `docs/design.md` section 5.4.
+//! Each method writes its record through the [`AuditSink`] and hands out
+//! the next state only after the write succeeds. No other code holds a
+//! record to write, so no call can run before its decision record (G6).
+//! The transition from a gated call to an allowed call arrives with the
+//! approval answer type in build step 6.
 //!
 //! A record never holds a secret, a token or unconstrained app text (G9).
 //! The tool is present only when the policy configures it. The arguments
@@ -180,7 +185,7 @@ pub enum AuditEvent {
 }
 
 /// One audit record. Only [`CallAudit`] builds one.
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AuditRecord {
     facts: CallFacts,
     at: Timestamp,
@@ -299,80 +304,123 @@ impl CallAudit {
         })
     }
 
-    /// Make the only record of a call that fails before a decision.
-    #[must_use]
-    pub fn failed_before_decision(self, fault: CallFault, at: Timestamp) -> AuditRecord {
-        AuditRecord {
+    /// Write the only record of a call that fails before a decision.
+    ///
+    /// # Errors
+    ///
+    /// Returns the [`AuditError`] of the sink. The record is then not
+    /// durable, and chaperone returns no result (G6).
+    pub fn failed_before_decision(
+        self,
+        fault: CallFault,
+        at: Timestamp,
+        sink: &dyn AuditSink,
+    ) -> Result<(), AuditError> {
+        sink.write(&AuditRecord {
             facts: self.0,
             at,
             event: AuditEvent::Failed(fault),
-        }
+        })
     }
 
-    /// Make the decision record and the state that must follow it.
-    #[must_use = "write the decision record, then act on the AfterDecision"]
-    pub fn decided(self, decision: Decision, at: Timestamp) -> (AuditRecord, AfterDecision) {
-        let event = AuditDecision::from_decision(&decision);
-        let next = match decision {
-            Decision::Deny(reason) => AfterDecision::Denied(reason),
-            Decision::Allow => AfterDecision::Allowed(AllowedCall(self.0.clone())),
-            Decision::Gate(id) => AfterDecision::Gated(GatedCall(self.0.clone(), id)),
-        };
+    /// Write the decision record. The state that must follow it exists only
+    /// after the sink reports the record durable, so no call runs before
+    /// its decision record (G6).
+    ///
+    /// # Errors
+    ///
+    /// Returns the [`AuditError`] of the sink. chaperone then does not run
+    /// the call.
+    pub fn decided(
+        self,
+        decision: Decision,
+        at: Timestamp,
+        sink: &dyn AuditSink,
+    ) -> Result<AfterDecision, AuditError> {
         let record = AuditRecord {
             facts: self.0,
             at,
-            event: AuditEvent::Decided(event),
+            event: AuditEvent::Decided(AuditDecision::from_decision(&decision)),
         };
-        (record, next)
+        sink.write(&record)?;
+        let AuditRecord { facts, .. } = record;
+        Ok(match decision {
+            Decision::Deny(reason) => AfterDecision::Denied(reason),
+            Decision::Allow => AfterDecision::Allowed(AllowedCall(facts)),
+            Decision::Gate(id) => AfterDecision::Gated(GatedCall(facts, id)),
+        })
     }
 }
 
 impl AllowedCall {
     /// Final: the upstream ran the call.
-    #[must_use]
-    pub fn ran(self, is_error: bool, at: Timestamp) -> AuditRecord {
-        AuditRecord {
+    ///
+    /// # Errors
+    ///
+    /// Returns the [`AuditError`] of the sink. chaperone then returns no
+    /// result (G6).
+    pub fn ran(
+        self,
+        is_error: bool,
+        at: Timestamp,
+        sink: &dyn AuditSink,
+    ) -> Result<(), AuditError> {
+        sink.write(&AuditRecord {
             facts: self.0,
             at,
             event: AuditEvent::Ran { is_error },
-        }
+        })
     }
 
     /// Final: chaperone could not run the call.
-    #[must_use]
-    pub fn failed(self, fault: CallFault, at: Timestamp) -> AuditRecord {
-        AuditRecord {
+    ///
+    /// # Errors
+    ///
+    /// Returns the [`AuditError`] of the sink.
+    pub fn failed(
+        self,
+        fault: CallFault,
+        at: Timestamp,
+        sink: &dyn AuditSink,
+    ) -> Result<(), AuditError> {
+        sink.write(&AuditRecord {
             facts: self.0,
             at,
             event: AuditEvent::Failed(fault),
-        }
+        })
     }
 }
 
 impl GatedCall {
     /// Final: the wait window ended without an answer.
-    #[must_use]
-    pub fn waiting(self, at: Timestamp) -> AuditRecord {
-        AuditRecord {
+    ///
+    /// # Errors
+    ///
+    /// Returns the [`AuditError`] of the sink.
+    pub fn waiting(self, at: Timestamp, sink: &dyn AuditSink) -> Result<(), AuditError> {
+        sink.write(&AuditRecord {
             facts: self.0,
             at,
             event: AuditEvent::Waiting(self.1),
-        }
+        })
     }
 
     /// Final: chaperone could not get an approval.
-    #[must_use]
-    pub fn failed(self, fault: CallFault, at: Timestamp) -> AuditRecord {
-        AuditRecord {
+    ///
+    /// # Errors
+    ///
+    /// Returns the [`AuditError`] of the sink.
+    pub fn failed(
+        self,
+        fault: CallFault,
+        at: Timestamp,
+        sink: &dyn AuditSink,
+    ) -> Result<(), AuditError> {
+        sink.write(&AuditRecord {
             facts: self.0,
             at,
             event: AuditEvent::Failed(fault),
-        }
-    }
-
-    /// Continue the call after an approval.
-    pub fn approved(self) -> AllowedCall {
-        AllowedCall(self.0)
+        })
     }
 }
 
@@ -390,7 +438,8 @@ pub enum AuditError {
     Encode,
 }
 
-/// The audit-sink hook. It fills the audit sink slot.
+/// The audit-sink hook. It fills the audit sink slot. Only [`CallAudit`]
+/// and its states call it.
 pub trait AuditSink: Send + Sync + fmt::Debug {
     /// Write one record. Return only after the record is durable.
     ///
@@ -402,6 +451,8 @@ pub trait AuditSink: Send + Sync + fmt::Debug {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::mpsc;
+
     use crate::hook::FenceReason;
     use crate::ids::PluginName;
 
@@ -414,6 +465,31 @@ mod tests {
     static_assertions::assert_not_impl_any!(CallAudit: Clone);
     static_assertions::assert_not_impl_any!(AllowedCall: Clone);
     static_assertions::assert_not_impl_any!(GatedCall: Clone);
+
+    /// A sink that hands each written record to the test.
+    #[derive(Debug)]
+    struct ChannelSink(mpsc::Sender<AuditRecord>);
+
+    impl AuditSink for ChannelSink {
+        fn write(&self, record: &AuditRecord) -> Result<(), AuditError> {
+            self.0.send(record.clone()).map_err(|_| AuditError::Encode)
+        }
+    }
+
+    /// A sink that refuses every record.
+    #[derive(Debug)]
+    struct RefusingSink;
+
+    impl AuditSink for RefusingSink {
+        fn write(&self, _: &AuditRecord) -> Result<(), AuditError> {
+            Err(AuditError::Encode)
+        }
+    }
+
+    fn sink() -> (ChannelSink, mpsc::Receiver<AuditRecord>) {
+        let (sender, receiver) = mpsc::channel();
+        (ChannelSink(sender), receiver)
+    }
 
     fn audit() -> CallAudit {
         CallAudit::new(
@@ -428,15 +504,20 @@ mod tests {
 
     #[test]
     fn unknown_tool_text_never_reaches_a_record() {
-        let record = audit().failed_before_decision(CallFault::UnknownTool, START);
+        let (sink, written) = sink();
+        audit()
+            .failed_before_decision(CallFault::UnknownTool, START, &sink)
+            .unwrap();
+        let record = written.recv().unwrap();
         assert_eq!(record.tool().as_str(), AuditTool::UNKNOWN);
         assert!(!format!("{record:?}").contains("token-looking-text"));
     }
 
     #[test]
     fn unconfigured_app_text_never_reaches_a_record() {
+        let (sink, written) = sink();
         let app = AppId::try_new("token-looking-text").unwrap();
-        let record = CallAudit::new(
+        CallAudit::new(
             RunId::from_bytes([1; 16]),
             CallNumber::FIRST,
             START,
@@ -444,18 +525,22 @@ mod tests {
             AuditTool::lookup("upstream__tool", None),
             ArgumentsDigest::of(&BTreeMap::new()),
         )
-        .failed_before_decision(CallFault::UnknownTool, START);
+        .failed_before_decision(CallFault::UnknownTool, START, &sink)
+        .unwrap();
+        let record = written.recv().unwrap();
         assert_eq!(record.app(), None);
         assert!(!format!("{record:?}").contains("token-looking-text"));
     }
 
     #[test]
     fn a_deny_record_keeps_only_the_stable_code() {
+        let (sink, written) = sink();
         let decision = Decision::Deny(DenyReason::Fence {
             plugin: PluginName::try_new("test-fence").unwrap(),
             reason: FenceReason::new("token-looking-text"),
         });
-        let (record, next) = audit().decided(decision, START);
+        let next = audit().decided(decision, START, &sink).unwrap();
+        let record = written.recv().unwrap();
         assert_eq!(
             record.event(),
             &AuditEvent::Decided(AuditDecision::Deny("fence"))
@@ -465,17 +550,54 @@ mod tests {
 
     #[test]
     fn a_gate_ends_in_a_waiting_record() {
-        let (first, next) = audit().decided(Decision::Gate(GATE), START);
+        let (sink, written) = sink();
+        let next = audit().decided(Decision::Gate(GATE), START, &sink).unwrap();
         let AfterDecision::Gated(call) = next else {
             panic!("a gate must need a final record");
         };
-        let last = call.waiting(END);
+        call.waiting(END, &sink).unwrap();
+        let first = written.recv().unwrap();
+        let last = written.recv().unwrap();
         assert_eq!(
             first.event(),
             &AuditEvent::Decided(AuditDecision::Gate(GATE))
         );
         assert_eq!(last.event(), &AuditEvent::Waiting(GATE));
         assert_eq!((last.started_at(), last.time()), (START, END));
+    }
+
+    #[test]
+    fn an_allow_ends_in_a_ran_record_after_two_writes() {
+        let (sink, written) = sink();
+        let next = audit().decided(Decision::Allow, START, &sink).unwrap();
+        let AfterDecision::Allowed(call) = next else {
+            panic!("an allow must need a final record");
+        };
+        call.ran(false, END, &sink).unwrap();
+        assert_eq!(
+            written.recv().unwrap().event(),
+            &AuditEvent::Decided(AuditDecision::Allow)
+        );
+        assert_eq!(
+            written.recv().unwrap().event(),
+            &AuditEvent::Ran { is_error: false }
+        );
+    }
+
+    #[test]
+    fn a_refused_write_gives_no_next_state() {
+        assert_eq!(
+            audit()
+                .decided(Decision::Allow, START, &RefusingSink)
+                .unwrap_err(),
+            AuditError::Encode
+        );
+        assert_eq!(
+            audit()
+                .failed_before_decision(CallFault::UnknownTool, START, &RefusingSink)
+                .unwrap_err(),
+            AuditError::Encode
+        );
     }
 
     #[test]

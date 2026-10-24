@@ -141,7 +141,7 @@ The record keeps a tool name only when the policy configures that exact tool. Al
 
 The record keeps the arguments only as the SHA-256 of their canonical form. Closed types prevent other text from entering these fields.
 
-`CallAudit` consumes itself when it makes the decision record. The next state can make only the applicable final records.
+`CallAudit` writes each record through the audit sink as it changes state. The next state exists only after the sink reports the record durable (G6). No other code holds a record, so no call can run before its decision record. The next state can make only the applicable final records. The transition from a gated call to an allowed call arrives with the approval answer type in step 6.
 
 ## 6. Configuration
 
