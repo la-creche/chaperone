@@ -50,8 +50,11 @@ pub enum ArgValue {
 }
 
 impl ArgValue {
-    /// Convert a value that the strict reader already checked.
-    pub(crate) fn from_json(value: serde_json::Value) -> Self {
+    /// Convert a value that a protocol library parsed from bytes the strict
+    /// reader already checked. Use [`crate::strict::read_value`] for raw
+    /// bytes.
+    #[must_use]
+    pub fn from_json(value: serde_json::Value) -> Self {
         match value {
             serde_json::Value::Null => Self::Null,
             serde_json::Value::Bool(flag) => Self::Bool(flag),
@@ -64,6 +67,30 @@ impl ArgValue {
                 members
                     .into_iter()
                     .map(|(key, item)| (key, Self::from_json(item)))
+                    .collect(),
+            ),
+        }
+    }
+
+    /// The value as a protocol library takes it. [`Self::from_json`] of the
+    /// result gives back an equal value.
+    #[must_use]
+    pub fn to_json(&self) -> serde_json::Value {
+        match self {
+            Self::Null => serde_json::Value::Null,
+            Self::Bool(flag) => serde_json::Value::Bool(*flag),
+            Self::Int(int) => serde_json::Value::from(*int),
+            Self::UInt(uint) => serde_json::Value::from(*uint),
+            Self::Float(float) => serde_json::Number::from_f64(float.get())
+                .map_or(serde_json::Value::Null, serde_json::Value::Number),
+            Self::String(text) => serde_json::Value::String(text.clone()),
+            Self::Array(items) => {
+                serde_json::Value::Array(items.iter().map(Self::to_json).collect())
+            }
+            Self::Object(members) => serde_json::Value::Object(
+                members
+                    .iter()
+                    .map(|(key, item)| (key.clone(), item.to_json()))
                     .collect(),
             ),
         }
@@ -209,6 +236,18 @@ mod tests {
         assert_eq!(Finite::new(f64::INFINITY), None);
         assert_eq!(Finite::new(f64::NEG_INFINITY), None);
         assert_eq!(Finite::new(1.5).map(Finite::get), Some(1.5));
+    }
+
+    #[test]
+    fn to_json_and_from_json_round_trip() {
+        let text = br#"{"a":[1,-2,18446744073709551615,1.5,"x",null,true],"b":{"c":{}}}"#;
+        let value = read_value(text, CAP).unwrap();
+        let json = value.to_json();
+        assert_eq!(ArgValue::from_json(json.clone()), value);
+        assert_eq!(
+            serde_json::to_string(&json).unwrap(),
+            std::str::from_utf8(text).unwrap()
+        );
     }
 
     #[test]
