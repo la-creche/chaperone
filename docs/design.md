@@ -89,7 +89,7 @@ The rows apply in this order. The first row that matches decides.
 4. A policy argument fence refuses an argument: `Deny(argument_fenced)`.
    - An `allow` fence needs the argument present and equal to a listed value.
    - A `deny` fence refuses a listed value, and refuses an argument that is not a scalar.
-5. A fence plugin returns deny: `Deny(fence)` with that plugin's reason. Fences run in plugin name order. The first deny wins.
+5. A fence plugin returns deny: `Deny(fence)` with that plugin's reason. The reason is a fixed text of the plugin. A fence plugin faults: `Deny(fence_fault)`. Fences run in plugin name order. The first deny wins.
 6. The policy marks the tool `"approval": "required"`, or a fence plugin returns gate:
    1. The gate is denied and not expired: `Deny(approval_denied)`.
    2. The gate is approved and not expired: `Allow`.

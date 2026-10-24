@@ -181,6 +181,8 @@ enum Behavior {
     Deny,
     Gate,
     ByArgument,
+    /// The fence panics: a plugin fault.
+    Fault,
 }
 
 #[derive(Debug)]
@@ -209,6 +211,7 @@ impl PreparedFence for PreparedExtra {
             Behavior::Pass => FenceVerdict::Pass,
             Behavior::Deny => deny(),
             Behavior::Gate => FenceVerdict::Gate,
+            Behavior::Fault => panic!("plugin fault"),
             Behavior::ByArgument => match call.arguments.get("n") {
                 Some(ArgValue::Int(n)) if n % 3 == 0 => deny(),
                 Some(ArgValue::Int(n)) if n % 3 == 1 => FenceVerdict::Gate,
@@ -476,6 +479,18 @@ fn row_5_a_fence_plugin_denies() {
 }
 
 #[test]
+fn row_5_a_fence_plugin_fault_is_a_deny() {
+    let policy = extended_policy(Behavior::Fault);
+    let case = Case::new("vikunja", "list_tasks", "{}");
+    assert_eq!(
+        case.decide(Some(&policy)),
+        deny(DenyReason::FenceFault {
+            plugin: name("zz-extra"),
+        })
+    );
+}
+
+#[test]
 fn row_6_a_gated_call_waits_then_runs_after_approval() {
     let policy = base_policy();
     let mut case = Case::new("vikunja", "create_task", r#"{"title": "milk"}"#);
@@ -715,6 +730,7 @@ fn arb_behavior() -> impl Strategy<Value = Behavior> {
         Just(Behavior::Deny),
         Just(Behavior::Gate),
         Just(Behavior::ByArgument),
+        Just(Behavior::Fault),
     ]
 }
 

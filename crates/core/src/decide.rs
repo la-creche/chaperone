@@ -3,6 +3,7 @@
 
 use std::collections::BTreeMap;
 use std::fmt;
+use std::panic::{self, AssertUnwindSafe};
 
 use crate::hook::{Caller, FenceReason, FenceVerdict, Reach, ToolCall};
 use crate::ids::{ArgName, PluginName, ToolName};
@@ -98,6 +99,10 @@ pub enum DenyReason {
         plugin: PluginName,
         reason: FenceReason,
     },
+    /// The fence panicked instead of returning a verdict (G2).
+    FenceFault {
+        plugin: PluginName,
+    },
     ApprovalDenied,
     GateCap,
 }
@@ -113,6 +118,7 @@ impl DenyReason {
             Self::ToolNotGranted => "tool_not_granted",
             Self::ArgumentFenced { .. } => "argument_fenced",
             Self::Fence { .. } => "fence",
+            Self::FenceFault { .. } => "fence_fault",
             Self::ApprovalDenied => "approval_denied",
             Self::GateCap => "gate_cap",
         }
@@ -227,14 +233,23 @@ enum FenceOutcome {
     Gate,
 }
 
-/// Run every fence in plugin name order. The first deny wins.
+/// Run every fence in plugin name order. The first deny wins. A fence that
+/// panics is a deny (G2). The panic payload is dropped unread, because it
+/// can hold argument text (G9). A fence that does not return blocks the
+/// decision. The host bounds the time of a decision.
 fn run_fences(app: &App, call: &ToolCall<'_>) -> Result<FenceOutcome, DenyReason> {
     let mut outcome = FenceOutcome::Clear;
     for active in app.fences() {
-        match active.fence.check(call) {
-            FenceVerdict::Pass => {}
-            FenceVerdict::Gate => outcome = FenceOutcome::Gate,
-            FenceVerdict::Deny(reason) => {
+        let verdict = panic::catch_unwind(AssertUnwindSafe(|| active.fence.check(call)));
+        match verdict {
+            Err(_payload) => {
+                return Err(DenyReason::FenceFault {
+                    plugin: active.plugin.clone(),
+                });
+            }
+            Ok(FenceVerdict::Pass) => {}
+            Ok(FenceVerdict::Gate) => outcome = FenceOutcome::Gate,
+            Ok(FenceVerdict::Deny(reason)) => {
                 return Err(DenyReason::Fence {
                     plugin: active.plugin.clone(),
                     reason,
