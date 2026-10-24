@@ -16,6 +16,8 @@ mod ids;
 mod install;
 mod plugin;
 mod policy;
+#[cfg(kani)]
+mod proofs;
 mod secret;
 pub mod strict;
 mod time;

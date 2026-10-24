@@ -399,3 +399,41 @@ fn load_app(
         fences,
     })
 }
+
+/// A policy with one app instance that grants one tool, built without JSON.
+/// Only the Kani proofs use it.
+#[cfg(kani)]
+pub(crate) fn proof_policy(
+    app: AppId,
+    limits: Limits,
+    upstream: PluginName,
+    tool: ToolName,
+    approval: Approval,
+    fences: Vec<(PluginName, Box<dyn PreparedFence>)>,
+) -> Policy {
+    let grant = ToolGrant {
+        note: None,
+        approval,
+        arguments: BTreeMap::new(),
+    };
+    let mut tools = BTreeMap::new();
+    tools.insert(tool, grant);
+    let mut grants = BTreeMap::new();
+    grants.insert(upstream, UpstreamGrant { note: None, tools });
+    let fences = fences
+        .into_iter()
+        .map(|(plugin, fence)| ActiveFence { plugin, fence })
+        .collect();
+    let mut apps = BTreeMap::new();
+    apps.insert(
+        app,
+        App {
+            note: None,
+            digests: Vec::new(),
+            limits,
+            grants,
+            fences,
+        },
+    );
+    Policy { apps }
+}

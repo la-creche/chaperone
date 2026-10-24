@@ -36,6 +36,12 @@ impl GateId {
         Self((*head).into())
     }
 
+    /// A fixed ID. Only the Kani proofs use it, to stub the hash.
+    #[cfg(kani)]
+    pub(crate) const fn from_bytes(bytes: [u8; 16]) -> Self {
+        Self(bytes)
+    }
+
     /// The ID as 32 lower-case hex characters.
     #[must_use]
     pub fn to_hex(self) -> String {
