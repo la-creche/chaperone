@@ -203,7 +203,7 @@ Fences and upstreams are not slots. The install file can enable any number of th
 
 To overrule a default plugin, the operator names a different plugin for that slot in `install.json`. When the install file names no plugin for a slot, the default plugin fills it. chaperone refuses to start when two enabled plugins claim one slot and the install file does not choose.
 
-A release binary contains the decision and adapter plugins from `default` and `included`. A decision or adapter plugin in `added` needs a build from source. An effect plugin in `added` works with a release binary, because it runs as its own process.
+A release binary contains the decision and adapter plugins from `default` and `included`. `crates/chaperone/src/registry.rs` is the one table that names each compiled plugin and how the build constructs it. A compiled plugin that `install.json` puts in a slot without a row there refuses start (G2). A decision or adapter plugin in `added` needs a row and a build from source. An effect plugin in `added` works with a release binary, because it runs as its own process.
 
 ### 7.4 The plugin manifest
 
@@ -313,6 +313,8 @@ One pull request per step:
 3. In two pull requests:
    1. The `Gateway` contract, exposed names, the `bearer` identity plugin and the `audit-jsonl` audit sink. The audit sink moves here from step 5, so the first program that runs already writes the audit (G6).
    2. The `chaperone` program and the `mcp-http` front door.
+   3. The registry of compiled plugins.
+   4. The clock slot and the `system-clock` adapter.
 4. The effect host, the upstream result check and the Vikunja upstream.
 5. The secret source.
 6. Gates, the approval hook and `ha-approval`.

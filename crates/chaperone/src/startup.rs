@@ -11,29 +11,14 @@ use chaperone_core::{
     AuditSink, INSTALL_FILE_CAP, Identity, InstallError, InstallFile, POLICY_FILE_CAP, PluginName,
     Policy, PolicyError, RunId, SecretDelivery, Setup, SetupError, Slot, resolve,
 };
-use chaperone_plugin_audit_jsonl::{JsonlAudit, OpenError};
-use chaperone_plugin_bearer::BearerIdentity;
+use chaperone_plugin_audit_jsonl::OpenError;
 
 use crate::catalog::{self, CatalogError};
 use crate::files::{self, ReadError};
+use crate::registry::{self, Build, Entry};
 
 const INSTALL_FILE: &str = "install.json";
 const POLICY_FILE: &str = "policy.json";
-
-/// The identity plugin this build has code for.
-const BEARER: &str = "bearer";
-/// The audit sink this build has code for.
-const AUDIT_JSONL: &str = "audit-jsonl";
-
-/// The plugin this build accepts in each slot that no code serves yet. The
-/// front door comes in build step 3.2, the approval channel in steps 4 and
-/// 6, and the secret source in step 5. Another plugin in one of these slots
-/// refuses start now, so a later step never finds a slot it cannot serve.
-const ACCEPTED: [(Slot, &str); 3] = [
-    (Slot::FrontDoor, "mcp-http"),
-    (Slot::SecretSource, "secret-files"),
-    (Slot::ApprovalChannel, "deny-all"),
-];
 
 /// Why chaperone refuses to start.
 #[derive(Debug, thiserror::Error)]
@@ -111,17 +96,11 @@ pub fn load(
     let install = InstallFile::read(&install_bytes)?;
     let setup = resolve(&install, &catalog)?;
 
+    for slot in Slot::ALL {
+        entry_for(&setup, slot)?;
+    }
     let identity = identity_for(&setup)?;
     let audit = audit_for(&setup, audit_file)?;
-    for (slot, accepted) in ACCEPTED {
-        let plugin = slot_plugin(&setup, slot)?;
-        if plugin.as_str() != accepted {
-            return Err(StartError::NoCode {
-                slot,
-                plugin: plugin.clone(),
-            });
-        }
-    }
 
     let mut warnings = Vec::new();
     for (plugin, binding) in setup.bindings() {
@@ -164,32 +143,42 @@ pub fn check_listen(address: SocketAddr) -> Result<(), StartError> {
     Err(StartError::NotLoopback(address))
 }
 
-fn slot_plugin(setup: &Setup, slot: Slot) -> Result<&PluginName, StartError> {
-    setup.slot(slot).ok_or(StartError::EmptySlot(slot))
+/// The registry row of the plugin that fills `slot`. A slot without a
+/// plugin, or with a plugin this build has no row for, refuses start (G2).
+fn entry_for(setup: &Setup, slot: Slot) -> Result<(&PluginName, &'static Entry), StartError> {
+    let plugin = setup.slot(slot).ok_or(StartError::EmptySlot(slot))?;
+    let entry = registry::find(slot, plugin).ok_or_else(|| no_code(slot, plugin))?;
+    Ok((plugin, entry))
 }
 
-/// The compiled identity plugin that the setup names.
+fn no_code(slot: Slot, plugin: &PluginName) -> StartError {
+    StartError::NoCode {
+        slot,
+        plugin: plugin.clone(),
+    }
+}
+
+/// The identity plugin of the setup, built from its registry row.
 fn identity_for(setup: &Setup) -> Result<Box<dyn Identity>, StartError> {
-    let plugin = slot_plugin(setup, Slot::Identity)?;
-    if plugin.as_str() == BEARER {
-        return Ok(Box::new(BearerIdentity));
+    let (plugin, entry) = entry_for(setup, Slot::Identity)?;
+    match entry.build {
+        Build::Identity(build) => Ok(build()),
+        Build::AuditSink(_) | Build::FrontDoor | Build::Later => {
+            Err(no_code(Slot::Identity, plugin))
+        }
     }
-    Err(StartError::NoCode {
-        slot: Slot::Identity,
-        plugin: plugin.clone(),
-    })
 }
 
-/// The compiled audit sink that the setup names, opened on `audit_file`.
+/// The audit sink of the setup, opened on `audit_file` from its registry
+/// row.
 fn audit_for(setup: &Setup, audit_file: &Path) -> Result<Arc<dyn AuditSink>, StartError> {
-    let plugin = slot_plugin(setup, Slot::AuditSink)?;
-    if plugin.as_str() == AUDIT_JSONL {
-        return Ok(Arc::new(JsonlAudit::open(audit_file)?));
+    let (plugin, entry) = entry_for(setup, Slot::AuditSink)?;
+    match entry.build {
+        Build::AuditSink(open) => Ok(open(audit_file)?),
+        Build::Identity(_) | Build::FrontDoor | Build::Later => {
+            Err(no_code(Slot::AuditSink, plugin))
+        }
     }
-    Err(StartError::NoCode {
-        slot: Slot::AuditSink,
-        plugin: plugin.clone(),
-    })
 }
 
 /// A run ID from the OS random source (`docs/design.md` 5.4).
