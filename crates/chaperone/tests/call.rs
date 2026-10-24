@@ -15,13 +15,13 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use chaperone::clock::Clock;
-use chaperone::gateway::{ChaperoneGateway, DECISION_BUDGET};
+use chaperone::gateway::{ChaperoneGateway, DECISION_BUDGET, SharedGateway};
 use chaperone::startup;
 use chaperone_core::{
     AppId, AuditDecision, AuditError, AuditEvent, AuditRecord, AuditSink, AuditTool, Bearer,
     CallFault, CallNumber, CallOutcome, Caller, Credentials, DenyReason, Fence, FenceVerdict,
-    Identity, InstallFile, ListError, PluginName, Policy, PreparedFence, RawSection, RunId,
-    SectionError, Timestamp, ToolCall,
+    Gateway, Identity, InstallFile, ListError, PluginName, Policy, PreparedFence, RawSection,
+    RunId, SectionError, Timestamp, ToolCall,
 };
 use support::{INSTALL, TOKEN, config_dir, plugin_tree, policy_text, write_manifest};
 
@@ -426,4 +426,31 @@ fn the_audit_file_records_each_call_and_never_the_token() {
     assert!(lines[6].contains(r#""app":null"#) && lines[6].contains("deny:unknown_credential"));
     assert!(lines.iter().all(|line| line.contains(&loaded.run.to_hex())));
     assert!(!audit.contains(TOKEN) && !audit.contains(OTHER_TOKEN));
+}
+
+#[tokio::test]
+async fn the_shared_gateway_answers_through_the_trait() {
+    let Harness { gateway, sink, .. } = harness(30);
+    let shared = SharedGateway::new(gateway);
+    let bearer = Bearer::new(TOKEN.to_owned());
+    let headers = BTreeMap::new();
+    let credentials = Credentials {
+        bearer: Some(&bearer),
+        headers: &headers,
+    };
+    assert_eq!(shared.list_tools(&credentials).await, Ok(Vec::new()));
+    let outcome = shared
+        .call_tool(&credentials, "vikunja__list_tasks", BTreeMap::new())
+        .await;
+    assert!(matches!(
+        outcome,
+        CallOutcome::Failed(CallFault::NotConnected)
+    ));
+    assert_eq!(
+        sink.events(),
+        [
+            AuditEvent::Decided(AuditDecision::Allow),
+            AuditEvent::Failed(CallFault::NotConnected),
+        ]
+    );
 }
