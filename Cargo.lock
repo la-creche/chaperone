@@ -114,9 +114,11 @@ name = "chaperone-plugin-audit-jsonl"
 version = "0.0.0"
 dependencies = [
  "chaperone-core",
+ "libc",
  "serde",
  "serde_json",
  "tempfile",
+ "thiserror",
  "time",
 ]
 

@@ -11,8 +11,10 @@ workspace = true
 
 [dependencies]
 chaperone-core = { path = "../../../crates/core" }
+libc = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
+thiserror = { workspace = true }
 time = { workspace = true }
 
 [dev-dependencies]
