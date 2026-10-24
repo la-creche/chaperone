@@ -9,7 +9,7 @@ This crate wires the parts together. It reads the configuration, starts the plug
 1. Read each file with the strict reader in `core`. Do not parse JSON any other way.
 2. Read the clock here, and pass the time to `core` (G3).
 3. Keep the rate counters and the gate state here. Pass them to `core` as values.
-4. Write the audit line through the audit sink before you return a result (G6).
+4. Write the decision record through the audit sink before you run a call. Write the final record before you return the result. Build the tool name with `AuditTool::lookup` only (G6, G9).
 5. Blank each exact secret value in a tool result before the audit write and before the return (G9).
 6. Start effect plugins with the `command` from `plugin.json`. Send secrets over stdin (`docs/design.md` section 7.5).
 7. Build a manifest only from upstream tools that the policy grants. Never add a hook tool (G8).

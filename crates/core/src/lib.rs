@@ -16,10 +16,12 @@ pub mod strict;
 mod time;
 mod value;
 
-pub use audit::{AuditError, AuditEvent, AuditRecord, AuditSink, CallNumber};
+pub use audit::{AuditError, AuditEvent, AuditRecord, AuditSink, AuditTool, CallNumber, RunId};
 pub use decide::{Decision, DenyReason, GateId, Gates, Request, decide};
 pub use exposed::{ExposedError, ExposedName, SEPARATOR};
-pub use gateway::{CallFault, CallOutcome, Gateway, ListError, ListedTool, OUTPUT_CAP, ToolOutput};
+pub use gateway::{
+    CallFault, CallOutcome, Gateway, ListError, ListedTool, OUTPUT_CAP, OutputError, ToolOutput,
+};
 pub use hook::{
     Caller, Credentials, Fence, FenceReason, FenceVerdict, Identity, PreparedFence, RawSection,
     Reach, SectionError, ToolCall,

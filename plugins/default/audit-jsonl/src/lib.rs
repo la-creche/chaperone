@@ -1,6 +1,7 @@
-//! The default audit sink. It appends one JSON line per record to one file
-//! and syncs the file before it returns (G6). The file is created with mode
-//! 0600. Times are RFC 3339 in UTC.
+//! The default audit sink. It appends one JSON line per audit record to one
+//! file and syncs the file before it returns (G6). A call that runs has two
+//! lines, `decided` and then `ran` or `failed`, with the same `run` and
+//! `call`. The file is created with mode 0600. Times are RFC 3339 in UTC.
 
 use std::fs::{File, OpenOptions};
 use std::io::Write;
@@ -42,6 +43,7 @@ impl JsonlAudit {
 /// One line of the audit file.
 #[derive(Debug, Serialize)]
 struct Line<'a> {
+    run: String,
     call: u64,
     time: String,
     app: Option<&'a str>,
@@ -71,10 +73,11 @@ impl AuditSink for JsonlAudit {
     fn write(&self, record: &AuditRecord) -> Result<(), AuditError> {
         let (event, detail) = event_parts(&record.event);
         let line = Line {
+            run: record.run.to_hex(),
             call: record.call.0,
             time: rfc3339(record.time.unix_millis())?,
             app: record.app.as_ref().map(|app| app.as_str()),
-            tool: &record.tool,
+            tool: record.tool.as_str(),
             arguments_sha256: &record.arguments_sha256,
             event,
             detail,
@@ -98,16 +101,57 @@ impl AuditSink for JsonlAudit {
 mod tests {
     use std::os::unix::fs::PermissionsExt;
 
-    use chaperone_core::{AppId, CallFault, CallNumber, Decision, DenyReason, Timestamp};
+    use chaperone_core::{
+        AppId, AuditTool, CallFault, CallNumber, Catalog, Decision, DenyReason, Found, InstallFile,
+        Location, Manifest, PluginKey, Policy, RunId, Timestamp,
+    };
 
     use super::*;
 
+    fn empty_policy() -> Policy {
+        let mut catalog = Catalog::new();
+        for (name, kind, slot) in [
+            ("mcp-http", "adapter", "front_door"),
+            ("bearer", "decision", "identity"),
+            ("secret-files", "adapter", "secret_source"),
+            ("audit-jsonl", "adapter", "audit_sink"),
+        ] {
+            let text = format!(
+                r#"{{"name":"{name}","version":"1","kind":"{kind}","slot":"{slot}","hooks":["{slot}"]}}"#
+            );
+            let manifest = Manifest::read(text.as_bytes()).unwrap();
+            catalog.insert(
+                PluginKey::from_manifest(&manifest),
+                Found {
+                    location: Location::Default,
+                    manifest,
+                },
+            );
+        }
+        let manifest = Manifest::read(
+            br#"{"name":"deny-all","version":"1","kind":"effect","slot":"approval_channel",
+                "hooks":["approval"],"command":["deny-all"]}"#,
+        )
+        .unwrap();
+        catalog.insert(
+            PluginKey::from_manifest(&manifest),
+            Found {
+                location: Location::Default,
+                manifest,
+            },
+        );
+        let install = InstallFile::read(br#"{"version":1}"#).unwrap();
+        let setup = chaperone_core::resolve(&install, &catalog).unwrap();
+        Policy::load(br#"{"version":1}"#, &setup, &[]).unwrap()
+    }
+
     fn record(call: u64, event: AuditEvent) -> AuditRecord {
         AuditRecord {
+            run: RunId::from_bytes([7; 16]),
             call: CallNumber(call),
             time: Timestamp::from_unix_millis(1_761_264_000_123),
             app: Some(AppId::try_new("librechat").unwrap()),
-            tool: "vikunja__list_tasks".to_owned(),
+            tool: AuditTool::lookup("secret-looking-text", &empty_policy()),
             arguments_sha256: "ab".repeat(32),
             event,
         }
@@ -135,6 +179,9 @@ mod tests {
         let text = std::fs::read_to_string(&path).unwrap();
         let lines: Vec<&str> = text.lines().collect();
         assert_eq!(lines.len(), 3);
+        assert!(lines[0].contains(&format!(r#""run":"{}""#, "07".repeat(16))));
+        assert!(lines[0].contains(r#""tool":"<unknown>""#));
+        assert!(!text.contains("secret-looking-text"));
         assert!(
             lines[0].contains(r#""time":"2025-10-24T00:00:00.123Z""#),
             "{}",

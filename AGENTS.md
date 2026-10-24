@@ -31,8 +31,8 @@ Each line cites the guarantee it protects. A pull request that does one of these
 3. Do not add a code path where an error, a timeout or a missing answer leads to an allow. Every such path ends in a deny or a refusal to start. (G2)
 4. Do not let a plugin result widen reach beyond the policy file. A fence returns deny, gate or pass. An identity plugin can only narrow. No hook returns "allow anyway". (G4, G7)
 5. Do not put a hook tool of an effect plugin into a manifest. (G8)
-6. Do not write a secret value to a log, an audit line, an error, a result, argv, the environment or the policy file. Do not add `Display`, `Serialize` or a value-printing `Debug` to `Secret`. (G9)
-7. Do not return a result before the audit line is written. (G6)
+6. Do not write a secret value to a log, an audit record, an error, a result, argv, the environment or the policy file. Do not add `Display`, `Serialize` or a value-printing `Debug` to `Secret`. (G9)
+7. Do not run a call before its decision record is written. Do not return a result before its final record is written. Do not put app-chosen text in an audit record. (G6, G9)
 8. Do not load, enable or order plugins by directory listing. Only `install.json` enables a plugin or fills a slot. (G10)
 9. Do not write cryptography code. Use the crates named in `docs/design.md` section 9. Ask before you add another one.
 10. Do not bind `0.0.0.0`. Bind a LAN address, `127.0.0.1` or a Unix socket.

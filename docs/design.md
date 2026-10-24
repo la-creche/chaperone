@@ -38,10 +38,10 @@ Each rule has an ID. Code comments, tests and pull requests cite the ID.
 | G3 | **Pure decision.** The decision function does no I/O. It reads no clock and no global state. The caller passes the time as an argument. |
 | G4 | **One identity kind.** A credential resolves to one app instance, or to nothing. An identity plugin can narrow what that app instance may reach. It can never widen it. |
 | G5 | **chaperone holds every credential.** An upstream credential never reaches an app, a model or a sandbox. |
-| G6 | **Audit before return.** chaperone writes the audit line before it returns a result. A call that chaperone cannot record returns an error. |
+| G6 | **Audit before acting.** chaperone writes a decision record before it runs a call, and a final record before it returns the result. A call that fails before a decision has one final record. A call whose decision record cannot be written does not run. A result whose final record cannot be written is not returned. The run ID and the call number match the records of one call. |
 | G7 | **Plugins only narrow.** The policy file is the ceiling. Each decision hook can deny, gate or pass. The most restrictive result wins. No plugin can grant reach that the policy file does not grant. |
 | G8 | **No hook is visible to a model.** A manifest lists only upstream tools. A hook tool of an effect plugin never appears in a manifest. |
-| G9 | **Secrets stay hidden.** No secret value appears in a log line, an audit line, a manifest, a tool result, argv, the policy file or an error message. A log line can name a secret. It never shows the value. |
+| G9 | **Secrets stay hidden.** No secret value appears in a log line, an audit record, a manifest, a tool result, argv, the policy file or an error message. A log line can name a secret. It never shows the value. An audit record holds no text that the app chose: a tool name only when the policy configures that tool, and the arguments only as a SHA-256. |
 | G10 | **The install file decides.** A plugin on disk does nothing until the install file enables it. Directory order never changes behavior. |
 
 Limits of the guarantee:
@@ -213,7 +213,7 @@ In version 1, the default front door serves plain HTTP only on a loopback addres
 - A secret is one file, mode 0600. chaperone checks the owner and the mode before it reads the file.
 - In production, a dedicated `chaperone` OS user owns the secrets directory. Agents that edit code run as a different user and cannot read it.
 - In code, a secret is a `Secret` value. It has no `Display` and no `Serialize`. Its `Debug` prints only the name. One named method exposes the value. The memory is wiped when the value is dropped.
-- chaperone replaces each exact secret value in a tool result with `[redacted]`. It does this before it returns the result and before it writes the audit line.
+- chaperone replaces each exact secret value in a tool result with `[redacted]`. It does this before it returns the result and before it writes the final audit record.
 
 ## 9. Tokens
 

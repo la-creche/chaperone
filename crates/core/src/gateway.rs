@@ -6,6 +6,7 @@
 use std::collections::BTreeMap;
 use std::future::Future;
 
+use serde::Deserialize;
 use serde_json::value::RawValue;
 
 use crate::decide::{DenyReason, GateId};
@@ -24,28 +25,108 @@ pub struct ListedTool {
 }
 
 /// The result an upstream returned for one call: an MCP `CallToolResult`,
-/// as strict JSON text. chaperone passes it on unchanged, except that it
-/// blanks each exact secret value (G9).
+/// as strict JSON text. [`ToolOutput::read`] checks the shape, so a value
+/// of this type is a valid result. chaperone passes it on unchanged, except
+/// that it blanks each exact secret value (G9).
 #[derive(Debug, Clone)]
-pub struct ToolOutput(Box<RawValue>);
+pub struct ToolOutput {
+    raw: Box<RawValue>,
+    is_error: bool,
+}
 
 /// The largest upstream result chaperone passes on.
 pub const OUTPUT_CAP: ByteCap = ByteCap::new(4 * 1024 * 1024);
 
+/// Why an upstream result is not a valid `CallToolResult`. The call then
+/// fails (G2).
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+pub enum OutputError {
+    #[error("the upstream result is not strict JSON: {0}")]
+    Read(#[from] StrictError),
+    #[error("the upstream result is not an MCP CallToolResult: {0}")]
+    Shape(String),
+}
+
+/// The parts of a `CallToolResult` that chaperone checks. An unknown
+/// top-level field is refused, so a result of a newer protocol fails
+/// instead of passing unread.
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ResultShape {
+    #[serde(rename = "content")]
+    _content: Vec<ContentShape>,
+    #[serde(rename = "isError", default)]
+    is_error: Option<bool>,
+    #[serde(rename = "structuredContent", default)]
+    _structured_content: Option<BTreeMap<String, serde::de::IgnoredAny>>,
+    #[serde(rename = "_meta", default)]
+    _meta: Option<BTreeMap<String, serde::de::IgnoredAny>>,
+    #[serde(rename = "resultType", default)]
+    _result_type: Option<ResultType>,
+}
+
+/// Only a complete result runs a call. An `input_required` result asks the
+/// app for input, and chaperone does not pass that through yet.
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "snake_case")]
+enum ResultType {
+    Complete,
+}
+
+/// One content block. The tag must be a known type, and the fields that
+/// the type needs must be present.
+#[derive(Debug, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+#[expect(dead_code, reason = "the fields exist only to check the shape")]
+enum ContentShape {
+    Text {
+        text: String,
+    },
+    Image {
+        data: String,
+        #[serde(rename = "mimeType")]
+        mime_type: String,
+    },
+    Audio {
+        data: String,
+        #[serde(rename = "mimeType")]
+        mime_type: String,
+    },
+    Resource {
+        resource: BTreeMap<String, serde::de::IgnoredAny>,
+    },
+    ResourceLink {
+        uri: String,
+    },
+}
+
 impl ToolOutput {
-    /// Read an upstream result.
+    /// Read and check an upstream result.
     ///
     /// # Errors
     ///
-    /// Returns a [`StrictError`] when the bytes are not strict JSON.
-    pub fn read(bytes: &[u8]) -> Result<Self, StrictError> {
-        strict::read(bytes, OUTPUT_CAP).map(Self)
+    /// Returns an [`OutputError`] when the bytes are not strict JSON, or
+    /// not an MCP `CallToolResult`.
+    pub fn read(bytes: &[u8]) -> Result<Self, OutputError> {
+        let raw: Box<RawValue> = strict::read(bytes, OUTPUT_CAP)?;
+        let shape: ResultShape = serde_json::from_str(raw.get())
+            .map_err(|error| OutputError::Shape(error.to_string()))?;
+        Ok(Self {
+            raw,
+            is_error: shape.is_error.unwrap_or(false),
+        })
     }
 
     /// The result as JSON text.
     #[must_use]
     pub fn as_json(&self) -> &str {
-        self.0.get()
+        self.raw.get()
+    }
+
+    /// The upstream's own error flag. The audit records it.
+    #[must_use]
+    pub fn is_error(&self) -> bool {
+        self.is_error
     }
 }
 
@@ -58,7 +139,7 @@ pub enum CallFault {
     NotConnected,
     /// The call needs an approval, and no approval channel can answer yet.
     NoApprovalChannel,
-    /// chaperone could not write the audit line, so it did not run the call (G6).
+    /// chaperone could not write an audit record, so it did not run the call or return its result (G6).
     AuditFailed,
 }
 
@@ -113,4 +194,46 @@ pub trait Gateway: Send + Sync + 'static {
         name: &str,
         arguments: BTreeMap<String, ArgValue>,
     ) -> impl Future<Output = CallOutcome> + Send;
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn read(text: &str) -> Result<ToolOutput, OutputError> {
+        ToolOutput::read(text.as_bytes())
+    }
+
+    #[test]
+    fn reads_a_valid_result_and_its_error_flag() {
+        let ok = read(r#"{"content":[{"type":"text","text":"done"}]}"#).unwrap();
+        assert!(!ok.is_error());
+        let failed = read(
+            r#"{"content":[{"type":"text","text":"no"}],"isError":true,"resultType":"complete",
+                "structuredContent":{"a":1},"_meta":{}}"#,
+        )
+        .unwrap();
+        assert!(failed.is_error());
+    }
+
+    #[test]
+    fn refuses_a_value_that_is_not_a_result() {
+        for bad in [
+            "null",
+            "[]",
+            "{}",
+            r#"{"content":{}}"#,
+            r#"{"content":[{"type":"video"}]}"#,
+            r#"{"content":[{"type":"text"}]}"#,
+            r#"{"content":[],"extra":1}"#,
+            r#"{"content":[],"resultType":"input_required"}"#,
+            r#"{"content":[],"isError":"yes"}"#,
+        ] {
+            assert!(
+                matches!(read(bad), Err(OutputError::Shape(_))),
+                "{bad} should be refused"
+            );
+        }
+        assert!(matches!(read("{"), Err(OutputError::Read(_))));
+    }
 }
