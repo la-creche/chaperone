@@ -38,10 +38,10 @@ Each rule has an ID. Code comments, tests and pull requests cite the ID.
 | G3 | **Pure decision.** The decision function does no I/O. It reads no clock and no global state. The caller passes the time as an argument. |
 | G4 | **One identity kind.** A credential resolves to one app instance, or to nothing. An identity plugin can narrow what that app instance may reach. It can never widen it. |
 | G5 | **chaperone holds every credential.** An upstream credential never reaches an app, a model or a sandbox. |
-| G6 | **Audit before return.** chaperone writes the audit line before it returns a result. A call that chaperone cannot record returns an error. |
+| G6 | **Audit before acting.** chaperone writes a decision record before it runs a call. It writes a final record before it returns a result. A call that fails before a decision has one final record. If a decision record fails, chaperone does not run the call. If a final record fails, chaperone does not return the result. |
 | G7 | **Plugins only narrow.** The policy file is the ceiling. Each decision hook can deny, gate or pass. The most restrictive result wins. No plugin can grant reach that the policy file does not grant. |
 | G8 | **No hook is visible to a model.** A manifest lists only upstream tools. A hook tool of an effect plugin never appears in a manifest. |
-| G9 | **Secrets stay hidden.** No secret value appears in a log line, an audit line, a manifest, a tool result, argv, the policy file or an error message. A log line can name a secret. It never shows the value. |
+| G9 | **Secrets stay hidden.** No secret value appears in a log line, an audit record, a manifest, a tool result, argv, the policy file or an error message. A log line can name a secret. It never shows the value. An audit record holds only policy-bounded names and fixed-shape values. |
 | G10 | **The install file decides.** A plugin on disk does nothing until the install file enables it. Directory order never changes behavior. |
 
 Limits of the guarantee:
@@ -116,6 +116,32 @@ A gated call goes through these steps:
 A gate is *pending* while it waits for an answer. It is *approved* after the approval channel answers `Approved`. The policy caps the number of pending gates per app instance, so a looping model cannot flood the operator's phone.
 
 Only the approval channel can complete a gate. It can complete only a gate that a decision created, only with a matching gate ID, and only before the gate expires. A gate completion does not break G7: the policy already said "allowed if approved".
+
+### 5.4 Audit records
+
+`CallAudit` in `crates/core` is the only way to build an audit record. Each call path yields these records:
+
+| Path | Records |
+|---|---|
+| The call fails before a decision | `failed` |
+| Deny | `decided` |
+| Allow, then the call runs | `decided`, `ran` |
+| Allow, then the call cannot run | `decided`, `failed` |
+| Gate, then the wait window ends | `decided`, `waiting` |
+| Gate, then the approval channel fails | `decided`, `failed` |
+| Gate, then the approval comes | `decided`, then `ran` or `failed` |
+
+Each record holds a run ID and a call number. These values match all records of one call.
+
+Each record also holds the start time and the event time. A final record uses the time when the call ended.
+
+The record keeps an app ID only when the policy configures that exact app instance. All other app text becomes no app.
+
+The record keeps a tool name only when the policy configures that exact tool. All other tool text becomes `<unknown>`.
+
+The record keeps the arguments only as the SHA-256 of their canonical form. Closed types prevent other text from entering these fields.
+
+`CallAudit` consumes itself when it makes the decision record. The next state can make only the applicable final records.
 
 ## 6. Configuration
 
@@ -196,12 +222,26 @@ chaperone sends each bound secret over the plugin's stdin, in the first message 
 
 One exception exists for third-party MCP servers that read secrets from the environment. The install file can set `"secret_delivery": "env"` for one plugin. chaperone then logs a warning at each start. The warning names the plugin and the cost. A plugin in `default` or `included` can never use this exception.
 
+### 7.6 The front door
+
+The front door is the adapter that receives an app's connection. It turns each request into a call of the `Gateway` trait in `crates/core`, and turns the answer back into its protocol. It decides nothing.
+
+An app sees one MCP server with the tools of every granted upstream. Each tool has an exposed name: `<upstream>__<tool>`, for example `vikunja__list_tasks`.
+
+- A plugin name cannot contain `__`, so the first `__` always ends the upstream name.
+- An exposed name holds only `A-Z`, `a-z`, `0-9`, `_` and `-`, up to 50 characters. LibreChat passes each tool to the model as `<tool>_mcp_<server>`, and model APIs allow 64 such characters.
+- The manifest leaves out a tool whose exposed name breaks these rules. chaperone logs a warning that names the tool.
+
+Version 1 configures the LibreChat MCP server name as `chaperone`. This name has nine characters. A 50-character exposed name becomes 64 characters after LibreChat adds its suffix.
+
+In version 1, the default front door serves plain HTTP only on a loopback address. chaperone refuses to start when the front door address is not loopback and TLS is not set up. TLS comes before the move to the host.
+
 ## 8. Secrets
 
 - A secret is one file, mode 0600. chaperone checks the owner and the mode before it reads the file.
 - In production, a dedicated `chaperone` OS user owns the secrets directory. Agents that edit code run as a different user and cannot read it.
 - In code, a secret is a `Secret` value. It has no `Display` and no `Serialize`. Its `Debug` prints only the name. One named method exposes the value. The memory is wiped when the value is dropped.
-- chaperone replaces each exact secret value in a tool result with `[redacted]`. It does this before it returns the result and before it writes the audit line.
+- chaperone replaces each exact secret value in a tool result with `[redacted]`. It does this before it returns the result and before it writes the final audit record.
 
 ## 9. Tokens
 
@@ -264,9 +304,11 @@ One pull request per step:
 2. `core`, in two pull requests:
    1. The workspace, CI, the strict reader, the name types, `Secret`, argument values and time.
    2. The config types, slot resolution, the decision, the hook traits and the property tests.
-3. The front door and the default identity plugin.
-4. The effect host and the Vikunja upstream.
-5. The audit sink and the secret source.
+3. In two pull requests:
+   1. The `Gateway` contract, exposed names, the `bearer` identity plugin and the `audit-jsonl` audit sink. The audit sink moves here from step 5, so the first program that runs already writes the audit (G6).
+   2. The `chaperone` program and the `mcp-http` front door.
+4. The effect host, the upstream result check and the Vikunja upstream.
+5. The secret source.
 6. Gates, the approval hook and `ha-approval`.
 7. `ha-call`, both halves.
 8. The admin socket, the CLI and the editor.

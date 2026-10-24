@@ -16,6 +16,12 @@ use crate::value::ArgValue;
 pub struct GateId([u8; 16]);
 
 impl GateId {
+    /// Wrap 16 bytes. Use [`GateId::from_call`] for a real call.
+    #[must_use]
+    pub const fn from_bytes(bytes: [u8; 16]) -> Self {
+        Self(bytes)
+    }
+
     /// Hash the app instance, the upstream, the tool and the canonical
     /// arguments, each separated by a NUL byte. Keep the first 16 bytes.
     #[must_use]
@@ -94,6 +100,23 @@ pub enum DenyReason {
     },
     ApprovalDenied,
     GateCap,
+}
+
+impl DenyReason {
+    /// A stable code for an app and for the audit file.
+    #[must_use]
+    pub const fn code(&self) -> &'static str {
+        match self {
+            Self::PolicyNotLoaded => "policy_not_loaded",
+            Self::UnknownCredential => "unknown_credential",
+            Self::RateLimited => "rate_limited",
+            Self::ToolNotGranted => "tool_not_granted",
+            Self::ArgumentFenced { .. } => "argument_fenced",
+            Self::Fence { .. } => "fence",
+            Self::ApprovalDenied => "approval_denied",
+            Self::GateCap => "gate_cap",
+        }
+    }
 }
 
 /// The result of the decision function.

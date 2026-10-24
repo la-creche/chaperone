@@ -2,7 +2,10 @@
 //! decision. This crate does no I/O (G3). `crates/core/AGENTS.md` has the
 //! rules.
 
+mod audit;
 mod decide;
+mod exposed;
+mod gateway;
 mod hook;
 mod ids;
 mod install;
@@ -13,7 +16,13 @@ pub mod strict;
 mod time;
 mod value;
 
+pub use audit::{
+    AfterDecision, AllowedCall, ArgumentsDigest, AuditApp, AuditDecision, AuditError, AuditEvent,
+    AuditRecord, AuditSink, AuditTool, CallAudit, CallNumber, GatedCall, RunId,
+};
 pub use decide::{Decision, DenyReason, GateId, Gates, Request, decide};
+pub use exposed::{ExposedError, ExposedName, SEPARATOR};
+pub use gateway::{CallFault, CallOutcome, Gateway, ListError, ListedTool};
 pub use hook::{
     Caller, Credentials, Fence, FenceReason, FenceVerdict, Identity, PreparedFence, RawSection,
     Reach, SectionError, ToolCall,

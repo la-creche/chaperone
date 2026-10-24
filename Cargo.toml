@@ -1,6 +1,10 @@
 [workspace]
 resolver = "3"
-members = ["crates/core"]
+members = [
+  "crates/core",
+  "plugins/default/audit-jsonl",
+  "plugins/default/bearer",
+]
 
 [workspace.package]
 edition = "2024"
@@ -17,7 +21,10 @@ serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.154"
 sha2 = "0.11.1"
 static_assertions = "1.1.0"
+subtle = "2.6.1"
+tempfile = "3.27.0"
 thiserror = "2.0.21"
+time = { version = "0.3.55", features = ["formatting"] }
 
 [workspace.lints.rust]
 unsafe_code = "forbid"
