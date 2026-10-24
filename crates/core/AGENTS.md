@@ -24,7 +24,7 @@ Rules for `crates/core`. Read the root `AGENTS.md` first.
 
 ## Never do these
 
-1. Do not depend on `tokio`, `std::fs`, `std::net`, `std::env` or `std::time::SystemTime`. The purity lint bans them in this crate.
+1. Do not depend on `tokio`, `std::fs`, `std::net`, `std::env` or `std::time::SystemTime`. The purity lint bans them in this crate. `tests/purity.rs` scans every source file for these names and for `HashMap`, `HashSet`, `Mutex`, `RefCell` and the other hidden-state types. A new source file needs a line in that test.
 2. Do not add a global, a `static mut` or a lazy cache.
 3. Do not add `Display`, `Serialize` or a value-printing `Debug` to `Secret` (G9).
 

@@ -14,6 +14,12 @@ disallowed-methods = [
   { path = "std::fs::read_to_string", reason = "G3: core takes bytes, not paths" },
   { path = "std::fs::write", reason = "G3: no I/O in core" },
   { path = "std::process::Command::new", reason = "G3: no I/O in core" },
+  { path = "std::fs::metadata", reason = "G3: no I/O in core" },
+  { path = "std::fs::symlink_metadata", reason = "G3: no I/O in core" },
+  { path = "std::env::current_dir", reason = "G3: no environment in core" },
+  { path = "std::env::args", reason = "G3: no environment in core" },
+  { path = "std::thread::spawn", reason = "G3: no hidden state in core" },
+  { path = "std::thread::sleep", reason = "G3: the caller passes the time" },
 ]
 disallowed-types = [
   { path = "std::fs::File", reason = "G3: no I/O in core" },
@@ -27,4 +33,8 @@ disallowed-types = [
   { path = "std::cell::RefCell", reason = "G3: no hidden state in core" },
   { path = "std::sync::Mutex", reason = "G3: no hidden state in core" },
   { path = "std::sync::RwLock", reason = "G3: no hidden state in core" },
+  { path = "std::os::unix::net::UnixStream", reason = "G3: no I/O in core" },
+  { path = "std::os::unix::net::UnixListener", reason = "G3: no I/O in core" },
+  { path = "std::collections::HashMap", reason = "G3: a random hash seed; use BTreeMap" },
+  { path = "std::collections::HashSet", reason = "G3: a random hash seed; use BTreeSet" },
 ]
