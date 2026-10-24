@@ -182,6 +182,11 @@ pub enum SetupError {
     UnknownPlugin(PluginName),
     #[error("no default plugin exists for the slot {0}")]
     MissingDefault(Slot),
+    #[error("{plugins:?} are each a default for the slot {slot}. Keep one in plugins/default.")]
+    TwoDefaults {
+        slot: Slot,
+        plugins: Vec<PluginName>,
+    },
     #[error("install.json picks {plugin} for the slot {slot}, but it does not serve that slot")]
     WrongSlot { slot: Slot, plugin: PluginName },
     #[error("install.json picks {plugin} for the slot {slot}, but does not enable it")]
@@ -267,12 +272,23 @@ pub fn resolve(install: &InstallFile, catalog: &Catalog) -> Result<Setup, SetupE
     })
 }
 
+/// The one default plugin of `slot`. Two defaults refuse start, so the
+/// catalog order never picks one (G10).
 fn default_for(slot: Slot, catalog: &Catalog) -> Result<&PluginName, SetupError> {
-    catalog
+    let mut defaults = catalog
         .values()
-        .find(|found| found.location == Location::Default && found.manifest.slot() == Some(slot))
-        .map(|found| found.manifest.name())
-        .ok_or(SetupError::MissingDefault(slot))
+        .filter(|found| found.location == Location::Default && found.manifest.slot() == Some(slot))
+        .map(|found| found.manifest.name());
+    let Some(first) = defaults.next() else {
+        return Err(SetupError::MissingDefault(slot));
+    };
+    let others: Vec<PluginName> = defaults.cloned().collect();
+    if others.is_empty() {
+        return Ok(first);
+    }
+    let mut plugins = vec![first.clone()];
+    plugins.extend(others);
+    Err(SetupError::TwoDefaults { slot, plugins })
 }
 
 fn pick_slot(
@@ -523,6 +539,24 @@ pub(crate) mod tests {
         });
         let error = resolve(&install(r#"{"version":1}"#), &catalog).unwrap_err();
         assert_eq!(error, SetupError::MissingDefault(Slot::Identity));
+    }
+
+    #[test]
+    fn refuses_two_defaults_for_one_slot() {
+        let mut catalog = defaults();
+        put(
+            &mut catalog,
+            Location::Default,
+            r#"{"name":"other-identity","version":"1","kind":"decision","slot":"identity","hooks":["identity"]}"#,
+        );
+        let error = resolve(&install(r#"{"version":1}"#), &catalog).unwrap_err();
+        assert_eq!(
+            error,
+            SetupError::TwoDefaults {
+                slot: Slot::Identity,
+                plugins: vec![name("bearer"), name("other-identity")],
+            }
+        );
     }
 
     #[test]

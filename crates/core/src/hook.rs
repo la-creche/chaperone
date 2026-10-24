@@ -15,12 +15,21 @@ use crate::time::Timestamp;
 use crate::value::ArgValue;
 
 /// What an app presents with a call.
-#[derive(Debug)]
 pub struct Credentials<'a> {
     /// The bearer token, if the request carried one.
     pub bearer: Option<&'a Bearer>,
     /// The request headers, with lower-case names.
     pub headers: &'a BTreeMap<String, String>,
+}
+
+/// A header value can be a credential (G9). `Debug` shows the names only.
+impl fmt::Debug for Credentials<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Credentials")
+            .field("bearer", &self.bearer)
+            .field("headers", &self.headers.keys())
+            .finish()
+    }
 }
 
 /// What a caller may reach, within its app instance's grant (G4).
@@ -57,10 +66,11 @@ pub struct ToolCall<'a> {
     pub now: Timestamp,
 }
 
-/// Why a fence denies a call. At most [`FenceReason::MAX`] bytes. It must
-/// not contain a secret or an argument value.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct FenceReason(String);
+/// Why a fence denies a call. The text is fixed when the fence is compiled,
+/// so a fence cannot copy an argument value or a secret into it (G9). At
+/// most [`FenceReason::MAX`] bytes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct FenceReason(&'static str);
 
 impl FenceReason {
     /// The longest reason, in bytes.
@@ -68,17 +78,17 @@ impl FenceReason {
 
     /// Wrap `text`, cut at a character boundary to [`Self::MAX`] bytes.
     #[must_use]
-    pub fn new(text: &str) -> Self {
+    pub fn new(text: &'static str) -> Self {
         let mut end = text.len().min(Self::MAX);
         while !text.is_char_boundary(end) {
             end -= 1;
         }
-        Self(text[..end].to_owned())
+        Self(&text[..end])
     }
 
     #[must_use]
     pub fn as_str(&self) -> &str {
-        &self.0
+        self.0
     }
 }
 
@@ -147,9 +157,23 @@ mod tests {
     use super::*;
 
     #[test]
+    fn credentials_debug_shows_header_names_only() {
+        let bearer = Bearer::new("SECRET-bearer".into());
+        let headers = BTreeMap::from([("authorization".to_owned(), "SECRET-header".to_owned())]);
+        let credentials = Credentials {
+            bearer: Some(&bearer),
+            headers: &headers,
+        };
+        let shown = format!("{credentials:?}");
+        assert!(shown.contains("authorization"));
+        assert!(!shown.contains("SECRET"), "{shown}");
+    }
+
+    #[test]
     fn a_fence_reason_is_cut_at_a_character_boundary() {
-        let long = "é".repeat(150);
-        let reason = FenceReason::new(&long);
+        const LONG: &str = "éééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééé";
+        assert!(LONG.len() > FenceReason::MAX);
+        let reason = FenceReason::new(LONG);
         assert!(reason.as_str().len() <= FenceReason::MAX);
         assert!(reason.as_str().chars().all(|c| c == 'é'));
     }

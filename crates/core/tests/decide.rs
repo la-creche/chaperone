@@ -41,7 +41,7 @@ fn put(catalog: &mut Catalog, location: Location, text: &str) {
 }
 
 /// The defaults, the `ha-call` pair, a `vikunja` upstream and one extra
-/// fence, `zz-extra`, used by the G7 property.
+/// fence, `zz-extra`, used by the G7 property and the fault test.
 fn catalog() -> Catalog {
     let mut catalog = Catalog::new();
     for (plugin, kind, slot) in [
@@ -174,13 +174,16 @@ impl PreparedFence for PreparedEntities {
     }
 }
 
-/// The extra fence of the G7 property. Its verdict depends on argument `n`.
+/// The extra fence. Its verdict is fixed, depends on argument `n`, or is a
+/// panic.
 #[derive(Debug, Clone, Copy)]
 enum Behavior {
     Pass,
     Deny,
     Gate,
     ByArgument,
+    /// The fence panics: a plugin fault.
+    Fault,
 }
 
 #[derive(Debug)]
@@ -209,6 +212,7 @@ impl PreparedFence for PreparedExtra {
             Behavior::Pass => FenceVerdict::Pass,
             Behavior::Deny => deny(),
             Behavior::Gate => FenceVerdict::Gate,
+            Behavior::Fault => panic!("plugin fault"),
             Behavior::ByArgument => match call.arguments.get("n") {
                 Some(ArgValue::Int(n)) if n % 3 == 0 => deny(),
                 Some(ArgValue::Int(n)) if n % 3 == 1 => FenceVerdict::Gate,
@@ -279,7 +283,7 @@ fn args(text: &str) -> BTreeMap<String, ArgValue> {
 /// The gate state of one test.
 #[derive(Debug, Default, Clone)]
 struct GateBook {
-    pending: BTreeSet<GateId>,
+    pending: BTreeMap<GateId, Timestamp>,
     approved: BTreeMap<GateId, Timestamp>,
     denied: BTreeMap<GateId, Timestamp>,
 }
@@ -476,13 +480,25 @@ fn row_5_a_fence_plugin_denies() {
 }
 
 #[test]
+fn row_5_a_fence_plugin_fault_is_a_deny() {
+    let policy = extended_policy(Behavior::Fault);
+    let case = Case::new("vikunja", "list_tasks", "{}");
+    assert_eq!(
+        case.decide(Some(&policy)),
+        deny(DenyReason::FenceFault {
+            plugin: name("zz-extra"),
+        })
+    );
+}
+
+#[test]
 fn row_6_a_gated_call_waits_then_runs_after_approval() {
     let policy = base_policy();
     let mut case = Case::new("vikunja", "create_task", r#"{"title": "milk"}"#);
     let id = case.gate_id();
     assert_eq!(case.decide(Some(&policy)), Decision::Gate(id));
 
-    case.gates.pending.insert(id);
+    case.gates.pending.insert(id, LATER);
     assert_eq!(case.decide(Some(&policy)), Decision::Gate(id));
 
     case.gates.pending.clear();
@@ -522,7 +538,25 @@ fn row_6_the_pending_cap_denies_a_new_gate() {
     let mut case = Case::new("vikunja", "create_task", r#"{"title": "milk"}"#);
     let other_a = Case::new("vikunja", "create_task", r#"{"title": "a"}"#).gate_id();
     let other_b = Case::new("vikunja", "create_task", r#"{"title": "b"}"#).gate_id();
-    case.gates.pending.extend([other_a, other_b]);
+    case.gates
+        .pending
+        .extend([(other_a, LATER), (other_b, LATER)]);
+    assert_eq!(case.decide(Some(&policy)), deny(DenyReason::GateCap));
+}
+
+#[test]
+fn row_6_an_expired_pending_gate_does_not_count() {
+    let policy = base_policy();
+    let mut case = Case::new("vikunja", "create_task", r#"{"title": "milk"}"#);
+    let id = case.gate_id();
+    let other_a = Case::new("vikunja", "create_task", r#"{"title": "a"}"#).gate_id();
+    let other_b = Case::new("vikunja", "create_task", r#"{"title": "b"}"#).gate_id();
+    case.gates
+        .pending
+        .extend([(id, NOW), (other_a, NOW), (other_b, NOW)]);
+    assert_eq!(case.decide(Some(&policy)), Decision::Gate(id));
+    case.gates.pending.insert(other_a, LATER);
+    case.gates.pending.insert(other_b, LATER);
     assert_eq!(case.decide(Some(&policy)), deny(DenyReason::GateCap));
 }
 
@@ -547,6 +581,21 @@ fn a_policy_without_the_fence_code_does_not_load() {
     assert_eq!(
         load(INSTALL, &policy_text(""), &[]).unwrap_err(),
         PolicyError::MissingFence(name("ha-call"))
+    );
+}
+
+#[test]
+fn two_fences_of_one_name_do_not_load_in_either_order() {
+    let entities = EntityFence(name("ha-call"));
+    let twin = ExtraFence(name("ha-call"), Behavior::Pass);
+    let expected = PolicyError::DuplicateFence(name("ha-call"));
+    assert_eq!(
+        load(INSTALL, &policy_text(""), &[&entities, &twin]).unwrap_err(),
+        expected
+    );
+    assert_eq!(
+        load(INSTALL, &policy_text(""), &[&twin, &entities]).unwrap_err(),
+        expected
     );
 }
 
@@ -649,7 +698,7 @@ fn arb_case() -> impl Strategy<Value = Case> {
                 let id = case.gate_id();
                 let (pending, approved, denied) = flags;
                 if pending {
-                    case.gates.pending.insert(id);
+                    case.gates.pending.insert(id, LATER);
                 }
                 if approved {
                     case.gates.approved.insert(id, LATER);
@@ -660,7 +709,7 @@ fn arb_case() -> impl Strategy<Value = Case> {
                 for index in 0..others {
                     let other =
                         Case::new("vikunja", "create_task", &format!(r#"{{"i": {index}}}"#));
-                    case.gates.pending.insert(other.gate_id());
+                    case.gates.pending.insert(other.gate_id(), LATER);
                 }
                 if narrow {
                     case.caller = Some(Caller {
@@ -682,6 +731,7 @@ fn arb_behavior() -> impl Strategy<Value = Behavior> {
         Just(Behavior::Deny),
         Just(Behavior::Gate),
         Just(Behavior::ByArgument),
+        Just(Behavior::Fault),
     ]
 }
 

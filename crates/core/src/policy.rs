@@ -256,6 +256,8 @@ pub enum PolicyError {
     UnknownSection { app: AppId, plugin: PluginName },
     #[error("the active fence {0} has no compiled code in this chaperone")]
     MissingFence(PluginName),
+    #[error("two compiled fences are named {0}")]
+    DuplicateFence(PluginName),
     #[error("the fence {plugin} refuses its section in the app {app}: {error}")]
     Section {
         app: AppId,
@@ -277,8 +279,14 @@ impl Policy {
             return Err(PolicyError::Version { found: raw.version });
         }
 
-        let code: BTreeMap<&PluginName, &dyn Fence> =
-            fences.iter().map(|fence| (fence.name(), *fence)).collect();
+        // Two fences of one name would let the registration order pick
+        // the code that runs (G10). Refuse the pair instead.
+        let mut code: BTreeMap<&PluginName, &dyn Fence> = BTreeMap::new();
+        for fence in fences {
+            if code.insert(fence.name(), *fence).is_some() {
+                return Err(PolicyError::DuplicateFence(fence.name().clone()));
+            }
+        }
         for name in setup.fences() {
             if !code.contains_key(name) {
                 return Err(PolicyError::MissingFence(name.clone()));

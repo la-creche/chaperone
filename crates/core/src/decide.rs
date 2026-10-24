@@ -1,8 +1,9 @@
 //! The decision function (`docs/design.md` 5). It is pure (G3): the caller
 //! passes the policy, the call, the counters, the gate state and the time.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 use std::fmt;
+use std::panic::{self, AssertUnwindSafe};
 
 use crate::hook::{Caller, FenceReason, FenceVerdict, Reach, ToolCall};
 use crate::ids::{ArgName, PluginName, ToolName};
@@ -62,10 +63,10 @@ impl fmt::Display for GateId {
 }
 
 /// The gates of one app instance, as the caller keeps them. Each map value
-/// is the time the entry expires.
+/// is the time the entry expires. An expired entry counts as absent.
 #[derive(Debug, Clone, Copy)]
 pub struct Gates<'a> {
-    pub pending: &'a BTreeSet<GateId>,
+    pub pending: &'a BTreeMap<GateId, Timestamp>,
     pub approved: &'a BTreeMap<GateId, Timestamp>,
     pub denied: &'a BTreeMap<GateId, Timestamp>,
 }
@@ -98,6 +99,10 @@ pub enum DenyReason {
         plugin: PluginName,
         reason: FenceReason,
     },
+    /// The fence panicked instead of returning a verdict (G2).
+    FenceFault {
+        plugin: PluginName,
+    },
     ApprovalDenied,
     GateCap,
 }
@@ -113,6 +118,7 @@ impl DenyReason {
             Self::ToolNotGranted => "tool_not_granted",
             Self::ArgumentFenced { .. } => "argument_fenced",
             Self::Fence { .. } => "fence",
+            Self::FenceFault { .. } => "fence_fault",
             Self::ApprovalDenied => "approval_denied",
             Self::GateCap => "gate_cap",
         }
@@ -227,14 +233,24 @@ enum FenceOutcome {
     Gate,
 }
 
-/// Run every fence in plugin name order. The first deny wins.
+/// Run every fence in plugin name order. The first deny wins. A fence that
+/// panics is a deny (G2). The panic payload is dropped unread, because it
+/// can hold argument text (G9). A fence that does not return blocks the
+/// decision: core has no clock. The `chaperone` program bounds the time
+/// of a decision (`docs/design.md` section 13, step 3.2).
 fn run_fences(app: &App, call: &ToolCall<'_>) -> Result<FenceOutcome, DenyReason> {
     let mut outcome = FenceOutcome::Clear;
     for active in app.fences() {
-        match active.fence.check(call) {
-            FenceVerdict::Pass => {}
-            FenceVerdict::Gate => outcome = FenceOutcome::Gate,
-            FenceVerdict::Deny(reason) => {
+        let verdict = panic::catch_unwind(AssertUnwindSafe(|| active.fence.check(call)));
+        match verdict {
+            Err(_payload) => {
+                return Err(DenyReason::FenceFault {
+                    plugin: active.plugin.clone(),
+                });
+            }
+            Ok(FenceVerdict::Pass) => {}
+            Ok(FenceVerdict::Gate) => outcome = FenceOutcome::Gate,
+            Ok(FenceVerdict::Deny(reason)) => {
                 return Err(DenyReason::Fence {
                     plugin: active.plugin.clone(),
                     reason,
@@ -256,10 +272,11 @@ fn decide_gate(app: &App, call: &ToolCall<'_>, gates: Gates<'_>, now: Timestamp)
     if live(gates.approved) {
         return Decision::Allow;
     }
-    if gates.pending.contains(&id) {
+    if live(gates.pending) {
         return Decision::Gate(id);
     }
-    let pending = u32::try_from(gates.pending.len()).unwrap_or(u32::MAX);
+    let live_pending = gates.pending.values().filter(|end| **end > now).count();
+    let pending = u32::try_from(live_pending).unwrap_or(u32::MAX);
     if pending >= app.limits().max_pending_gates {
         return Decision::Deny(DenyReason::GateCap);
     }

@@ -89,12 +89,12 @@ The rows apply in this order. The first row that matches decides.
 4. A policy argument fence refuses an argument: `Deny(argument_fenced)`.
    - An `allow` fence needs the argument present and equal to a listed value.
    - A `deny` fence refuses a listed value, and refuses an argument that is not a scalar.
-5. A fence plugin returns deny: `Deny(fence)` with that plugin's reason. Fences run in plugin name order. The first deny wins.
+5. A fence plugin returns deny: `Deny(fence)` with that plugin's reason. The reason is a fixed text of the plugin. A fence plugin faults: `Deny(fence_fault)`. Fences run in plugin name order. The first deny wins.
 6. The policy marks the tool `"approval": "required"`, or a fence plugin returns gate:
    1. The gate is denied and not expired: `Deny(approval_denied)`.
    2. The gate is approved and not expired: `Allow`.
-   3. The gate is pending: `Gate(gate_id)`.
-   4. The pending-gate count is at `max_pending_gates`: `Deny(gate_cap)`.
+   3. The gate is pending and not expired: `Gate(gate_id)`.
+   4. The count of pending gates that are not expired is at `max_pending_gates`: `Deny(gate_cap)`.
    5. Otherwise: `Gate(gate_id)`.
 7. Otherwise: `Allow`.
 
@@ -141,7 +141,7 @@ The record keeps a tool name only when the policy configures that exact tool. Al
 
 The record keeps the arguments only as the SHA-256 of their canonical form. Closed types prevent other text from entering these fields.
 
-`CallAudit` consumes itself when it makes the decision record. The next state can make only the applicable final records.
+`CallAudit` writes each record through the audit sink as it changes state. The next state exists only after the sink reports the record durable (G6). No other code holds a record, so no call can run before its decision record. The next state can make only the applicable final records. The transition from a gated call to an allowed call arrives with the approval answer type in step 6.
 
 ## 6. Configuration
 
@@ -156,7 +156,7 @@ All configuration is JSON. The strict reader reads every file. It refuses duplic
 
 Rules:
 
-- Each file names its schema in `$schema`.
+- Each file can name its schema in `$schema`. Step 8 publishes the schemas. It then fixes the value of `$schema` for each file and makes the field required.
 - Grants and install entries take a typed `note` field for the reason. JSON has no comments.
 - The policy file names a plugin by name only. It cannot launch a binary or bind a secret.
 - The editor's OS user cannot write `install.json`.
@@ -248,8 +248,10 @@ In version 1, the default front door serves plain HTTP only on a loopback addres
 `chaperone token new <app>` creates a bearer token for an app instance:
 
 1. It takes 32 bytes from the OS random source, through `getrandom`.
-2. It prints the token once.
-3. It stores only the SHA-256 digest in `policy.json`, through `sha2`.
+2. It writes the bytes as 64 lower-case hex characters. This text is the token. It prints the token once.
+3. It stores only the SHA-256 digest of the token text in `policy.json`, through `sha2`.
+
+The `bearer` identity plugin refuses bearer text that is not 64 lower-case hex characters. A digest of any other text in `policy.json` authenticates nothing.
 
 Each app instance can hold two digests, so a token can rotate with no downtime. chaperone compares digests in constant time, through `subtle`. chaperone uses no cryptography code of its own.
 
@@ -321,4 +323,5 @@ One pull request per step:
 | The exact framing of the secret message on stdin | Step 4 |
 | The adapter traits: front door, secret source, audit sink | Steps 3 and 5 |
 | JSON Schema generation for the editor | Step 8 |
+| The published `$schema` value of each file, and the step that makes it required | Step 8 |
 | Stage (b): sandbox per app instance, the OpenHands runtime, the model pass-through | After version 1 |

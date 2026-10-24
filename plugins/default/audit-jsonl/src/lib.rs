@@ -4,10 +4,15 @@
 //!
 //! Each write ends with `sync_all`. A new file and its parent directory are
 //! also synced, so the new directory entry survives a crash.
+//!
+//! The sink refuses an unsafe audit path: a symbolic link, a file that is
+//! not a regular file, or a file with a mode other than 0600. A link could
+//! send the records elsewhere, and a wider mode would let another OS user
+//! read or change them.
 
-use std::fs::{File, OpenOptions};
+use std::fs::{File, FileType, OpenOptions};
 use std::io::{ErrorKind, Write};
-use std::os::unix::fs::OpenOptionsExt;
+use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
 use std::path::Path;
 use std::sync::Mutex;
 
@@ -17,6 +22,20 @@ use time::OffsetDateTime;
 use time::format_description::well_known::Rfc3339;
 
 const FILE_MODE: u32 = 0o600;
+const MODE_BITS: u32 = 0o777;
+
+/// Why the audit file cannot be used. chaperone then refuses to start (G6).
+#[derive(Debug, thiserror::Error)]
+pub enum OpenError {
+    #[error("the audit file could not be opened or synced: {0}")]
+    Io(#[from] std::io::Error),
+    #[error("the audit path is a symbolic link")]
+    Link,
+    #[error("the audit path is not a regular file")]
+    NotRegular,
+    #[error("the audit file has mode {found:o}, not {FILE_MODE:o}")]
+    Mode { found: u32 },
+}
 
 /// The JSONL audit sink.
 #[derive(Debug)]
@@ -26,30 +45,59 @@ pub struct JsonlAudit {
 
 impl JsonlAudit {
     /// Open `path` for append. Create it with mode 0600 if it is missing.
-    /// Sync a new file and its parent directory before return.
+    /// Refuse a link, a file that is not regular and a file with another
+    /// mode. Sync a new file and its parent directory before return.
     ///
     /// # Errors
     ///
-    /// Returns the I/O error when the file cannot be opened or synced.
-    pub fn open(path: &Path) -> std::io::Result<Self> {
-        let created = OpenOptions::new()
-            .append(true)
-            .create_new(true)
-            .mode(FILE_MODE)
-            .open(path);
-        let file = match created {
-            Ok(file) => file,
-            Err(error) if error.kind() == ErrorKind::AlreadyExists => {
-                OpenOptions::new().append(true).open(path)?
-            }
-            Err(error) => return Err(error),
-        };
+    /// Returns an [`OpenError`] when the path is unsafe or the I/O fails.
+    pub fn open(path: &Path) -> Result<Self, OpenError> {
+        let file = open_no_follow(path)?;
+        check_file(&file)?;
         file.sync_all()?;
         sync_parent(path)?;
         Ok(Self {
             file: Mutex::new(file),
         })
     }
+}
+
+/// Open `path` for append without following a final symbolic link. Create
+/// the file with mode 0600 when it is missing.
+fn open_no_follow(path: &Path) -> Result<File, OpenError> {
+    let created = OpenOptions::new()
+        .append(true)
+        .create_new(true)
+        .mode(FILE_MODE)
+        .custom_flags(libc::O_NOFOLLOW)
+        .open(path);
+    let existing = match created {
+        Ok(file) => return Ok(file),
+        Err(error) if error.kind() == ErrorKind::AlreadyExists => OpenOptions::new()
+            .append(true)
+            .custom_flags(libc::O_NOFOLLOW)
+            .open(path),
+        Err(error) => return Err(OpenError::Io(error)),
+    };
+    match existing {
+        Ok(file) => Ok(file),
+        Err(error) if error.raw_os_error() == Some(libc::ELOOP) => Err(OpenError::Link),
+        Err(error) => Err(OpenError::Io(error)),
+    }
+}
+
+/// Check the opened file, not the path. A file swapped in after the open
+/// is checked too.
+fn check_file(file: &File) -> Result<(), OpenError> {
+    let metadata = file.metadata()?;
+    if !FileType::is_file(&metadata.file_type()) {
+        return Err(OpenError::NotRegular);
+    }
+    let found = metadata.permissions().mode() & MODE_BITS;
+    if found != FILE_MODE {
+        return Err(OpenError::Mode { found });
+    }
+    Ok(())
 }
 
 fn sync_parent(path: &Path) -> std::io::Result<()> {
@@ -142,12 +190,9 @@ mod tests {
         )
     }
 
-    fn decided(call: CallNumber, decision: Decision) -> AuditRecord {
-        audit(call).decided(decision, START).0
-    }
-
-    fn allowed(call: CallNumber) -> chaperone_core::AllowedCall {
-        match audit(call).decided(Decision::Allow, START).1 {
+    /// Write the decision record of an allow and return the next state.
+    fn allowed(call: CallNumber, sink: &JsonlAudit) -> chaperone_core::AllowedCall {
+        match audit(call).decided(Decision::Allow, START, sink).unwrap() {
             AfterDecision::Allowed(allowed) => allowed,
             AfterDecision::Denied(_) | AfterDecision::Gated(_) => panic!("an allow"),
         }
@@ -161,11 +206,13 @@ mod tests {
         let first = CallNumber::FIRST;
         let second = first.checked_next().unwrap();
 
-        sink.write(&decided(first, Decision::Allow)).unwrap();
-        sink.write(&allowed(first).failed(CallFault::NotConnected, END))
+        allowed(first, &sink)
+            .failed(CallFault::NotConnected, END, &sink)
             .unwrap();
-        sink.write(&decided(second, Decision::Deny(DenyReason::ToolNotGranted)))
+        let denied = audit(second)
+            .decided(Decision::Deny(DenyReason::ToolNotGranted), START, &sink)
             .unwrap();
+        assert!(matches!(denied, AfterDecision::Denied(_)));
 
         let text = std::fs::read_to_string(&path).unwrap();
         let lines: Vec<&str> = text.lines().collect();
@@ -184,6 +231,35 @@ mod tests {
     }
 
     #[test]
+    fn refuses_a_symbolic_link() {
+        let dir = tempfile::tempdir().unwrap();
+        let target = dir.path().join("elsewhere.jsonl");
+        std::fs::write(&target, b"").unwrap();
+        let link = dir.path().join("audit.jsonl");
+        std::os::unix::fs::symlink(&target, &link).unwrap();
+        assert!(matches!(JsonlAudit::open(&link), Err(OpenError::Link)));
+        assert_eq!(std::fs::metadata(&target).unwrap().len(), 0);
+    }
+
+    #[test]
+    fn refuses_a_file_with_a_wider_mode() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("audit.jsonl");
+        std::fs::write(&path, b"").unwrap();
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o644)).unwrap();
+        assert!(matches!(
+            JsonlAudit::open(&path),
+            Err(OpenError::Mode { found: 0o644 })
+        ));
+    }
+
+    #[test]
+    fn refuses_a_path_that_is_not_a_regular_file() {
+        let dir = tempfile::tempdir().unwrap();
+        assert!(JsonlAudit::open(dir.path()).is_err());
+    }
+
+    #[test]
     fn creates_and_then_appends_to_the_file() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("audit.jsonl");
@@ -191,15 +267,12 @@ mod tests {
         let first = CallNumber::FIRST;
         let second = first.checked_next().unwrap();
 
-        JsonlAudit::open(&path)
-            .unwrap()
-            .write(&allowed(first).ran(false, END))
-            .unwrap();
-        JsonlAudit::open(&path)
-            .unwrap()
-            .write(&allowed(second).ran(true, END))
-            .unwrap();
+        let sink = JsonlAudit::open(&path).unwrap();
+        allowed(first, &sink).ran(false, END, &sink).unwrap();
+        drop(sink);
+        let sink = JsonlAudit::open(&path).unwrap();
+        allowed(second, &sink).ran(true, END, &sink).unwrap();
 
-        assert_eq!(std::fs::read_to_string(&path).unwrap().lines().count(), 2);
+        assert_eq!(std::fs::read_to_string(&path).unwrap().lines().count(), 4);
     }
 }

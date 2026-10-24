@@ -4,14 +4,46 @@
 
 use std::collections::BTreeMap;
 
-/// One JSON value, built only by the strict reader.
+/// A finite `f64`. NaN and the infinities have no JSON text, so a value
+/// that held one would share the canonical text `null` with
+/// [`ArgValue::Null`], and two different calls would share one gate ID.
+/// The type makes such a value impossible to build.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Finite(f64);
+
+impl Finite {
+    /// Zero.
+    pub const ZERO: Self = Self(0.0);
+
+    /// Wrap `value` when it is finite. `-0.0` becomes `0.0`, so equal
+    /// numbers have one canonical text.
+    #[must_use]
+    pub fn new(value: f64) -> Option<Self> {
+        if !value.is_finite() {
+            return None;
+        }
+        Some(if value == 0.0 {
+            Self::ZERO
+        } else {
+            Self(value)
+        })
+    }
+
+    #[must_use]
+    pub const fn get(self) -> f64 {
+        self.0
+    }
+}
+
+/// One JSON value. The strict reader builds it from a text. Other code can
+/// build one too, and every value it can build has a JSON text.
 #[derive(Debug, Clone, PartialEq)]
 pub enum ArgValue {
     Null,
     Bool(bool),
     Int(i64),
     UInt(u64),
-    Float(f64),
+    Float(Finite),
     String(String),
     Array(Vec<ArgValue>),
     Object(BTreeMap<String, ArgValue>),
@@ -44,8 +76,14 @@ impl ArgValue {
         if let Some(uint) = number.as_u64() {
             return Self::UInt(uint);
         }
-        // Without the arbitrary_precision feature, every other number is an f64.
-        Self::Float(number.as_f64().unwrap_or(0.0))
+        // Without the arbitrary_precision feature, every other number is a
+        // finite f64. The fallback cannot happen; it keeps the value finite.
+        Self::Float(
+            number
+                .as_f64()
+                .and_then(Finite::new)
+                .unwrap_or(Finite::ZERO),
+        )
     }
 
     /// The canonical text: no white space, keys sorted by code point, each
@@ -117,18 +155,17 @@ fn write_string(text: &str, out: &mut String) {
     }
 }
 
-fn write_float(float: f64, out: &mut String) {
-    // The strict reader admits only finite floats. Treat -0.0 as 0.0.
-    let float = if float == 0.0 { 0.0 } else { float };
-    match serde_json::to_string(&float) {
+fn write_float(float: Finite, out: &mut String) {
+    // A finite float always serializes. The fallback keeps the text a number.
+    match serde_json::to_string(&float.get()) {
         Ok(text) => out.push_str(&text),
-        Err(_) => out.push_str("null"),
+        Err(_) => out.push('0'),
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::ArgValue;
+    use super::{ArgValue, Finite};
     use crate::strict::{ByteCap, read_value};
 
     const CAP: ByteCap = ByteCap::new(4096);
@@ -148,7 +185,7 @@ mod tests {
 
     #[test]
     fn an_escape_and_its_character_give_one_text() {
-        assert_eq!(canon(r#""a""#), canon(r#""a""#));
+        assert_eq!(canon(r#""\u0061""#), canon(r#""a""#));
     }
 
     #[test]
@@ -163,6 +200,15 @@ mod tests {
     #[test]
     fn negative_zero_equals_zero() {
         assert_eq!(canon("-0.0"), canon("0.0"));
+        assert_eq!(Finite::new(-0.0), Finite::new(0.0));
+    }
+
+    #[test]
+    fn a_float_without_a_json_text_cannot_be_built() {
+        assert_eq!(Finite::new(f64::NAN), None);
+        assert_eq!(Finite::new(f64::INFINITY), None);
+        assert_eq!(Finite::new(f64::NEG_INFINITY), None);
+        assert_eq!(Finite::new(1.5).map(Finite::get), Some(1.5));
     }
 
     #[test]

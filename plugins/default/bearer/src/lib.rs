@@ -2,10 +2,26 @@
 //! compares the digest with every token digest of every app instance, in
 //! constant time. A match resolves to that app instance with its full
 //! reach. No bearer, or no match, resolves to nothing (G4).
+//!
+//! A token is the 64 lower-case hex characters of 32 random bytes
+//! (`docs/design.md` section 9). The plugin refuses bearer text in any
+//! other form before it hashes, so a digest of a short or hand-made text
+//! in the policy file never authenticates anything.
 
 use chaperone_core::{Caller, Credentials, Identity, Policy, Reach};
 use sha2::{Digest, Sha256};
 use subtle::ConstantTimeEq;
+
+/// The length of a token: 32 bytes as lower-case hex.
+const TOKEN_LEN: usize = 64;
+
+/// Whether `text` has the form of a token.
+fn is_token(text: &str) -> bool {
+    text.len() == TOKEN_LEN
+        && text
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+}
 
 /// The bearer identity plugin.
 #[derive(Debug, Default, Clone, Copy)]
@@ -16,9 +32,13 @@ impl Identity for BearerIdentity {
         let bearer = credentials.bearer?;
         #[expect(
             clippy::disallowed_methods,
-            reason = "G9: the token is hashed at once and never stored"
+            reason = "G9: the token is checked and hashed at once, and never stored"
         )]
-        let digest = Sha256::digest(bearer.expose().as_bytes());
+        let text = bearer.expose();
+        if !is_token(text) {
+            return None;
+        }
+        let digest = Sha256::digest(text.as_bytes());
 
         // Compare against every digest, so the time does not depend on
         // which app instance matches. The policy holds each digest once.
@@ -103,6 +123,11 @@ mod tests {
             .collect()
     }
 
+    const TOKEN_ONE: &str = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+    const TOKEN_TWO: &str = "fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210";
+    const TOKEN_OLD: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+    const TOKEN_NEW: &str = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+
     fn resolve(policy: &Policy, token: Option<&str>) -> Option<Caller> {
         let bearer = token.map(|token| Bearer::new(token.to_owned()));
         let headers = BTreeMap::new();
@@ -115,24 +140,34 @@ mod tests {
 
     #[test]
     fn a_known_token_resolves_to_its_app() {
-        let policy = policy(&[&sha256_hex("tok-one")]);
-        let caller = resolve(&policy, Some("tok-one")).unwrap();
+        let policy = policy(&[&sha256_hex(TOKEN_ONE)]);
+        let caller = resolve(&policy, Some(TOKEN_ONE)).unwrap();
         assert_eq!(caller.app, AppId::try_new("librechat").unwrap());
         assert_eq!(caller.reach, Reach::Full);
     }
 
     #[test]
     fn both_digests_work_during_a_rotation() {
-        let policy = policy(&[&sha256_hex("old"), &sha256_hex("new")]);
-        assert!(resolve(&policy, Some("old")).is_some());
-        assert!(resolve(&policy, Some("new")).is_some());
+        let policy = policy(&[&sha256_hex(TOKEN_OLD), &sha256_hex(TOKEN_NEW)]);
+        assert!(resolve(&policy, Some(TOKEN_OLD)).is_some());
+        assert!(resolve(&policy, Some(TOKEN_NEW)).is_some());
     }
 
     #[test]
     fn an_unknown_token_or_no_token_resolves_to_nothing() {
-        let policy = policy(&[&sha256_hex("tok-one")]);
-        assert!(resolve(&policy, Some("tok-two")).is_none());
+        let policy = policy(&[&sha256_hex(TOKEN_ONE)]);
+        assert!(resolve(&policy, Some(TOKEN_TWO)).is_none());
         assert!(resolve(&policy, Some("")).is_none());
         assert!(resolve(&policy, None).is_none());
+    }
+
+    #[test]
+    fn text_that_is_not_a_token_never_resolves_even_with_its_digest() {
+        let upper = TOKEN_ONE.to_ascii_uppercase();
+        let long = format!("{TOKEN_ONE}0");
+        for text in ["old", "", &upper, &TOKEN_ONE[..63], &long] {
+            let policy = policy(&[&sha256_hex(text)]);
+            assert!(resolve(&policy, Some(text)).is_none(), "{text:?}");
+        }
     }
 }
