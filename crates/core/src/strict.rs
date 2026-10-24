@@ -20,7 +20,7 @@
 //! The reader makes two passes. The first pass checks rules 3 to 6 and
 //! builds nothing. The second pass fills the typed value.
 
-use std::collections::HashSet;
+use std::collections::BTreeSet;
 use std::fmt;
 
 use serde::de::{self, DeserializeOwned, DeserializeSeed, MapAccess, SeqAccess, Visitor};
@@ -227,7 +227,7 @@ impl<'de> Visitor<'de> for Check<'_> {
         if self.at_limit() {
             return Err(self.fail(StrictError::TooDeep));
         }
-        let mut keys = HashSet::new();
+        let mut keys = BTreeSet::new();
         while let Some(key) = map.next_key::<String>()? {
             if keys.contains(&key) {
                 return Err(self.fail(StrictError::DuplicateKey { key }));

@@ -16,6 +16,8 @@ disallowed-methods = [
   { path = "std::process::Command::new", reason = "G3: no I/O in core" },
 ]
 disallowed-types = [
+  { path = "std::collections::HashMap", reason = "G3: RandomState reads OS randomness. Use BTreeMap" },
+  { path = "std::collections::HashSet", reason = "G3: RandomState reads OS randomness. Use BTreeSet" },
   { path = "std::fs::File", reason = "G3: no I/O in core" },
   { path = "std::fs::OpenOptions", reason = "G3: no I/O in core" },
   { path = "std::net::TcpStream", reason = "G3: no I/O in core" },
