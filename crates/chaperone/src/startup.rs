@@ -26,7 +26,7 @@ const BEARER: &str = "bearer";
 const AUDIT_JSONL: &str = "audit-jsonl";
 
 /// The one plugin this build runs in each of these slots. `main` serves the
-/// `mcp-http` front door. The secret source comes in build step 5, and the
+/// `mcp-http` front door. The secret source comes in build step 4, and the
 /// approval channel in build step 6. Any other plugin in one of these slots
 /// refuses start (G2).
 const ACCEPTED: [(Slot, &str); 3] = [
@@ -54,7 +54,7 @@ pub enum StartError {
     EmptySlot(Slot),
     #[error("this build has no code for {plugin} in the slot {slot}")]
     NoCode { slot: Slot, plugin: PluginName },
-    #[error("{plugin} needs secrets, and the secret source comes in build step 5")]
+    #[error("{plugin} needs secrets, and the secret source comes in build step 4")]
     SecretsNotReady { plugin: PluginName },
     #[error("the OS random source failed: {0}")]
     Random(getrandom::Error),

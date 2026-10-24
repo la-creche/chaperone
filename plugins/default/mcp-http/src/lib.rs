@@ -114,7 +114,7 @@ fn error_text(text: String) -> CallToolResult {
     CallToolResult::error(vec![ContentBlock::text(text)])
 }
 
-/// The MCP result of one outcome. Build step 4 adds the result of a call
+/// The MCP result of one outcome. Build step 5 adds the result of a call
 /// that ran.
 fn render(outcome: CallOutcome) -> CallToolResult {
     match outcome {
