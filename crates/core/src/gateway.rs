@@ -6,12 +6,12 @@
 use std::collections::BTreeMap;
 use std::future::Future;
 
-use serde::Deserialize;
 use serde_json::value::RawValue;
 
 use crate::decide::{DenyReason, GateId};
 use crate::exposed::ExposedName;
 use crate::hook::Credentials;
+use crate::mcp::{ProtocolVersion, ResultError, ResultSchemas};
 use crate::strict::{self, ByteCap, StrictError};
 use crate::value::ArgValue;
 
@@ -24,96 +24,70 @@ pub struct ListedTool {
     pub input_schema: BTreeMap<String, ArgValue>,
 }
 
-/// The result an upstream returned for one call: an MCP `CallToolResult`,
-/// as strict JSON text. [`ToolOutput::read`] checks the shape, so a value
-/// of this type is a valid result. chaperone passes it on unchanged, except
-/// that it blanks each exact secret value (G9).
+/// The result an upstream returned for one call: an MCP `CallToolResult`
+/// of the protocol version that the upstream negotiated, as strict JSON
+/// text. [`ToolOutput::read`] checks it against the official schema of that
+/// version, so a value of this type is a valid result. chaperone passes it
+/// on unchanged, except that it blanks each exact secret value (G9).
 #[derive(Debug, Clone)]
 pub struct ToolOutput {
     raw: Box<RawValue>,
+    version: ProtocolVersion,
     is_error: bool,
 }
 
 /// The largest upstream result chaperone passes on.
 pub const OUTPUT_CAP: ByteCap = ByteCap::new(4 * 1024 * 1024);
 
-/// Why an upstream result is not a valid `CallToolResult`. The call then
-/// fails (G2).
+/// Why an upstream result is not valid. The call then fails (G2). Neither
+/// variant holds text from the result (G9).
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum OutputError {
     #[error("the upstream result is not strict JSON: {0}")]
     Read(#[from] StrictError),
-    #[error("the upstream result is not an MCP CallToolResult: {0}")]
-    Shape(String),
-}
-
-/// The parts of a `CallToolResult` that chaperone checks. An unknown
-/// top-level field is refused, so a result of a newer protocol fails
-/// instead of passing unread.
-#[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
-struct ResultShape {
-    #[serde(rename = "content")]
-    _content: Vec<ContentShape>,
-    #[serde(rename = "isError", default)]
-    is_error: Option<bool>,
-    #[serde(rename = "structuredContent", default)]
-    _structured_content: Option<BTreeMap<String, serde::de::IgnoredAny>>,
-    #[serde(rename = "_meta", default)]
-    _meta: Option<BTreeMap<String, serde::de::IgnoredAny>>,
-    #[serde(rename = "resultType", default)]
-    _result_type: Option<ResultType>,
-}
-
-/// Only a complete result runs a call. An `input_required` result asks the
-/// app for input, and chaperone does not pass that through yet.
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "snake_case")]
-enum ResultType {
-    Complete,
-}
-
-/// One content block. The tag must be a known type, and the fields that
-/// the type needs must be present.
-#[derive(Debug, Deserialize)]
-#[serde(tag = "type", rename_all = "snake_case")]
-#[expect(dead_code, reason = "the fields exist only to check the shape")]
-enum ContentShape {
-    Text {
-        text: String,
-    },
-    Image {
-        data: String,
-        #[serde(rename = "mimeType")]
-        mime_type: String,
-    },
-    Audio {
-        data: String,
-        #[serde(rename = "mimeType")]
-        mime_type: String,
-    },
-    Resource {
-        resource: BTreeMap<String, serde::de::IgnoredAny>,
-    },
-    ResourceLink {
-        uri: String,
-    },
+    #[error("the upstream result is not valid: {0}")]
+    Schema(#[from] ResultError),
+    /// The schema allows any `resultType` string. The spec says only
+    /// `complete` means the result holds the final content. chaperone
+    /// refuses any other value, and refuses a missing value where the
+    /// version requires one.
+    #[error("not_complete: the upstream result is not a complete result")]
+    NotComplete,
 }
 
 impl ToolOutput {
-    /// Read and check an upstream result.
+    /// Read an upstream result and check it against the `CallToolResult`
+    /// schema of `version`.
     ///
     /// # Errors
     ///
     /// Returns an [`OutputError`] when the bytes are not strict JSON, or
-    /// not an MCP `CallToolResult`.
-    pub fn read(bytes: &[u8]) -> Result<Self, OutputError> {
+    /// break the schema.
+    pub fn read(
+        bytes: &[u8],
+        version: ProtocolVersion,
+        schemas: &ResultSchemas,
+    ) -> Result<Self, OutputError> {
         let raw: Box<RawValue> = strict::read(bytes, OUTPUT_CAP)?;
-        let shape: ResultShape = serde_json::from_str(raw.get())
-            .map_err(|error| OutputError::Shape(error.to_string()))?;
+        let value: serde_json::Value =
+            serde_json::from_str(raw.get()).map_err(|error| StrictError::shape(&error))?;
+        schemas.check(version, &value)?;
+        let complete = match value.get("resultType") {
+            Some(result_type) => result_type.as_str() == Some("complete"),
+            None => version != ProtocolVersion::V2026_07_28,
+        };
+        if !complete {
+            return Err(OutputError::NotComplete);
+        }
+        // The schema makes `isError` a boolean when it is present.
+        let is_error = value
+            .get("isError")
+            .and_then(serde_json::Value::as_bool)
+            .unwrap_or(false);
         Ok(Self {
             raw,
-            is_error: shape.is_error.unwrap_or(false),
+            version,
+            is_error,
         })
     }
 
@@ -121,6 +95,12 @@ impl ToolOutput {
     #[must_use]
     pub fn as_json(&self) -> &str {
         self.raw.get()
+    }
+
+    /// The protocol version of the result.
+    #[must_use]
+    pub fn version(&self) -> ProtocolVersion {
+        self.version
     }
 
     /// The upstream's own error flag. The audit records it.
@@ -200,40 +180,120 @@ pub trait Gateway: Send + Sync + 'static {
 mod tests {
     use super::*;
 
-    fn read(text: &str) -> Result<ToolOutput, OutputError> {
-        ToolOutput::read(text.as_bytes())
+    const SECRET: &str = "tok_live_do_not_log_this";
+
+    fn schemas() -> ResultSchemas {
+        ResultSchemas::compile().unwrap()
+    }
+
+    fn read(version: ProtocolVersion, text: &str) -> Result<ToolOutput, OutputError> {
+        ToolOutput::read(text.as_bytes(), version, &schemas())
+    }
+
+    const TEXT: &str = r#"{"type":"text","text":"done"}"#;
+    const IMAGE: &str = r#"{"type":"image","data":"aGk=","mimeType":"image/png"}"#;
+    const AUDIO: &str = r#"{"type":"audio","data":"aGk=","mimeType":"audio/wav"}"#;
+    const LINK: &str = r#"{"type":"resource_link","uri":"file:///a","name":"a"}"#;
+    const EMBEDDED: &str = r#"{"type":"resource","resource":{"uri":"file:///a","text":"body"}}"#;
+
+    fn result(version: ProtocolVersion, content: &str, extra: &str) -> String {
+        let result_type = match version {
+            ProtocolVersion::V2026_07_28 => r#","resultType":"complete""#,
+            ProtocolVersion::V2025_06_18 | ProtocolVersion::V2025_11_25 => "",
+        };
+        format!(r#"{{"content":[{content}]{result_type}{extra}}}"#)
     }
 
     #[test]
-    fn reads_a_valid_result_and_its_error_flag() {
-        let ok = read(r#"{"content":[{"type":"text","text":"done"}]}"#).unwrap();
-        assert!(!ok.is_error());
-        let failed = read(
-            r#"{"content":[{"type":"text","text":"no"}],"isError":true,"resultType":"complete",
-                "structuredContent":{"a":1},"_meta":{}}"#,
-        )
-        .unwrap();
-        assert!(failed.is_error());
+    fn every_content_variant_passes_in_every_version() {
+        for version in ProtocolVersion::ALL {
+            for block in [TEXT, IMAGE, AUDIO, LINK, EMBEDDED] {
+                let text = result(version, block, "");
+                assert!(read(version, &text).is_ok(), "{version}: {text}");
+            }
+        }
+    }
+
+    #[test]
+    fn the_error_flag_is_read() {
+        let version = ProtocolVersion::V2026_07_28;
+        let output = read(version, &result(version, TEXT, r#","isError":true"#)).unwrap();
+        assert!(output.is_error());
+        let output = read(version, &result(version, TEXT, "")).unwrap();
+        assert!(!output.is_error());
+    }
+
+    #[test]
+    fn structured_content_follows_each_version() {
+        // 2026-07-28: any JSON value. Older versions: an object only.
+        let new = ProtocolVersion::V2026_07_28;
+        for value in ["[1,2]", "7", "\"text\"", "null", "{\"a\":1}"] {
+            let text = result(new, "", &format!(r#","structuredContent":{value}"#));
+            assert!(read(new, &text).is_ok(), "{text}");
+        }
+        for old in [ProtocolVersion::V2025_06_18, ProtocolVersion::V2025_11_25] {
+            let object = result(old, "", r#","structuredContent":{"a":1}"#);
+            assert!(read(old, &object).is_ok(), "{object}");
+            let array = result(old, "", r#","structuredContent":[1,2]"#);
+            assert!(read(old, &array).is_err(), "{array}");
+        }
     }
 
     #[test]
     fn refuses_a_value_that_is_not_a_result() {
-        for bad in [
-            "null",
-            "[]",
-            "{}",
-            r#"{"content":{}}"#,
-            r#"{"content":[{"type":"video"}]}"#,
-            r#"{"content":[{"type":"text"}]}"#,
-            r#"{"content":[],"extra":1}"#,
-            r#"{"content":[],"resultType":"input_required"}"#,
-            r#"{"content":[],"isError":"yes"}"#,
-        ] {
-            assert!(
-                matches!(read(bad), Err(OutputError::Shape(_))),
-                "{bad} should be refused"
-            );
+        for version in ProtocolVersion::ALL {
+            for bad in [
+                "null".to_owned(),
+                "[]".to_owned(),
+                "7".to_owned(),
+                "{}".to_owned(),
+                r#"{"content":{}}"#.to_owned(),
+                result(version, r#"{"type":"video"}"#, ""),
+                result(version, r#"{"type":"text"}"#, ""),
+                result(version, r#"{"type":"resource_link","uri":"file:///a"}"#, ""),
+                result(version, r#"{"type":"resource","resource":{}}"#, ""),
+                result(version, TEXT, r#","isError":"yes""#),
+            ] {
+                assert!(
+                    matches!(read(version, &bad), Err(OutputError::Schema(_))),
+                    "{version}: {bad} should be refused"
+                );
+            }
         }
-        assert!(matches!(read("{"), Err(OutputError::Read(_))));
+        assert!(matches!(
+            read(ProtocolVersion::V2026_07_28, "{"),
+            Err(OutputError::Read(_))
+        ));
+    }
+
+    #[test]
+    fn only_a_complete_result_type_passes() {
+        let version = ProtocolVersion::V2026_07_28;
+        // The schema requires the field in 2026-07-28.
+        assert!(matches!(
+            read(version, r#"{"content":[]}"#),
+            Err(OutputError::Schema(_))
+        ));
+        for version in ProtocolVersion::ALL {
+            let other = r#"{"content":[],"resultType":"input_required"}"#;
+            assert_eq!(read(version, other).unwrap_err(), OutputError::NotComplete);
+        }
+        // Older versions have no resultType, so absent means complete.
+        assert!(read(ProtocolVersion::V2025_06_18, r#"{"content":[]}"#).is_ok());
+    }
+
+    #[test]
+    fn an_error_never_shows_result_text() {
+        let version = ProtocolVersion::V2026_07_28;
+        for bad in [
+            format!(r#"{{"content":[],"resultType":"{SECRET}"}}"#),
+            format!(r#"{{"content":[{{"type":"{SECRET}"}}],"resultType":"complete"}}"#),
+            format!(r#"{{"content":[],"resultType":"complete","isError":"{SECRET}"}}"#),
+            format!(r#"{{"{SECRET}": 1, "{SECRET}": 2}}"#),
+        ] {
+            let error = read(version, &bad).unwrap_err();
+            assert!(!error.to_string().contains(SECRET), "{error}");
+            assert!(!format!("{error:?}").contains(SECRET), "{error:?}");
+        }
     }
 }

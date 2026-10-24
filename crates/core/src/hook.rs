@@ -11,6 +11,7 @@ use serde_json::value::RawValue;
 use crate::ids::{AppId, PluginName, ToolName};
 use crate::policy::Policy;
 use crate::secret::Bearer;
+use crate::strict::StrictError;
 use crate::time::Timestamp;
 use crate::value::ArgValue;
 
@@ -115,15 +116,24 @@ impl<'a> RawSection<'a> {
     ///
     /// Returns a [`SectionError`] when the section does not fit `T`.
     pub fn parse<T: DeserializeOwned>(&self) -> Result<T, SectionError> {
-        serde_json::from_str(self.0.get()).map_err(|error| SectionError(error.to_string()))
+        serde_json::from_str(self.0.get())
+            .map_err(|error| SectionError::Parse(StrictError::shape(&error)))
     }
 }
 
 /// Why a plugin refuses its policy section. A policy with such a section
-/// does not load (G2).
-#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
-#[error("{0}")]
-pub struct SectionError(pub String);
+/// does not load (G2). Like [`StrictError`], it holds no text from the
+/// section, only a code and a location.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
+pub enum SectionError {
+    /// The section does not fit the plugin's type.
+    #[error("{0}")]
+    Parse(StrictError),
+    /// The section fits the type, but breaks a rule of the plugin. The
+    /// text is the plugin's own fixed message, never section text.
+    #[error("invalid: {0}")]
+    Invalid(&'static str),
+}
 
 /// The fence hook. Any number of fences can be active.
 pub trait Fence: Send + Sync + fmt::Debug {
@@ -145,6 +155,31 @@ pub trait Fence: Send + Sync + fmt::Debug {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_section_error_never_shows_section_text() {
+        const SECRET: &str = "tok_live_do_not_log_this";
+        #[derive(Debug, serde::Deserialize)]
+        #[serde(deny_unknown_fields)]
+        #[expect(dead_code, reason = "the field exists only to check the shape")]
+        struct Section {
+            mode: Mode,
+        }
+        #[derive(Debug, serde::Deserialize)]
+        #[serde(rename_all = "lowercase")]
+        enum Mode {
+            On,
+        }
+        for text in [
+            format!(r#"{{"mode": "{SECRET}"}}"#),
+            format!(r#"{{"mode": "on", "{SECRET}": 1}}"#),
+        ] {
+            let raw: Box<RawValue> = serde_json::from_str(&text).unwrap();
+            let error = RawSection::new(&raw).parse::<Section>().unwrap_err();
+            assert!(!error.to_string().contains(SECRET), "{error}");
+            assert!(!format!("{error:?}").contains(SECRET), "{error:?}");
+        }
+    }
 
     #[test]
     fn a_fence_reason_is_cut_at_a_character_boundary() {

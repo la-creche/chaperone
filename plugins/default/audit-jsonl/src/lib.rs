@@ -65,20 +65,22 @@ fn event_parts(event: &AuditEvent) -> (&'static str, String) {
     match event {
         AuditEvent::Decided(decision) => ("decided", AuditRecord::decision_code(decision)),
         AuditEvent::Ran { is_error } => ("ran", format!("is_error:{is_error}")),
+        AuditEvent::Waiting(gate) => ("waiting", format!("gate:{gate}")),
         AuditEvent::Failed(fault) => ("failed", fault.code().to_owned()),
     }
 }
 
 impl AuditSink for JsonlAudit {
     fn write(&self, record: &AuditRecord) -> Result<(), AuditError> {
-        let (event, detail) = event_parts(&record.event);
+        let (event, detail) = event_parts(record.event());
+        let arguments_sha256 = record.arguments().to_hex();
         let line = Line {
-            run: record.run.to_hex(),
-            call: record.call.0,
-            time: rfc3339(record.time.unix_millis())?,
-            app: record.app.as_ref().map(|app| app.as_str()),
-            tool: record.tool.as_str(),
-            arguments_sha256: &record.arguments_sha256,
+            run: record.run().to_hex(),
+            call: record.call().0,
+            time: rfc3339(record.time().unix_millis())?,
+            app: record.app().map(|app| app.as_str()),
+            tool: record.tool().as_str(),
+            arguments_sha256: &arguments_sha256,
             event,
             detail,
         };
@@ -101,9 +103,12 @@ impl AuditSink for JsonlAudit {
 mod tests {
     use std::os::unix::fs::PermissionsExt;
 
+    use std::collections::BTreeMap;
+
     use chaperone_core::{
-        AppId, AuditTool, CallFault, CallNumber, Catalog, Decision, DenyReason, Found, InstallFile,
-        Location, Manifest, PluginKey, Policy, RunId, Timestamp,
+        AfterDecision, AppId, ArgumentsDigest, AuditTool, CallAudit, CallFault, CallNumber,
+        Catalog, Decision, DenyReason, Found, InstallFile, Location, Manifest, PluginKey, Policy,
+        RunId, Timestamp,
     };
 
     use super::*;
@@ -145,15 +150,25 @@ mod tests {
         Policy::load(br#"{"version":1}"#, &setup, &[]).unwrap()
     }
 
-    fn record(call: u64, event: AuditEvent) -> AuditRecord {
-        AuditRecord {
-            run: RunId::from_bytes([7; 16]),
-            call: CallNumber(call),
-            time: Timestamp::from_unix_millis(1_761_264_000_123),
-            app: Some(AppId::try_new("librechat").unwrap()),
-            tool: AuditTool::lookup("secret-looking-text", &empty_policy()),
-            arguments_sha256: "ab".repeat(32),
-            event,
+    fn audit(call: u64) -> CallAudit {
+        CallAudit::new(
+            RunId::from_bytes([7; 16]),
+            CallNumber(call),
+            Timestamp::from_unix_millis(1_761_264_000_123),
+            Some(AppId::try_new("librechat").unwrap()),
+            AuditTool::lookup("secret-looking-text", &empty_policy()),
+            ArgumentsDigest::of(&BTreeMap::new()),
+        )
+    }
+
+    fn decided(call: u64, decision: &Decision) -> AuditRecord {
+        audit(call).decided(decision).0
+    }
+
+    fn allowed(call: u64) -> chaperone_core::AllowedCall {
+        match audit(call).decided(&Decision::Allow).1 {
+            AfterDecision::Allowed(allowed) => allowed,
+            AfterDecision::Denied | AfterDecision::Gated(_) => panic!("an allow"),
         }
     }
 
@@ -161,19 +176,12 @@ mod tests {
     fn writes_one_line_per_record_with_mode_0600() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("audit.jsonl");
-        let audit = JsonlAudit::open(&path).unwrap();
+        let sink = JsonlAudit::open(&path).unwrap();
 
-        audit
-            .write(&record(1, AuditEvent::Decided(Decision::Allow)))
+        sink.write(&decided(1, &Decision::Allow)).unwrap();
+        sink.write(&allowed(1).failed(CallFault::NotConnected))
             .unwrap();
-        audit
-            .write(&record(
-                2,
-                AuditEvent::Decided(Decision::Deny(DenyReason::ToolNotGranted)),
-            ))
-            .unwrap();
-        audit
-            .write(&record(2, AuditEvent::Failed(CallFault::NotConnected)))
+        sink.write(&decided(2, &Decision::Deny(DenyReason::ToolNotGranted)))
             .unwrap();
 
         let text = std::fs::read_to_string(&path).unwrap();
@@ -187,8 +195,8 @@ mod tests {
             "{}",
             lines[0]
         );
-        assert!(lines[1].contains(r#""detail":"deny:tool_not_granted""#));
-        assert!(lines[2].contains(r#""event":"failed","detail":"not_connected""#));
+        assert!(lines[1].contains(r#""event":"failed","detail":"not_connected""#));
+        assert!(lines[2].contains(r#""detail":"deny:tool_not_granted""#));
 
         let mode = std::fs::metadata(&path).unwrap().permissions().mode() & 0o777;
         assert_eq!(mode, 0o600);
@@ -200,11 +208,11 @@ mod tests {
         let path = dir.path().join("audit.jsonl");
         JsonlAudit::open(&path)
             .unwrap()
-            .write(&record(1, AuditEvent::Ran { is_error: false }))
+            .write(&allowed(1).ran(false))
             .unwrap();
         JsonlAudit::open(&path)
             .unwrap()
-            .write(&record(2, AuditEvent::Ran { is_error: true }))
+            .write(&allowed(2).ran(true))
             .unwrap();
         assert_eq!(std::fs::read_to_string(&path).unwrap().lines().count(), 2);
     }

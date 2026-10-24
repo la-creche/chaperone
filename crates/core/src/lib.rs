@@ -9,6 +9,7 @@ mod gateway;
 mod hook;
 mod ids;
 mod install;
+mod mcp;
 mod plugin;
 mod policy;
 mod secret;
@@ -16,7 +17,10 @@ pub mod strict;
 mod time;
 mod value;
 
-pub use audit::{AuditError, AuditEvent, AuditRecord, AuditSink, AuditTool, CallNumber, RunId};
+pub use audit::{
+    AfterDecision, AllowedCall, ArgumentsDigest, AuditError, AuditEvent, AuditRecord, AuditSink,
+    AuditTool, CallAudit, CallNumber, GatedCall, RunId,
+};
 pub use decide::{Decision, DenyReason, GateId, Gates, Request, decide};
 pub use exposed::{ExposedError, ExposedName, SEPARATOR};
 pub use gateway::{
@@ -33,6 +37,7 @@ pub use install::{
     Binding, Catalog, Found, INSTALL_FILE_CAP, InstallEntry, InstallError, InstallFile, Location,
     PluginKey, SecretDelivery, Setup, SetupError, resolve,
 };
+pub use mcp::{ProtocolVersion, ResultError, ResultSchemas, SchemaError};
 pub use plugin::{Hook, Manifest, ManifestError, PLUGIN_FILE_CAP, PluginKind, Runtime, Slot};
 pub use policy::{
     App, Approval, ArgumentFence, DigestError, Limits, POLICY_FILE_CAP, Policy, PolicyError,

@@ -78,7 +78,7 @@ This repository departs from the guide in these places. Each departure is strict
 ### Errors
 
 - Library code returns a typed error enum. Do not use `unwrap`, `expect` or `panic!` outside tests. Clippy enforces this.
-- An error message names the item and the rule it broke. It never contains a secret value or a token.
+- An error message names the item and the rule it broke. It never contains text from the input, because the input can hold a secret. Map a `serde_json` error with `StrictError::shape`. Do not call `to_string` on it.
 - A fault at a trust boundary becomes a deny with a reason. It does not become a log line and a default value.
 
 ### Code style

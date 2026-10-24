@@ -14,6 +14,7 @@ publish = false
 
 [workspace.dependencies]
 hex = "0.4.3"
+jsonschema = { version = "0.60.1", default-features = false }
 proptest = "1.12.0"
 schemars = "1.2.3"
 secrecy = "0.10.3"

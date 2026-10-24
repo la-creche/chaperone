@@ -8,12 +8,12 @@ use std::str::FromStr;
 
 use serde::{Deserialize, Serialize};
 
-/// Why a text is not a valid name of its kind.
-#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
-#[error("{text:?} is not a valid {kind}: {rule}")]
+/// Why a text is not a valid name of its kind. It names the kind and the
+/// rule, never the text, because the text can come from an app (G9).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
+#[error("not a valid {kind}: {rule}")]
 pub struct NameError {
     kind: &'static str,
-    text: String,
     rule: &'static str,
 }
 
@@ -69,7 +69,6 @@ impl<K: NameKind> TryFrom<String> for Name<K> {
         } else {
             Err(NameError {
                 kind: K::KIND,
-                text,
                 rule: K::RULE,
             })
         }
@@ -295,8 +294,9 @@ mod tests {
     }
 
     #[test]
-    fn the_error_names_the_kind() {
-        let error = SecretName::try_new("Bad").unwrap_err();
+    fn the_error_names_the_kind_and_not_the_text() {
+        let error = SecretName::try_new("Bad tok_live_x").unwrap_err();
         assert!(error.to_string().contains("secret name"));
+        assert!(!error.to_string().contains("tok_live_x"));
     }
 }
