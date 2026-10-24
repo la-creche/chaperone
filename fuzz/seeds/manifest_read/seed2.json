@@ -1,0 +1,1 @@
+{"name":"ha-call","version":"1","kind":"decision","hooks":["fence"],"pairs_with":"effect"}

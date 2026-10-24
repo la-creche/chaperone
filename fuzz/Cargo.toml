@@ -1,0 +1,48 @@
+[package]
+name = "chaperone-fuzz"
+version = "0.0.0"
+edition = "2024"
+license = "MIT OR Apache-2.0"
+publish = false
+
+[package.metadata]
+cargo-fuzz = true
+
+# Not a member of the main workspace. cargo-fuzz needs nightly.
+[workspace]
+
+[dependencies]
+libfuzzer-sys = "0.4"
+chaperone-core = { path = "../crates/core" }
+serde_json = "1"
+
+[lib]
+path = "src/lib.rs"
+
+[[bin]]
+name = "strict_read"
+path = "fuzz_targets/strict_read.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "policy_load"
+path = "fuzz_targets/policy_load.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "manifest_read"
+path = "fuzz_targets/manifest_read.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "install_read"
+path = "fuzz_targets/install_read.rs"
+test = false
+doc = false
+bench = false
