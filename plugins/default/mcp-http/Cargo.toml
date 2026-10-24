@@ -1,0 +1,19 @@
+[package]
+name = "chaperone-plugin-mcp-http"
+description = "The default front door: MCP over streamable HTTP"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+axum = { workspace = true }
+chaperone-core = { path = "../../../crates/core" }
+http = { workspace = true }
+rmcp = { workspace = true, features = ["server", "transport-streamable-http-server"] }
+serde_json = { workspace = true }
+tokio = { workspace = true }
+tokio-util = { workspace = true }

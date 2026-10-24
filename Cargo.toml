@@ -5,6 +5,7 @@ members = [
   "crates/core",
   "plugins/default/audit-jsonl",
   "plugins/default/bearer",
+  "plugins/default/mcp-http",
 ]
 
 [workspace.package]
@@ -14,10 +15,14 @@ license = "MIT OR Apache-2.0"
 publish = false
 
 [workspace.dependencies]
+axum = { version = "0.8.9", default-features = false, features = ["http1", "tokio"] }
+clap = { version = "4.6.7", features = ["derive"] }
 getrandom = "0.4.3"
 hex = "0.4.3"
+http = "1.5.0"
 libc = "0.2.191"
 proptest = "1.12.0"
+rmcp = { version = "3.7.0", default-features = false }
 schemars = "1.2.3"
 secrecy = "0.10.3"
 serde = { version = "1.0.229", features = ["derive"] }
@@ -28,6 +33,10 @@ subtle = "2.6.1"
 tempfile = "3.27.0"
 thiserror = "2.0.21"
 time = { version = "0.3.55", features = ["formatting"] }
+tokio = { version = "1.54.1", features = ["net", "rt"] }
+tokio-util = "0.7.20"
+tracing = "0.1.44"
+tracing-subscriber = { version = "0.3.23", features = ["fmt"] }
 
 [workspace.lints.rust]
 unsafe_code = "forbid"
