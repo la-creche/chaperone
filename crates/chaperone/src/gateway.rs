@@ -14,7 +14,7 @@ use std::time::Duration;
 use chaperone_core::{
     AfterDecision, AppId, ArgValue, ArgumentsDigest, AuditApp, AuditError, AuditSink, AuditTool,
     CallAudit, CallFault, CallNumber, CallOutcome, Caller, Credentials, Decision, ExposedName,
-    Gates, Identity, ListError, ListedTool, Policy, Request, RunId, Timestamp,
+    Gates, Gateway, Identity, ListError, ListedTool, Policy, Request, RunId, Timestamp,
 };
 
 use crate::clock::Clock;
@@ -128,8 +128,19 @@ impl ChaperoneGateway {
         name: &str,
         arguments: BTreeMap<String, ArgValue>,
     ) -> CallOutcome {
-        let started_at = self.clock.now();
         let caller = self.resolve(credentials);
+        self.call_resolved(caller, name, arguments)
+    }
+
+    /// The call path after the identity hook. It blocks on the audit sink
+    /// and on the decision, so an async caller runs it on a blocking thread.
+    pub(crate) fn call_resolved(
+        &self,
+        caller: Option<Caller>,
+        name: &str,
+        arguments: BTreeMap<String, ArgValue>,
+    ) -> CallOutcome {
+        let started_at = self.clock.now();
         let app = caller.as_ref().map(|caller| &caller.app);
         let Some((call, calls_this_minute)) = self.begin(app, started_at) else {
             // Without a call number no record can be written (G6).
@@ -155,7 +166,10 @@ impl ChaperoneGateway {
         let sink = self.audit.as_ref();
         let next = match audit.decided(decision, self.clock.now(), sink) {
             Ok(next) => next,
-            Err(_) => return CallOutcome::Failed(CallFault::AuditFailed),
+            Err(error) => {
+                tracing::error!(%error, "the decision record is not durable");
+                return CallOutcome::Failed(CallFault::AuditFailed);
+            }
         };
         match next {
             AfterDecision::Denied(reason) => CallOutcome::Denied(reason),
@@ -175,7 +189,7 @@ impl ChaperoneGateway {
     /// Run the identity hook. A hook that panics resolves to nothing, as a
     /// fence that panics denies (G2). The payload is dropped unread, because
     /// it can hold a token (G9).
-    fn resolve(&self, credentials: &Credentials<'_>) -> Option<Caller> {
+    pub(crate) fn resolve(&self, credentials: &Credentials<'_>) -> Option<Caller> {
         // DESIGN-QUESTION: docs/design.md 5 bounds the time of no hook. The
         // identity hook runs on the caller's thread, because `Credentials`
         // borrows the request. A hook that never returns holds this one
@@ -255,7 +269,54 @@ impl ChaperoneGateway {
 fn outcome(written: Result<(), AuditError>, fault: CallFault) -> CallOutcome {
     match written {
         Ok(()) => CallOutcome::Failed(fault),
-        Err(_) => CallOutcome::Failed(CallFault::AuditFailed),
+        Err(error) => {
+            tracing::error!(%error, "the final record is not durable");
+            CallOutcome::Failed(CallFault::AuditFailed)
+        }
+    }
+}
+
+/// The gateway as a front door holds it. The identity hook runs on the
+/// calling thread, because `Credentials` borrows the request. The rest of
+/// the call runs on a blocking thread, because the audit sink syncs each
+/// record to disk and the decision waits up to its budget.
+#[derive(Debug, Clone)]
+pub struct SharedGateway(Arc<ChaperoneGateway>);
+
+impl SharedGateway {
+    #[must_use]
+    pub fn new(gateway: ChaperoneGateway) -> Self {
+        Self(Arc::new(gateway))
+    }
+}
+
+impl Gateway for SharedGateway {
+    async fn list_tools(
+        &self,
+        credentials: &Credentials<'_>,
+    ) -> Result<Vec<ListedTool>, ListError> {
+        self.0.list_tools(credentials)
+    }
+
+    async fn call_tool(
+        &self,
+        credentials: &Credentials<'_>,
+        name: &str,
+        arguments: BTreeMap<String, ArgValue>,
+    ) -> CallOutcome {
+        let caller = self.0.resolve(credentials);
+        let gateway = Arc::clone(&self.0);
+        let name = name.to_owned();
+        let call =
+            tokio::task::spawn_blocking(move || gateway.call_resolved(caller, &name, arguments));
+        match call.await {
+            Ok(outcome) => outcome,
+            // The blocking task did not return its outcome (G2).
+            Err(error) => {
+                tracing::error!(%error, "the call did not return");
+                CallOutcome::Failed(CallFault::NoDecision)
+            }
+        }
     }
 }
 
