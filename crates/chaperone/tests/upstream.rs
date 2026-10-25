@@ -121,7 +121,9 @@ async fn running_with(
     let audit_path = root.path().join("audit.jsonl");
     let loaded = startup::load(&config, &plugins, &audit_path, &secrets).unwrap();
     let redactor = Redactor::new(loaded.secrets);
-    let launched = effect::launch_all(&loaded.setup, &loaded.catalog, &redactor).await?;
+    let fake = fake_binary();
+    let launched =
+        effect::launch_all_with(&loaded.setup, &loaded.catalog, &redactor, Some(&fake)).await?;
     let gateway = SharedGateway::new(ChaperoneGateway::new(
         loaded.run,
         loaded.policy,
@@ -236,6 +238,23 @@ async fn an_upstream_learns_the_app_id_of_the_call_and_never_the_token() {
     )
     .await
     .unwrap();
+    let (seen, text) = whoami(&running).await;
+    assert_eq!(seen["meta"]["chaperone.app"], "librechat", "{text}");
+    let ours: Vec<&String> = seen["meta"]
+        .as_object()
+        .unwrap()
+        .keys()
+        .filter(|key| key.starts_with("chaperone"))
+        .collect();
+    assert_eq!(ours, ["chaperone.app"], "{text}");
+    assert_eq!(seen["arguments"], serde_json::json!({"note": "hello"}));
+    assert!(!text.contains(TOKEN), "{text}");
+    assert!(!text.contains(&support::digest(TOKEN)), "{text}");
+}
+
+/// Call the `whoami` tool of the fake with one argument. Return what it
+/// saw and its text.
+async fn whoami(running: &Running) -> (serde_json::Value, String) {
     let bearer = Bearer::new(TOKEN.to_owned());
     let headers = BTreeMap::new();
     let credentials = Credentials {
@@ -254,18 +273,51 @@ async fn an_upstream_learns_the_app_id_of_the_call_and_never_the_token() {
         panic!("{outcome:?}");
     };
     let text = result.content.concat();
-    let seen: serde_json::Value = serde_json::from_str(&text).expect(&text);
-    assert_eq!(seen["meta"]["chaperone.app"], "librechat", "{text}");
-    let ours: Vec<&String> = seen["meta"]
+    (serde_json::from_str(&text).expect(&text), text)
+}
+
+#[tokio::test]
+async fn a_plugin_with_a_user_starts_through_the_helper() {
+    let install = format!(
+        "{ENV_INSTALL}plugins.vikunja.user = \"mcp-vikunja\"\nplugins.vikunja.args = [\"--port\", \"1\"]\n"
+    );
+    let policy = format!("{}whoami = {{}}\n", policy_text(30));
+    // The fake stands in for the helper, so it serves with the argv and
+    // the environment that the helper gets.
+    let running = running_with(
+        &["--fake-upstream", "--env"],
+        &install,
+        &policy,
+        Bounds::DEFAULT,
+    )
+    .await
+    .unwrap();
+    let (seen, text) = whoami(&running).await;
+    let fake = fake_binary();
+    let fake = fake.to_str().unwrap();
+    let argv = [
+        fake,
+        "mcp-vikunja",
+        fake,
+        "--fake-upstream",
+        "--env",
+        "--port",
+        "1",
+    ];
+    assert_eq!(seen["argv"], serde_json::json!(argv), "{text}");
+    // The whole environment is the one variable, and its object holds only
+    // the bound secret, blanked in the result. macOS adds `__CF_` names to
+    // each process at start.
+    let names: Vec<&str> = seen["env"]
         .as_object()
         .unwrap()
         .keys()
-        .filter(|key| key.starts_with("chaperone"))
+        .map(String::as_str)
+        .filter(|name| !name.starts_with("__CF_"))
         .collect();
-    assert_eq!(ours, ["chaperone.app"], "{text}");
-    assert_eq!(seen["arguments"], serde_json::json!({"note": "hello"}));
-    assert!(!text.contains(TOKEN), "{text}");
-    assert!(!text.contains(&support::digest(TOKEN)), "{text}");
+    assert_eq!(names, ["CHAPERONE_CHILD_ENV"], "{text}");
+    let child_env = r#"{"VIKUNJA_TOKEN":"[redacted]"}"#;
+    assert_eq!(seen["env"]["CHAPERONE_CHILD_ENV"], child_env, "{text}");
 }
 
 #[tokio::test]
@@ -317,6 +369,7 @@ async fn a_plugin_that_does_not_speak_mcp_refuses_start() {
         &["true".to_owned()],
         SecretDelivery::Stdin,
         &redactor,
+        None,
     )
     .await
     .unwrap_err();

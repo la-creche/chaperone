@@ -12,8 +12,8 @@ use std::process::Stdio;
 use std::sync::Arc;
 
 use chaperone_core::{
-    APPROVE_TOOL, AppId, ArgValue, Catalog, PluginKind, PluginName, Policy, Runtime,
-    SecretDelivery, Setup, Slot, ToolName, UpstreamResult,
+    APPROVE_TOOL, AppId, ArgValue, CHILD_ENV_VAR, Catalog, PluginKind, PluginName, PluginUser,
+    Policy, Runtime, SecretDelivery, Setup, Slot, ToolName, UpstreamResult,
 };
 use rmcp::ServiceExt;
 use rmcp::model::{CallToolRequestParams, CallToolResult, MetaObject, RequestMetaObject, Tool};
@@ -28,6 +28,18 @@ use crate::startup::Secrets;
 /// The most text one result may hold, over all its blocks
 /// (`docs/design.md` 7.7).
 pub const RESULT_CAP: usize = 1024 * 1024;
+
+/// The helper that starts an effect plugin as its own OS user
+/// (`docs/design.md` 8). It sits next to the chaperone binary.
+const RUN_AS_HELPER: &str = "chaperone-as";
+
+/// How the host starts an effect plugin that runs as its own OS user.
+#[derive(Debug, Clone, Copy)]
+pub struct RunAs<'a> {
+    /// The `chaperone-as` binary.
+    pub helper: &'a Path,
+    pub user: &'a PluginUser,
+}
 
 /// The longest stderr line the host logs. A longer line is cut.
 const STDERR_LINE_CAP: usize = 8 * 1024;
@@ -148,6 +160,10 @@ pub enum LaunchError {
     NoApproveTool { plugin: PluginName },
     #[error("the approval channel slot has no plugin")]
     NoApprovalChannel,
+    #[error("{plugin} runs as its own user, and {RUN_AS_HELPER} is not next to chaperone")]
+    NoHelper { plugin: PluginName },
+    #[error("{plugin} runs as its own user, and its command is not an absolute path")]
+    NotAbsolute { plugin: PluginName },
 }
 
 /// Every effect plugin the host launched.
@@ -222,15 +238,37 @@ pub async fn launch_all(
     catalog: &Catalog,
     redactor: &Redactor,
 ) -> Result<Launched, LaunchError> {
+    launch_all_with(setup, catalog, redactor, helper_path().as_deref()).await
+}
+
+/// The `chaperone-as` binary next to the chaperone binary, if it is there.
+#[must_use]
+pub fn helper_path() -> Option<PathBuf> {
+    let exe = std::env::current_exe().ok()?;
+    let helper = exe.parent()?.join(RUN_AS_HELPER);
+    helper.is_file().then_some(helper)
+}
+
+/// As [`launch_all`], with the helper at `helper`.
+///
+/// # Errors
+///
+/// Returns the first [`LaunchError`] found. chaperone then refuses start.
+pub async fn launch_all_with(
+    setup: &Setup,
+    catalog: &Catalog,
+    redactor: &Redactor,
+    helper: Option<&Path>,
+) -> Result<Launched, LaunchError> {
     let mut upstreams = Upstreams::new();
     for name in setup.upstreams() {
-        let upstream = launch_named(name, setup, catalog, redactor).await?;
+        let upstream = launch_named(name, setup, catalog, redactor, helper).await?;
         upstreams.insert(name.clone(), Box::new(upstream));
     }
     let name = setup
         .slot(Slot::ApprovalChannel)
         .ok_or(LaunchError::NoApprovalChannel)?;
-    let approval = launch_named(name, setup, catalog, redactor).await?;
+    let approval = launch_named(name, setup, catalog, redactor, helper).await?;
     let lists_approve = approval
         .tools()
         .iter()
@@ -246,13 +284,14 @@ pub async fn launch_all(
     })
 }
 
-/// Launch the effect plugin `name` with the command of its manifest and
-/// the secret delivery of its binding.
+/// Launch the effect plugin `name` with the command of its manifest, and
+/// the secret delivery and the user of its binding.
 async fn launch_named(
     name: &PluginName,
     setup: &Setup,
     catalog: &Catalog,
     redactor: &Redactor,
+    helper: Option<&Path>,
 ) -> Result<EffectProcess, LaunchError> {
     let command = catalog
         .iter()
@@ -270,7 +309,54 @@ async fn launch_named(
     if let Some(binding) = binding {
         command.extend(binding.args.iter().cloned());
     }
-    launch(name, &command, delivery, redactor).await
+    let run_as = match binding.and_then(|binding| binding.user.as_ref()) {
+        None => None,
+        Some(user) => Some(RunAs {
+            helper: helper.ok_or_else(|| LaunchError::NoHelper {
+                plugin: name.clone(),
+            })?,
+            user,
+        }),
+    };
+    launch(name, &command, delivery, redactor, run_as).await
+}
+
+/// The command that starts an effect plugin. With `run_as`, the helper
+/// starts it as its own user. Its environment then crosses as one JSON
+/// value, and nothing else of the environment of chaperone reaches it.
+fn plugin_command(
+    name: &PluginName,
+    program: &str,
+    args: &[String],
+    env: Vec<(String, String)>,
+    run_as: Option<RunAs<'_>>,
+) -> Result<Command, LaunchError> {
+    let program = resolve_program(program);
+    let Some(run_as) = run_as else {
+        let mut spawn = Command::new(program);
+        spawn.args(args).envs(env);
+        return Ok(spawn);
+    };
+    if !program.is_absolute() {
+        return Err(LaunchError::NotAbsolute {
+            plugin: name.clone(),
+        });
+    }
+    let child_env: serde_json::Map<String, serde_json::Value> = env
+        .into_iter()
+        .map(|(key, value)| (key, serde_json::Value::String(value)))
+        .collect();
+    let mut spawn = Command::new(run_as.helper);
+    spawn
+        .arg(run_as.user.as_str())
+        .arg(program)
+        .args(args)
+        .env_clear()
+        .env(
+            CHILD_ENV_VAR,
+            serde_json::Value::Object(child_env).to_string(),
+        );
+    Ok(spawn)
 }
 
 /// The program to run for `program` of a command (`docs/design.md` 7.7). A
@@ -303,20 +389,15 @@ pub async fn launch(
     command: &[String],
     delivery: SecretDelivery,
     redactor: &Redactor,
+    run_as: Option<RunAs<'_>>,
 ) -> Result<EffectProcess, LaunchError> {
     let (program, args) = command
         .split_first()
         .ok_or_else(|| LaunchError::NoCommand {
             plugin: name.clone(),
         })?;
-    let mut spawn = Command::new(resolve_program(program));
-    spawn
-        .args(args)
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .kill_on_drop(true);
     let secrets = redactor.0.get(name);
+    let mut env = Vec::new();
     if delivery == SecretDelivery::Env
         && let Some(secrets) = secrets
     {
@@ -326,9 +407,15 @@ pub async fn launch(
                 reason = "G9: the env exception of docs/design.md 7.5, warned at each start"
             )]
             let value = secret.expose();
-            spawn.env(param.as_str(), value);
+            env.push((param.as_str().to_owned(), value.to_owned()));
         }
     }
+    let mut spawn = plugin_command(name, program, args, env, run_as)?;
+    spawn
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .kill_on_drop(true);
     let spawn_error = |error| LaunchError::Spawn {
         plugin: name.clone(),
         error,
@@ -355,6 +442,10 @@ pub async fn launch(
         })?;
     }
 
+    // DESIGN-QUESTION: docs/design.md 7.7 refuses start when an upstream
+    // fails its initialize, and a refusal of chaperone-as is such a failure.
+    // The reading: chaperone does not start. A change starts chaperone
+    // without that upstream, and its calls fail with `not_connected`.
     let service =
         ().serve((stdout, stdin))
             .await

@@ -14,7 +14,7 @@
 //! | `slow` | Text, after two seconds |
 //! | `secret_echo` | The token, for an ungranted tool |
 //! | `delete_task`, `wait_task`, `odd_task` | Text, for the gated calls |
-//! | `whoami` | The `_meta` and the arguments of the call, as JSON text |
+//! | `whoami` | The `_meta`, the arguments, the argv and the environment, as JSON text |
 //!
 //! Run with `--fake-approval`, it serves the approval channel instead: one
 //! tool, `approve`, that answers by the `tool` argument. `create_task` is
@@ -110,8 +110,13 @@ impl ServerHandler for Fake {
             "wait_task" => text("waited".to_owned()),
             "odd_task" => text("odd".to_owned()),
             "whoami" => text(
-                serde_json::json!({"meta": context.meta, "arguments": request.arguments})
-                    .to_string(),
+                serde_json::json!({
+                    "meta": context.meta,
+                    "arguments": request.arguments,
+                    "argv": std::env::args().collect::<Vec<_>>(),
+                    "env": std::env::vars().collect::<std::collections::BTreeMap<_, _>>(),
+                })
+                .to_string(),
             ),
             other => {
                 return Err(ErrorData::invalid_params(
@@ -202,7 +207,13 @@ fn main() {
 async fn serve(from_env: bool) {
     let mut stdin = BufReader::new(tokio::io::stdin());
     let token = if from_env {
-        std::env::var("VIKUNJA_TOKEN").unwrap()
+        // Started as the helper, the fake finds the token in the one
+        // variable of the helper instead.
+        std::env::var("VIKUNJA_TOKEN").unwrap_or_else(|_| {
+            let env = std::env::var("CHAPERONE_CHILD_ENV").unwrap();
+            let env: serde_json::Value = serde_json::from_str(&env).unwrap();
+            env["VIKUNJA_TOKEN"].as_str().unwrap().to_owned()
+        })
     } else {
         let mut line = String::new();
         stdin.read_line(&mut line).await.unwrap();
