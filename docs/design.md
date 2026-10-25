@@ -387,7 +387,7 @@ Version 1 proves the idea with one client app.
 
 The plugin takes `--hook-url` and `--listen` through `args` in `install.toml`. It refuses an unspecified listen address. It holds the two tokens in memory only, from the secret line of section 7.5. A hook that does not answer `2xx`, or a tap that does not come in the life of the gate, is a denial.
 
-`release` is an upstream in `plugins/effect/included`. It serves one tool, `request`, so the model sees `release__request` when the policy grants it. Each call writes one request file into the `requests/` directory of the release spool. An external release executor reads the file, resolves the components and asks the operator. The plugin approves nothing. It takes no secret. It takes `--requests-dir` and `--requested-by` through `args` in `install.toml`.
+`release` is an upstream in `plugins/effect/included`. It serves one tool, `request`, so the model sees `release__request` when the policy grants it. Each call writes one request file into the `requests/` directory of the release spool. An external release executor reads the file, resolves the components and asks the operator. The plugin approves nothing. It takes no secret. It takes `--requests-dir` and `--requested-by` through `args` in `install.toml`. The policy grants `release__request` to one app instance only, and `--requested-by` names that instance. An upstream does not learn the app ID of a call (section 7.7), so a second instance with the grant would file requests under the same name.
 
 The arguments are `components`, `kind` and `rollback_of`:
 
