@@ -163,7 +163,7 @@ async fn the_front_door_decides_and_audits_each_call() {
     assert_eq!(gated.is_error, Some(true));
     assert!(
         text_of(&gated)
-            .starts_with("awaiting permission for tool call vikunja__create_task (gate "),
+            .starts_with("Awaiting permission for tool call vikunja__create_task (gate "),
         "{}",
         text_of(&gated)
     );
