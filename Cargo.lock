@@ -315,6 +315,22 @@ name = "chaperone-lint"
 version = "0.0.0"
 
 [[package]]
+name = "chaperone-plugin-attendance"
+version = "0.0.0"
+dependencies = [
+ "axum",
+ "chaperone-ulid",
+ "clap",
+ "reqwest",
+ "rmcp",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "time",
+ "tokio",
+]
+
+[[package]]
 name = "chaperone-plugin-attendance-fence"
 version = "0.0.0"
 dependencies = [

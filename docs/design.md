@@ -378,7 +378,7 @@ Version 1 proves the idea with one client app.
 | Client app | The agent runtime in the sandbox. The runtime of version 1 is Flue. |
 | Upstream | An existing Vikunja MCP server, unchanged, with the env exception |
 | Decision plugins | `ha-call` decision half: an entity allow-list for Home Assistant calls. `attendance` decision half: the families each app instance may reach. |
-| Effect plugins | `ha-call` effect half: the Home Assistant call. `ha-approval`: the approval channel, through the operator's existing approval flow. `release`: one request file in the release spool per call. |
+| Effect plugins | `ha-call` effect half: the Home Assistant call. `ha-approval`: the approval channel, through the operator's existing approval flow. `release`: one request file in the release spool per call. `attendance` effect half: the doors of the session service. |
 
 `ha-call` is one plugin in two halves, both in `included`. The decision half is a fence. Each app instance lists the entities it may act on in its `ha-call` section of the policy file, as `entities = ["light.kitchen"]`. A call to the `ha-call` upstream passes only when every entity in its `entity_id` is on that list. A call with no `entity_id` is denied, because a service call without a target acts on every entity of its domain. An app instance with no section may act on no entity (G2). A call to any other upstream passes untouched. The effect half serves one tool, `call_service`, with `domain`, `service`, `entity_id` and optional `data`. It sends one `POST /api/services/<domain>/<service>` to Home Assistant with the long-lived token `HA_TOKEN` from the secret line, and returns the answer as text. It takes `--url` through `args` in `install.toml`.
 
@@ -396,7 +396,36 @@ The fence applies these rules to a call to the `attendance` upstream:
 3. A call of `job_status` passes. The effect half limits it to the jobs of the caller.
 4. A call of any other tool is denied.
 
-A call to any other upstream passes untouched. Each deny reason starts with `tool_not_granted`. A section with another key, a bad family name or a list over its cap does not load. The effect half serves the three tools (step 10.3).
+A call to any other upstream passes untouched. Each deny reason starts with `tool_not_granted`. A section with another key, a bad family name or a list over its cap does not load.
+
+The effect half of `attendance` is an upstream in `plugins/effect/included`. It sends each call to a door of the session service, over HTTP on a Unix socket. It takes `--socket` through `args` in `install.toml`. It takes two secrets, `DELEGATE_TOKEN` and `DISPATCH_TOKEN`, each at least 32 bytes. A shorter or missing token refuses start. Each door call sends `Authorization: Bearer <token>` to the base URL `http://sessiond`.
+
+The caller family of a call is the app ID in `_meta` (section 7.7). A call whose app ID is missing, or is not a family name, is refused before any request. The plugin mints a delegation ID per call: a ULID of 26 upper-case Crockford base32 characters.
+
+| Tool | Arguments | Door call | Bound |
+|---|---|---|---|
+| `invoke_agent` | `family`, `message` of 1 to 65536 characters, optional `attachments` of up to 16 texts of up to 255 characters. The attachments are never sent. | `POST /delegate` with the bearer `DELEGATE_TOKEN` and `{caller_family, target_family, delegation_id, claimed_session_id: null, message}` | 120 seconds |
+| `enqueue` | `family`, `message`, optional `idempotency_key` of up to 128 characters | `POST /dispatch` with the bearer `DISPATCH_TOKEN` and `{caller_family, target_family, delegation_id, chain: [caller_family, target_family], claimed_session_id: null, message, idempotency_key}` | 30 seconds |
+| `job_status` | optional `session` of `A-Za-z0-9`, then those and `._-`, `since` as an RFC 3339 date-time, `limit` from 1 to 200 | `POST /dispatch/jobs` with the bearer `DISPATCH_TOKEN` and `{caller_family, session, since, limit}` | 30 seconds |
+
+The body leaves out `idempotency_key`, `session`, `since` and `limit` when the call does not set them. The result is one text block that holds one JSON object:
+
+1. `invoke_agent`: `{"untrusted": true, "source": "family:<target>", "content": "<text>"}`. The content is at most 65536 characters. A door answer `timeout` gives the reason `delegate_timeout`. These answers give the reason `upstream_failed`: the status `failed`, an unknown status, an HTTP status other than 200, and a body that is not a JSON object.
+2. `enqueue`: `{"session", "family", "status", "created"}`. `created` is true unless the door answers exactly `false`. An answer with no `session_id` is `upstream_failed`.
+3. `job_status`: `{"jobs": [...]}`, at most 200 rows. A row that is not a JSON object is dropped.
+
+An error result holds `{"ok": false, "reason": "<reason>", "detail": "<text>"}`. The dispatch door answers an error with `{"error": {"code", "message"}}`. The plugin maps its code:
+
+| Code | Reason |
+|---|---|
+| `dispatch_not_declared`, `forbidden`, `family_unknown`, `family_invalid` | `tool_not_granted` |
+| `bad_request`, `idempotency_mismatch`, `payload_too_large` | `arg_validation` |
+| `queue_full` | `rate_limited` |
+| Any other code, a socket that does not answer | `upstream_failed` |
+
+The detail is the door's `message`, or its code. A detail is at most 65536 characters. The plugin blanks each copy of either token in a detail and in the content (G9). An argument that breaks its rule gives `arg_validation`, and no request goes out.
+
+The chaperone bound of section 5.5 is 30 seconds, so chaperone ends a delegate call that takes longer with `upstream_timeout` (section 14).
 
 `ha-approval` sits in `plugins/effect/included`. The operator's flow is a Node-RED instance in front of Home Assistant with two legs. The plugin speaks the flow's language and changes nothing in the flow:
 
@@ -465,7 +494,7 @@ One pull request per step:
 10. The rest of version 1, one pull request each:
     1. Policy reload when the policy file changes (section 6).
     2. `GET /healthz` on the front door and `chaperone verify`.
-    3. The `attendance` effect plugin, with three tools: `invoke_agent`, `enqueue` and `job_status`.
+    3. The `attendance` plugin, both halves, with three tools: `invoke_agent`, `enqueue` and `job_status` (section 12). The one-hop bound and the in-flight delegation limit come later (section 14).
     4. The `release` effect plugin. Each call writes one request file (section 12).
     5. A front door bound to a LAN address, under the guard `host-firewall` (section 7.6).
     6. The effect host launches each upstream as its own OS user.
@@ -477,3 +506,6 @@ One pull request per step:
 | The agent runtime subscribes to the results of its gates, and chaperone publishes each kept result when the run ends. The transport, and how a subscription is bound to one app instance, are open. | After version 1 |
 | The 50-character budget of an exposed name (section 7.6) exists for LibreChat, a client that version 1 does not use. The budget can widen. | After version 1 |
 | TLS on the front door. It can come as a third value of `guard` (section 7.6). | After version 1 |
+| The one-hop bound of `attendance`: a family that a delegate call reached cannot delegate again. It needs the delegation ID of the calling session. | After version 1 |
+| The in-flight delegation limit of `attendance`: a cap on the delegate calls of one family at one time. | After version 1 |
+| The bound of an `attendance` delegate call. The plugin waits up to 120 seconds, and chaperone ends an upstream call at 30 seconds (section 5.5). A bound per upstream can close the gap. | After version 1 |
