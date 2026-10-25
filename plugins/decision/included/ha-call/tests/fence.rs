@@ -50,31 +50,62 @@ fn catalog() -> Catalog {
             &mut catalog,
             Location::Default,
             &format!(
-                r#"{{"name":"{name}","version":"1","kind":"{kind}","slot":"{slot}","hooks":["{slot}"]}}"#
+                r#"
+                    name = "{name}"
+                    version = "1"
+                    kind = "{kind}"
+                    slot = "{slot}"
+                    hooks = ["{slot}"]
+                "#
             ),
         );
     }
     put(
         &mut catalog,
         Location::Default,
-        r#"{"name":"deny-all","version":"1","kind":"effect","slot":"approval_channel",
-            "hooks":["approval"],"command":["deny-all"]}"#,
+        r#"
+            name = "deny-all"
+            version = "1"
+            kind = "effect"
+            slot = "approval_channel"
+            hooks = ["approval"]
+            command = ["deny-all"]
+        "#,
     );
     put(
         &mut catalog,
         Location::Included,
-        r#"{"name":"ha-call","version":"1","kind":"decision","hooks":["fence"],"pairs_with":"effect"}"#,
+        r#"
+            name = "ha-call"
+            version = "1"
+            kind = "decision"
+            hooks = ["fence"]
+            pairs_with = "effect"
+        "#,
     );
     put(
         &mut catalog,
         Location::Included,
-        r#"{"name":"ha-call","version":"1","kind":"effect","hooks":["upstream"],
-            "secrets":["HA_TOKEN"],"pairs_with":"decision","command":["chaperone-ha-call"]}"#,
+        r#"
+            name = "ha-call"
+            version = "1"
+            kind = "effect"
+            hooks = ["upstream"]
+            secrets = ["HA_TOKEN"]
+            pairs_with = "decision"
+            command = ["chaperone-ha-call"]
+        "#,
     );
     put(
         &mut catalog,
         Location::Added,
-        r#"{"name":"vikunja","version":"1","kind":"effect","hooks":["upstream"],"command":["vikunja"]}"#,
+        r#"
+            name = "vikunja"
+            version = "1"
+            kind = "effect"
+            hooks = ["upstream"]
+            command = ["vikunja"]
+        "#,
     );
     catalog
 }

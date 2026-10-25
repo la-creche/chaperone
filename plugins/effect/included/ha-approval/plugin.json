@@ -1,9 +1,0 @@
-{
-  "name": "ha-approval",
-  "version": "1.0.0",
-  "kind": "effect",
-  "slot": "approval_channel",
-  "hooks": ["approval"],
-  "secrets": ["APPROVAL_TOKEN", "RESUME_TOKEN"],
-  "command": ["chaperone-ha-approval"]
-}

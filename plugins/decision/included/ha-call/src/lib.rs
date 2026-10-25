@@ -56,7 +56,7 @@ impl EntityFence {
     /// # Errors
     ///
     /// Returns the [`chaperone_core::NameError`] of the plugin name. It
-    /// cannot fail for the name in `plugin.json`.
+    /// cannot fail for the name in `plugin.toml`.
     pub fn new() -> Result<Self, chaperone_core::NameError> {
         Ok(Self {
             name: PluginName::try_new("ha-call")?,

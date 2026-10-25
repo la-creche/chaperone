@@ -13,7 +13,13 @@ pub const TOKEN: &str = "0123456789abcdef0123456789abcdef0123456789abcdef0123456
 /// An install file that enables the `vikunja` upstream.
 pub const INSTALL: &str = "version = 1\nplugins.vikunja = {}\n";
 
-const VIKUNJA_MANIFEST: &str = r#"{"name":"vikunja","version":"1","kind":"effect","hooks":["upstream"],"command":["vikunja-mcp"]}"#;
+const VIKUNJA_MANIFEST: &str = r#"
+    name = "vikunja"
+    version = "1"
+    kind = "effect"
+    hooks = ["upstream"]
+    command = ["vikunja-mcp"]
+"#;
 
 /// The `plugins` directory of this repository.
 pub fn repo_plugins() -> PathBuf {
@@ -31,17 +37,17 @@ pub fn plugin_tree(root: &Path) -> PathBuf {
         }
         let target = plugins.join("default").join(source.file_name().unwrap());
         std::fs::create_dir_all(&target).unwrap();
-        std::fs::copy(source.join("plugin.json"), target.join("plugin.json")).unwrap();
+        std::fs::copy(source.join("plugin.toml"), target.join("plugin.toml")).unwrap();
     }
     write_manifest(&plugins, "effect/added/vikunja", VIKUNJA_MANIFEST);
     plugins
 }
 
-/// Write one `plugin.json` at `plugins/<relative>`.
+/// Write one `plugin.toml` at `plugins/<relative>`.
 pub fn write_manifest(plugins: &Path, relative: &str, manifest: &str) {
     let dir = plugins.join(relative);
     std::fs::create_dir_all(&dir).unwrap();
-    std::fs::write(dir.join("plugin.json"), manifest).unwrap();
+    std::fs::write(dir.join("plugin.toml"), manifest).unwrap();
 }
 
 /// The SHA-256 of `token` as hex, as the policy file holds it.

@@ -1,0 +1,6 @@
+name = "deny-all"
+version = "1.0.0"
+kind = "effect"
+slot = "approval_channel"
+hooks = ["approval"]
+command = ["chaperone-deny-all"]

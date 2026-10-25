@@ -40,12 +40,12 @@ Each compiled hook is one trait in `crates/core/src/hook.rs`. That file is the w
 | `<kind>/added/` | The operator's own plugins | No. `.gitignore` excludes them. |
 
 - One directory holds one plugin.
-- A plugin with two halves of different kinds is two plugins with the same name, one per kind directory. Each half names the other in `plugin.json`.
+- A plugin with two halves of different kinds is two plugins with the same name, one per kind directory. Each half names the other in `plugin.toml`.
 - A plugin in `default` or `included` must pass the contract test of every hook it serves.
 
 ## The plugin manifest
 
-Each plugin directory holds a `plugin.json`. The strict reader reads it. It holds:
+Each plugin directory holds a `plugin.toml`. The strict reader reads it. It holds:
 
 - `name`, `version` and `kind`
 - `slot`, if the plugin can fill one

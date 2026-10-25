@@ -1,4 +1,4 @@
-//! The plugin manifest (`plugin.json`) and the facts it states: kind, slot,
+//! The plugin manifest (`plugin.toml`) and the facts it states: kind, slot,
 //! hooks, secret parameters and the paired half. `docs/design.md` 7.4.
 
 use std::collections::BTreeSet;
@@ -10,11 +10,8 @@ use serde::Deserialize;
 use crate::ids::{PluginName, SecretParam};
 use crate::strict::{self, ByteCap, StrictError};
 
-/// The largest `plugin.json` chaperone reads.
+/// The largest `plugin.toml` chaperone reads.
 pub const PLUGIN_FILE_CAP: ByteCap = ByteCap::new(64 * 1024);
-
-/// The value of `$schema` in `plugin.json` (`docs/design.md` 6).
-pub const PLUGIN_SCHEMA_ID: &str = "urn:chaperone:plugin:1";
 
 /// How a plugin runs. The directory of a plugin names its kind.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Deserialize, JsonSchema)]
@@ -107,13 +104,10 @@ impl Hook {
     }
 }
 
-/// `plugin.json` as written.
+/// `plugin.toml` as written.
 #[derive(Debug, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 struct RawManifest {
-    /// The schema of this file, `urn:chaperone:plugin:1`.
-    #[serde(rename = "$schema", default)]
-    schema: Option<String>,
     name: PluginName,
     version: String,
     kind: PluginKind,
@@ -128,7 +122,7 @@ struct RawManifest {
     command: Option<Vec<String>>,
 }
 
-/// The JSON Schema of `plugin.json`, from its types.
+/// The JSON Schema of `plugin.toml`, from its types.
 pub(crate) fn manifest_schema() -> schemars::Schema {
     schemars::schema_for!(RawManifest)
 }
@@ -155,13 +149,11 @@ pub struct Manifest {
     runtime: Runtime,
 }
 
-/// Why a `plugin.json` is not valid.
+/// Why a `plugin.toml` is not valid.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum ManifestError {
-    #[error("plugin.json is not valid JSON for a manifest: {0}")]
+    #[error("plugin.toml is not valid for a manifest: {0}")]
     Read(#[from] StrictError),
-    #[error("plugin.json names the schema {found}, this chaperone reads {PLUGIN_SCHEMA_ID}")]
-    Schema { found: String },
     #[error("the version is empty or longer than 64 characters")]
     BadVersion,
     #[error("the plugin serves no hook")]
@@ -189,24 +181,17 @@ pub enum ManifestError {
 const VERSION_MAX: usize = 64;
 
 impl Manifest {
-    /// Read and check one `plugin.json`.
+    /// Read and check one `plugin.toml`.
     ///
     /// # Errors
     ///
     /// Returns a [`ManifestError`] that names the first rule the file breaks.
     pub fn read(bytes: &[u8]) -> Result<Self, ManifestError> {
-        let raw: RawManifest = strict::read(bytes, PLUGIN_FILE_CAP)?;
+        let raw: RawManifest = strict::read_toml(bytes, PLUGIN_FILE_CAP)?;
         Self::check(raw)
     }
 
     fn check(raw: RawManifest) -> Result<Self, ManifestError> {
-        if let Some(found) = &raw.schema
-            && found != PLUGIN_SCHEMA_ID
-        {
-            return Err(ManifestError::Schema {
-                found: found.clone(),
-            });
-        }
         if raw.version.is_empty() || raw.version.len() > VERSION_MAX {
             return Err(ManifestError::BadVersion);
         }
@@ -312,9 +297,14 @@ mod tests {
     #[test]
     fn reads_an_effect_upstream() {
         let manifest = read(
-            r#"{"name":"vikunja","version":"1.0.0","kind":"effect",
-                "hooks":["upstream"],"secrets":["VIKUNJA_TOKEN"],
-                "command":["vikunja-mcp"]}"#,
+            r#"
+                name = "vikunja"
+                version = "1.0.0"
+                kind = "effect"
+                hooks = ["upstream"]
+                secrets = ["VIKUNJA_TOKEN"]
+                command = ["vikunja-mcp"]
+            "#,
         )
         .unwrap();
         assert_eq!(manifest.kind(), PluginKind::Effect);
@@ -330,8 +320,13 @@ mod tests {
     #[test]
     fn reads_a_slot_plugin() {
         let manifest = read(
-            r#"{"name":"bearer","version":"1","kind":"decision",
-                "slot":"identity","hooks":["identity"]}"#,
+            r#"
+                name = "bearer"
+                version = "1"
+                kind = "decision"
+                slot = "identity"
+                hooks = ["identity"]
+            "#,
         )
         .unwrap();
         assert_eq!(manifest.slot(), Some(Slot::Identity));
@@ -340,15 +335,28 @@ mod tests {
 
     #[test]
     fn refuses_a_hook_of_another_kind() {
-        let error = read(r#"{"name":"x","version":"1","kind":"decision","hooks":["upstream"]}"#)
-            .unwrap_err();
+        let error = read(
+            r#"
+            name = "x"
+            version = "1"
+            kind = "decision"
+            hooks = ["upstream"]
+        "#,
+        )
+        .unwrap_err();
         assert!(matches!(error, ManifestError::HookKind { .. }));
     }
 
     #[test]
     fn refuses_a_slot_without_its_hook() {
         let error = read(
-            r#"{"name":"x","version":"1","kind":"decision","slot":"identity","hooks":["fence"]}"#,
+            r#"
+                name = "x"
+                version = "1"
+                kind = "decision"
+                slot = "identity"
+                hooks = ["fence"]
+            "#,
         )
         .unwrap_err();
         assert_eq!(
@@ -362,7 +370,13 @@ mod tests {
     #[test]
     fn refuses_an_effect_plugin_with_two_roles() {
         let error = read(
-            r#"{"name":"x","version":"1","kind":"effect","hooks":["upstream","approval"],"command":["x"]}"#,
+            r#"
+                name = "x"
+                version = "1"
+                kind = "effect"
+                hooks = ["upstream", "approval"]
+                command = ["x"]
+            "#,
         )
         .unwrap_err();
         assert_eq!(error, ManifestError::TwoRoles);
@@ -370,17 +384,37 @@ mod tests {
 
     #[test]
     fn refuses_an_effect_plugin_without_a_command() {
-        let none = read(r#"{"name":"x","version":"1","kind":"effect","hooks":["upstream"]}"#);
+        let none = read(
+            r#"
+            name = "x"
+            version = "1"
+            kind = "effect"
+            hooks = ["upstream"]
+        "#,
+        );
         assert_eq!(none.unwrap_err(), ManifestError::NoCommand);
-        let empty =
-            read(r#"{"name":"x","version":"1","kind":"effect","hooks":["upstream"],"command":[]}"#);
+        let empty = read(
+            r#"
+                name = "x"
+                version = "1"
+                kind = "effect"
+                hooks = ["upstream"]
+                command = []
+            "#,
+        );
         assert_eq!(empty.unwrap_err(), ManifestError::NoCommand);
     }
 
     #[test]
     fn refuses_a_command_on_a_compiled_plugin() {
         let error = read(
-            r#"{"name":"x","version":"1","kind":"adapter","hooks":["audit_sink"],"command":["x"]}"#,
+            r#"
+                name = "x"
+                version = "1"
+                kind = "adapter"
+                hooks = ["audit_sink"]
+                command = ["x"]
+            "#,
         )
         .unwrap_err();
         assert_eq!(error, ManifestError::CommandOnCompiled);
@@ -389,7 +423,13 @@ mod tests {
     #[test]
     fn refuses_secrets_on_a_decision_plugin() {
         let error = read(
-            r#"{"name":"x","version":"1","kind":"decision","hooks":["fence"],"secrets":["T"]}"#,
+            r#"
+                name = "x"
+                version = "1"
+                kind = "decision"
+                hooks = ["fence"]
+                secrets = ["T"]
+            "#,
         )
         .unwrap_err();
         assert!(matches!(error, ManifestError::SecretsOnPure { .. }));
@@ -397,9 +437,62 @@ mod tests {
 
     #[test]
     fn refuses_an_unknown_field() {
+        let error = read(
+            r#"
+                name = "x"
+                version = "1"
+                kind = "decision"
+                hooks = ["fence"]
+                extra = 1
+            "#,
+        )
+        .unwrap_err();
+        assert!(matches!(
+            error,
+            ManifestError::Read(StrictError::Shape { .. })
+        ));
+    }
+
+    #[test]
+    fn refuses_a_json_manifest() {
         let error =
-            read(r#"{"name":"x","version":"1","kind":"decision","hooks":["fence"],"extra":1}"#)
-                .unwrap_err();
-        assert!(matches!(error, ManifestError::Read(_)));
+            read(r#"{"name":"x","version":"1","kind":"decision","hooks":["fence"]}"#).unwrap_err();
+        assert!(matches!(
+            error,
+            ManifestError::Read(StrictError::Syntax { line: 1, .. })
+        ));
+    }
+
+    #[test]
+    fn refuses_a_schema_field() {
+        let error = read(
+            r#"
+                "$schema" = "urn:chaperone:plugin:1"
+                name = "x"
+                version = "1"
+                kind = "decision"
+                hooks = ["fence"]
+            "#,
+        )
+        .unwrap_err();
+        assert!(matches!(
+            error,
+            ManifestError::Read(StrictError::Shape { .. })
+        ));
+    }
+
+    #[test]
+    fn reads_comments_in_a_manifest() {
+        let manifest = read(
+            r#"
+                # A fence with no slot.
+                name = "x"
+                version = "1" # The plugin version.
+                kind = "decision"
+                hooks = ["fence"]
+            "#,
+        )
+        .unwrap();
+        assert!(manifest.serves(Hook::Fence));
     }
 }

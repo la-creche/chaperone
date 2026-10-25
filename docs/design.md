@@ -172,19 +172,19 @@ The record keeps the arguments only as the SHA-256 of their canonical form. Clos
 
 ## 6. Configuration
 
-The install file is TOML. The plugin manifest and the policy file stay JSON until their parts of step 9 in section 13. The strict reader reads every file. It refuses duplicate keys, a byte order mark, invalid UTF-8, unknown fields and input over the size cap. The Rust types are the source of truth. chaperone generates the JSON Schema from the types.
+The install file and the plugin manifest are TOML. The policy file stays JSON until its part of step 9 in section 13. The strict reader reads every file. It refuses duplicate keys, a byte order mark, invalid UTF-8, unknown fields and input over the size cap. The Rust types are the source of truth. chaperone generates the JSON Schema from the types.
 
 | File | Who writes it | What it holds |
 |---|---|---|
 | `install.toml` | The operator, by hand | Enabled plugins, the plugin for each slot, launch commands, secret bindings |
 | `policy.json` | The operator, through the editor or by hand | App instances, token digests, grants, argument fences, gates, limits |
-| `plugin.json` | The plugin author | One per plugin directory. See section 7.4. |
+| `plugin.toml` | The plugin author | One per plugin directory. See section 7.4. |
 | A secret file | The operator | One secret value per file |
 
 Rules:
 
-- The policy file and the plugin manifest can name their schema in `$schema`. The value of each file is fixed: `urn:chaperone:policy:1` and `urn:chaperone:plugin:1`. A file that names another value does not load. The field stays optional, so a file written before step 8 still loads. The install file has no `$schema` field. `chaperone schema` prints the schema of each file and of each plugin policy section, from the Rust types.
-- Grants and install entries take a typed `note` field for the reason. JSON has no comments. The install file can also hold TOML comments.
+- The policy file can name its schema in `$schema`. The value is fixed: `urn:chaperone:policy:1`. A file that names another value does not load. The field stays optional, so a file written before step 8 still loads. The install file and the plugin manifest have no `$schema` field. `chaperone schema` prints the schema of each file and of each plugin policy section, from the Rust types.
+- Grants and install entries take a typed `note` field for the reason. JSON has no comments. A TOML file can also hold comments.
 - An install entry of an effect plugin can hold `args`: arguments that chaperone appends to the command of the manifest at launch. The manifest names the program. The install file adds what differs per deployment, such as an address. An argument is never a secret value (G9).
 - The policy file names a plugin by name only. It cannot launch a binary or bind a secret.
 - The editor's OS user cannot write `install.toml`.
@@ -228,7 +228,7 @@ Fences and upstreams are not slots. The install file can enable any number of th
 | `plugins/<kind>/included/` | Plugins that ship with chaperone | Yes |
 | `plugins/<kind>/added/` | The operator's own plugins | No |
 
-`<kind>` is `adapter`, `decision` or `effect`. The directory names the kind. A plugin with two halves of different kinds is two plugins with the same name, one per kind directory. Each half declares the other in `plugin.json`. chaperone refuses to start when a declared half is missing.
+`<kind>` is `adapter`, `decision` or `effect`. The directory names the kind. A plugin with two halves of different kinds is two plugins with the same name, one per kind directory. Each half declares the other in `plugin.toml`. chaperone refuses to start when a declared half is missing.
 
 To overrule a default plugin, the operator names a different plugin for that slot in `install.toml`. When the install file names no plugin for a slot, the default plugin fills it. chaperone refuses to start when two enabled plugins claim one slot and the install file does not choose.
 
@@ -238,7 +238,7 @@ A release binary contains the decision and adapter plugins from `default` and `i
 
 ### 7.4 The plugin manifest
 
-Each plugin directory holds a `plugin.json`. It holds:
+Each plugin directory holds a `plugin.toml`. It holds:
 
 - the name, the version and the kind
 - the slot the plugin can fill, if any
@@ -247,7 +247,7 @@ Each plugin directory holds a `plugin.json`. It holds:
 - the kind of its other half, if it has two halves
 - for an effect plugin: the launch command
 
-An effect plugin serves one role: upstream or approval. A compiled plugin's policy-section schema comes from its Rust type, not from `plugin.json`, so the schema has one source. The secret delivery mode is the operator's choice, so it sits in `install.toml`.
+An effect plugin serves one role: upstream or approval. A compiled plugin's policy-section schema comes from its Rust type, not from `plugin.toml`, so the schema has one source. The secret delivery mode is the operator's choice, so it sits in `install.toml`.
 
 ### 7.5 Secret delivery to an effect plugin
 
