@@ -168,6 +168,11 @@ pub trait Fence: Send + Sync + fmt::Debug {
     /// The plugin name. It equals the name in `plugin.json`.
     fn name(&self) -> &PluginName;
 
+    /// The JSON Schema of this plugin's section in an app instance of
+    /// `policy.json`, from the Rust type that `prepare` reads
+    /// (`docs/design.md` 7.4).
+    fn section_schema(&self) -> schemars::Schema;
+
     /// Read this plugin's section for one app instance. `None` means the
     /// app instance has no section. The fence then decides what that means.
     ///

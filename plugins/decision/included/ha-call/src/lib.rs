@@ -14,6 +14,7 @@ use chaperone_core::{
     ArgValue, Fence, FenceReason, FenceVerdict, PluginName, PreparedFence, RawSection,
     SectionError, ToolCall,
 };
+use schemars::JsonSchema;
 use serde::Deserialize;
 
 /// The argument that names the entities a call acts on.
@@ -23,7 +24,7 @@ const ENTITY_ARG: &str = "entity_id";
 const ENTITY_MAX: usize = 255;
 
 /// The `ha-call` section of one app instance in the policy file.
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 struct Section {
     /// The entities the app instance may act on, as `domain.object_id`.
@@ -74,6 +75,10 @@ struct PreparedEntityFence {
 impl Fence for EntityFence {
     fn name(&self) -> &PluginName {
         &self.name
+    }
+
+    fn section_schema(&self) -> schemars::Schema {
+        schemars::schema_for!(Section)
     }
 
     fn prepare(

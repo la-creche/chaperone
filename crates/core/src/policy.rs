@@ -5,7 +5,8 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 
-use serde::Deserialize;
+use schemars::JsonSchema;
+use serde::{Deserialize, Serialize};
 use serde_json::value::RawValue;
 
 use crate::hook::{Fence, PreparedFence, RawSection, SectionError};
@@ -19,10 +20,33 @@ pub const POLICY_FILE_CAP: ByteCap = ByteCap::new(1024 * 1024);
 const POLICY_VERSION: u32 = 1;
 const DIGESTS_MAX: usize = 2;
 
+/// The value of `$schema` in `policy.json` (`docs/design.md` 6).
+pub const POLICY_SCHEMA_ID: &str = "urn:chaperone:policy:1";
+
 /// The SHA-256 digest of one bearer token.
-#[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Deserialize)]
-#[serde(try_from = "String")]
+#[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[serde(try_from = "String", into = "String")]
 pub struct TokenDigest([u8; 32]);
+
+impl From<TokenDigest> for String {
+    fn from(digest: TokenDigest) -> Self {
+        hex::encode(digest.0)
+    }
+}
+
+impl JsonSchema for TokenDigest {
+    fn schema_name() -> std::borrow::Cow<'static, str> {
+        std::borrow::Cow::Borrowed("token digest")
+    }
+
+    fn json_schema(_: &mut schemars::SchemaGenerator) -> schemars::Schema {
+        schemars::json_schema!({
+            "type": "string",
+            "description": "The SHA-256 of a token, as 64 lower-case hex characters",
+            "pattern": "^[0-9a-f]{64}$",
+        })
+    }
+}
 
 impl TokenDigest {
     /// Wrap a digest.
@@ -65,7 +89,7 @@ impl TryFrom<String> for TokenDigest {
 }
 
 /// One allowed or denied value of an argument fence.
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(untagged)]
 pub enum Scalar {
     Bool(bool),
@@ -74,7 +98,7 @@ pub enum Scalar {
 }
 
 /// A fence on one top-level argument.
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "lowercase", deny_unknown_fields)]
 pub enum ArgumentFence {
     /// The argument must be present and equal one of these values.
@@ -85,7 +109,7 @@ pub enum ArgumentFence {
 }
 
 /// Whether a call to a tool needs a human approval.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "lowercase")]
 pub enum Approval {
     #[default]
@@ -94,10 +118,11 @@ pub enum Approval {
 }
 
 /// The grant of one tool.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct ToolGrant {
-    #[serde(default)]
+    /// The operator's reason for the grant.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     note: Option<String>,
     #[serde(default)]
     approval: Approval,
@@ -124,16 +149,18 @@ impl ToolGrant {
 }
 
 /// The grant of one upstream.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 struct UpstreamGrant {
-    #[serde(default)]
+    /// The operator's reason for the grant.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     note: Option<String>,
+    /// The granted tools of the upstream, by tool name.
     tools: BTreeMap<ToolName, ToolGrant>,
 }
 
 /// The limits of one app instance.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct Limits {
     /// The most calls the app instance may make in one minute.
@@ -142,27 +169,42 @@ pub struct Limits {
     pub max_pending_gates: u32,
 }
 
-#[derive(Debug, Deserialize)]
+/// One app instance, as `policy.json` holds it.
+#[derive(Debug, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 struct RawApp {
-    #[serde(default)]
+    /// The operator's reason for the app instance.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     note: Option<String>,
+    /// One or two token digests, so a token can rotate.
     token_sha256: Vec<TokenDigest>,
     limits: Limits,
+    /// The granted upstreams, by plugin name.
     #[serde(default)]
     grants: BTreeMap<PluginName, UpstreamGrant>,
+    /// The section of each active fence plugin, by plugin name. Each
+    /// plugin states the shape of its own section.
     #[serde(default)]
     plugins: BTreeMap<PluginName, Box<RawValue>>,
 }
 
-#[derive(Debug, Deserialize)]
+/// `policy.json` as written.
+#[derive(Debug, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 struct RawPolicy {
-    #[serde(rename = "$schema", default)]
-    _schema: Option<String>,
+    /// The schema of this file, `urn:chaperone:policy:1`.
+    #[serde(rename = "$schema", default, skip_serializing_if = "Option::is_none")]
+    schema: Option<String>,
+    /// The version of the file shape. This chaperone reads 1.
     version: u32,
+    /// The app instances, by app ID.
     #[serde(default)]
     apps: BTreeMap<AppId, RawApp>,
+}
+
+/// The JSON Schema of `policy.json`, from its types.
+pub(crate) fn policy_schema() -> schemars::Schema {
+    schemars::schema_for!(RawPolicy)
 }
 
 /// One active fence with its section for one app instance already read.
@@ -238,6 +280,14 @@ pub enum PolicyError {
     Read(#[from] StrictError),
     #[error("policy.json has version {found}, this chaperone reads version {POLICY_VERSION}")]
     Version { found: u32 },
+    #[error("policy.json names the schema {found}, this chaperone reads {POLICY_SCHEMA_ID}")]
+    Schema { found: String },
+    #[error("the app {0} is not in policy.json")]
+    UnknownApp(AppId),
+    #[error("the app {app} already holds {DIGESTS_MAX} token digests")]
+    DigestsFull { app: AppId },
+    #[error("policy.json could not be written back as JSON")]
+    Encode,
     #[error("the app {app} needs one or two token digests")]
     DigestCount { app: AppId },
     #[error("the apps {first} and {second} share a token digest")]
@@ -266,6 +316,43 @@ pub enum PolicyError {
     },
 }
 
+/// Read `policy.json` through the strict reader and check its `$schema`.
+fn read_raw(bytes: &[u8]) -> Result<RawPolicy, PolicyError> {
+    let raw: RawPolicy = strict::read(bytes, POLICY_FILE_CAP)?;
+    if let Some(found) = &raw.schema
+        && found != POLICY_SCHEMA_ID
+    {
+        return Err(PolicyError::Schema {
+            found: found.clone(),
+        });
+    }
+    Ok(raw)
+}
+
+/// `policy.json` with `digest` added to the app instance `app`
+/// (`docs/design.md` 9). The file is read through the strict reader and
+/// written back as indented JSON, with `$schema` set.
+///
+/// # Errors
+///
+/// Returns a [`PolicyError`] when the file does not read, the app is not in
+/// it, or the app already holds two digests.
+pub fn with_digest(bytes: &[u8], app: &AppId, digest: TokenDigest) -> Result<Vec<u8>, PolicyError> {
+    let mut raw = read_raw(bytes)?;
+    let instance = raw
+        .apps
+        .get_mut(app)
+        .ok_or_else(|| PolicyError::UnknownApp(app.clone()))?;
+    if instance.token_sha256.len() >= DIGESTS_MAX {
+        return Err(PolicyError::DigestsFull { app: app.clone() });
+    }
+    instance.token_sha256.push(digest);
+    raw.schema = Some(POLICY_SCHEMA_ID.to_owned());
+    let mut text = serde_json::to_vec_pretty(&raw).map_err(|_| PolicyError::Encode)?;
+    text.push(b'\n');
+    Ok(text)
+}
+
 impl Policy {
     /// Read `policy.json` and check it against the setup. Each active fence
     /// in `setup` needs its code in `fences`.
@@ -274,7 +361,7 @@ impl Policy {
     ///
     /// Returns the first [`PolicyError`] found. Checks run in a fixed order.
     pub fn load(bytes: &[u8], setup: &Setup, fences: &[&dyn Fence]) -> Result<Self, PolicyError> {
-        let raw: RawPolicy = strict::read(bytes, POLICY_FILE_CAP)?;
+        let raw: RawPolicy = read_raw(bytes)?;
         if raw.version != POLICY_VERSION {
             return Err(PolicyError::Version { found: raw.version });
         }

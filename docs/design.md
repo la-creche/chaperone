@@ -183,7 +183,7 @@ All configuration is JSON. The strict reader reads every file. It refuses duplic
 
 Rules:
 
-- Each file can name its schema in `$schema`. Step 8 publishes the schemas. It then fixes the value of `$schema` for each file and makes the field required.
+- Each file can name its schema in `$schema`. The value of each file is fixed: `urn:chaperone:install:1`, `urn:chaperone:policy:1` and `urn:chaperone:plugin:1`. A file that names another value does not load. The field stays optional, so a file written before step 8 still loads. `chaperone schema` prints the schema of each file and of each plugin policy section, from the Rust types.
 - Grants and install entries take a typed `note` field for the reason. JSON has no comments.
 - An install entry of an effect plugin can hold `args`: arguments that chaperone appends to the command of the manifest at launch. The manifest names the program. The install file adds what differs per deployment, such as an address. An argument is never a secret value (G9).
 - The policy file names a plugin by name only. It cannot launch a binary or bind a secret.
@@ -323,7 +323,7 @@ Each app instance can hold two digests, so a token can rotate with no downtime. 
 
 ## 10. Admin socket and CLI
 
-The admin socket is a Unix socket. Only the editor's OS user can open it. It is never on the front-door port.
+The admin socket is a Unix socket. Only the editor's OS user can open it. It is never on the front-door port. `chaperone serve` creates it at `--admin-socket` with mode 0660, so the owner and the group open it and nobody else. The operator puts the editor's OS user in that group.
 
 | CLI command | Socket endpoint | Job |
 |---|---|---|
@@ -332,6 +332,8 @@ The admin socket is a Unix socket. Only the editor's OS user can open it. It is 
 | `chaperone token new <app>` | `POST /token` | Create a token, as in section 9 |
 
 A CLI command and its endpoint call the same function. They cannot drift. The CLI works when the chaperone service is down, so a broken policy can be fixed.
+
+`chaperone check <file>` takes `install.json` or `policy.json` in its configuration directory, and `--plugins-dir`. `POST /check` takes `{"file": "<name>", "content": "<text>"}` and answers `200 {"ok": true}` or `422 {"ok": false, "error": "<text>"}`. `POST /token` takes `{"app": "<id>"}` and answers `200 {"token": "<text>"}` once, or `422`. `chaperone token new` keeps the previous policy file as `policy.json.prev` and lands the new one by an atomic rename, as the editor does. Each function runs on the service's own files. The socket does not take a path.
 
 ## 11. The editor
 
@@ -391,13 +393,14 @@ One pull request per step:
 5. The effect host, the upstream result check and the Vikunja upstream.
 6. Gates, the approval hook and `ha-approval`.
 7. `ha-call`, both halves.
-8. The admin socket, the CLI and the editor.
+8. In two pull requests:
+   1. The admin socket and the CLI: `schema`, `check` and `token new`.
+   2. The editor.
 
 ## 14. Open items
 
 | Item | Settle in |
 |---|---|
-| JSON Schema generation for the editor | Step 8 |
-| The published `$schema` value of each file, and the step that makes it required | Step 8 |
+| A `$schema` value that is a URL to a published schema, in place of the URN, and whether the field becomes required | After version 1 |
 | Stage (b): sandbox per app instance, the OpenHands runtime, the model pass-through | After version 1 |
 | Stage (b): the harness subscribes to the results of its gates, and chaperone publishes each kept result when the run ends. The transport, and how a subscription is bound to one app instance, are open. | After version 1 |

@@ -4,6 +4,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
+use schemars::JsonSchema;
 use serde::Deserialize;
 
 use crate::ids::{PluginName, SecretName, SecretParam};
@@ -14,6 +15,9 @@ use crate::strict::{self, ByteCap, StrictError};
 pub const INSTALL_FILE_CAP: ByteCap = ByteCap::new(256 * 1024);
 
 const INSTALL_VERSION: u32 = 1;
+
+/// The value of `$schema` in `install.json` (`docs/design.md` 6).
+pub const INSTALL_SCHEMA_ID: &str = "urn:chaperone:install:1";
 
 /// Where a plugin sits in the tree.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
@@ -27,7 +31,7 @@ pub enum Location {
 }
 
 /// How chaperone hands a secret to an effect plugin (`docs/design.md` 7.5).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize, JsonSchema)]
 #[serde(rename_all = "lowercase")]
 pub enum SecretDelivery {
     /// In the first message on stdin.
@@ -38,11 +42,13 @@ pub enum SecretDelivery {
 }
 
 /// One enabled plugin in `install.json`.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct InstallEntry {
+    /// The operator's reason for enabling the plugin.
     #[serde(default)]
     note: Option<String>,
+    /// The secret file bound to each secret parameter of the manifest.
     #[serde(default)]
     secrets: BTreeMap<SecretParam, SecretName>,
     #[serde(default)]
@@ -61,18 +67,27 @@ impl InstallEntry {
 }
 
 /// `install.json`.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct InstallFile {
+    /// The schema of this file, `urn:chaperone:install:1`.
     #[serde(rename = "$schema", default)]
-    _schema: Option<String>,
+    schema: Option<String>,
+    /// The version of the file shape. This chaperone reads 1.
     version: u32,
     #[serde(default)]
     note: Option<String>,
+    /// The enabled plugins, by plugin name.
     #[serde(default)]
     plugins: BTreeMap<PluginName, InstallEntry>,
+    /// The plugin for each slot that the default does not fill.
     #[serde(default)]
     slots: BTreeMap<Slot, PluginName>,
+}
+
+/// The JSON Schema of `install.json`, from its types.
+pub(crate) fn install_schema() -> schemars::Schema {
+    schemars::schema_for!(InstallFile)
 }
 
 /// Why `install.json` is not valid on its own.
@@ -82,6 +97,8 @@ pub enum InstallError {
     Read(#[from] StrictError),
     #[error("install.json has version {found}, this chaperone reads version {INSTALL_VERSION}")]
     Version { found: u32 },
+    #[error("install.json names the schema {found}, this chaperone reads {INSTALL_SCHEMA_ID}")]
+    Schema { found: String },
 }
 
 impl InstallFile {
@@ -92,6 +109,13 @@ impl InstallFile {
     /// Returns an [`InstallError`] that names the first rule the file breaks.
     pub fn read(bytes: &[u8]) -> Result<Self, InstallError> {
         let file: Self = strict::read(bytes, INSTALL_FILE_CAP)?;
+        if let Some(found) = &file.schema
+            && found != INSTALL_SCHEMA_ID
+        {
+            return Err(InstallError::Schema {
+                found: found.clone(),
+            });
+        }
         if file.version != INSTALL_VERSION {
             return Err(InstallError::Version {
                 found: file.version,

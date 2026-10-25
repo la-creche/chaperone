@@ -11,6 +11,7 @@ mod ids;
 mod install;
 mod plugin;
 mod policy;
+mod schema;
 mod secret;
 pub mod strict;
 mod time;
@@ -32,14 +33,17 @@ pub use ids::{
     AppId, ArgName, Name, NameError, NameKind, PluginName, SecretName, SecretParam, ToolName,
 };
 pub use install::{
-    Binding, Catalog, Found, INSTALL_FILE_CAP, InstallEntry, InstallError, InstallFile, Location,
-    PluginKey, SecretDelivery, Setup, SetupError, resolve,
+    Binding, Catalog, Found, INSTALL_FILE_CAP, INSTALL_SCHEMA_ID, InstallEntry, InstallError,
+    InstallFile, Location, PluginKey, SecretDelivery, Setup, SetupError, resolve,
 };
-pub use plugin::{Hook, Manifest, ManifestError, PLUGIN_FILE_CAP, PluginKind, Runtime, Slot};
+pub use plugin::{
+    Hook, Manifest, ManifestError, PLUGIN_FILE_CAP, PLUGIN_SCHEMA_ID, PluginKind, Runtime, Slot,
+};
 pub use policy::{
-    App, Approval, ArgumentFence, DigestError, Limits, POLICY_FILE_CAP, Policy, PolicyError,
-    Scalar, TokenDigest, ToolGrant,
+    App, Approval, ArgumentFence, DigestError, Limits, POLICY_FILE_CAP, POLICY_SCHEMA_ID, Policy,
+    PolicyError, Scalar, TokenDigest, ToolGrant, with_digest,
 };
+pub use schema::{ConfigSchemas, config_schemas};
 pub use secret::{Bearer, REDACTED, Secret, SecretError};
 pub use time::Timestamp;
 pub use value::{ArgValue, Finite};
