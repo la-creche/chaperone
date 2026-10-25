@@ -10,7 +10,6 @@ use std::path::{Path, PathBuf};
 use std::pin::Pin;
 use std::process::Stdio;
 use std::sync::Arc;
-use std::time::Duration;
 
 use chaperone_core::{
     APPROVE_TOOL, AppId, ArgValue, Catalog, PluginKind, PluginName, Policy, Runtime,
@@ -25,9 +24,6 @@ use tokio_stream::StreamExt;
 use tokio_util::codec::{FramedRead, LinesCodec};
 
 use crate::startup::Secrets;
-
-/// The longest the host waits for one upstream call (`docs/design.md` 5.5).
-pub const UPSTREAM_BUDGET: Duration = Duration::from_secs(30);
 
 /// The most text one result may hold, over all its blocks
 /// (`docs/design.md` 7.7).

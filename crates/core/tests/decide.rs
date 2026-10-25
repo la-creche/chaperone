@@ -13,7 +13,7 @@ use chaperone_core::{
     AppId, ArgValue, AuditApp, AuditTool, Caller, Catalog, Decision, DenyReason, Fence,
     FenceReason, FenceVerdict, Found, GateId, Gates, InstallFile, Location, Manifest, PluginKey,
     PluginName, Policy, PolicyError, PreparedFence, RawSection, Reach, Request, SectionError,
-    Timestamp, TokenDigest, ToolCall, ToolName, strict, with_digest,
+    Timestamp, TokenDigest, ToolCall, ToolName, UpstreamBound, strict, with_digest,
 };
 use proptest::prelude::*;
 use serde::Deserialize;
@@ -698,6 +698,62 @@ fn two_apps_cannot_share_a_digest() {
         load_error(&text),
         PolicyError::SharedDigest { .. }
     ));
+}
+
+/// The fixture policy with `timeout_s = <value>` on the `vikunja` grant.
+fn bounded_policy(value: &str) -> String {
+    policy_text("").replace(
+        "[apps.librechat.grants.vikunja.tools]",
+        &format!("[apps.librechat.grants.vikunja]\ntimeout_s = {value}\n\n[apps.librechat.grants.vikunja.tools]"),
+    )
+}
+
+#[test]
+fn an_upstream_grant_without_a_bound_takes_30_seconds() {
+    let app = base_policy();
+    let app = app.app(&app_id("librechat")).unwrap();
+    assert_eq!(
+        app.upstream_bound(&name("vikunja")),
+        Some(UpstreamBound::DEFAULT)
+    );
+    assert_eq!(UpstreamBound::DEFAULT.seconds(), 30);
+    assert_eq!(app.upstream_bound(&name("nope")), None);
+}
+
+#[test]
+fn an_upstream_grant_sets_its_own_bound() {
+    let entities = EntityFence(name("ha-call"));
+    for seconds in [1, 120] {
+        let policy = load(INSTALL, &bounded_policy(&seconds.to_string()), &[&entities]).unwrap();
+        let app = policy.app(&app_id("librechat")).unwrap();
+        let bound = app.upstream_bound(&name("vikunja")).unwrap();
+        assert_eq!(bound.seconds(), seconds);
+    }
+}
+
+#[test]
+fn a_bound_outside_1_to_120_seconds_does_not_load() {
+    for value in ["0", "121", "-1"] {
+        let error = load_error(&bounded_policy(value));
+        assert_eq!(
+            error,
+            PolicyError::UpstreamBound {
+                app: app_id("librechat"),
+                upstream: name("vikunja"),
+            }
+        );
+        assert!(error.to_string().contains("1 to 120"), "{error}");
+    }
+}
+
+#[test]
+fn a_bound_that_is_not_an_integer_does_not_load() {
+    for value in ["1.5", r#""30""#, "true"] {
+        assert!(matches!(
+            load_error(&bounded_policy(value)),
+            PolicyError::Read(strict::StrictError::Shape { .. })
+        ));
+    }
 }
 
 #[test]

@@ -17,12 +17,12 @@ use chaperone_core::{
     AuditError, AuditSink, AuditTool, CallAudit, CallFault, CallNumber, CallOutcome, Caller, Clock,
     Credentials, Decision, ExposedName, GateAnswer, GateId, GatedCall, Gates, Gateway, Health,
     Identity, ListError, ListedTool, PluginName, Policy, Request, RunId, Timestamp, ToolCall,
-    ToolName, UpstreamResult, WaitingCall,
+    ToolName, UpstreamBound, UpstreamResult, WaitingCall,
 };
 use tokio::sync::watch;
 
 use crate::approval::ApprovalChannel;
-use crate::effect::{self, EffectFault, Redactor, UPSTREAM_BUDGET, Upstreams};
+use crate::effect::{self, EffectFault, Redactor, Upstreams};
 use crate::gates::{GATE_LIFE, GateBook, GateMaps, GateStatus, Opened};
 use crate::reload::PolicySource;
 
@@ -30,11 +30,11 @@ use crate::reload::PolicySource;
 /// A decision that takes longer fails the call with `no_decision` (G2).
 pub const DECISION_BUDGET: Duration = Duration::from_secs(5);
 
-/// The time bounds of one call (`docs/design.md` 5.5).
+/// The time bounds of one call (`docs/design.md` 5.5). The bound of an
+/// upstream call comes from the upstream grant in the policy.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Bounds {
     pub decision: Duration,
-    pub upstream: Duration,
     /// How long a gate lives, with its approval ask and its kept result.
     pub gate: Duration,
 }
@@ -43,7 +43,6 @@ impl Bounds {
     /// The bounds of `docs/design.md` 5.5.
     pub const DEFAULT: Self = Self {
         decision: DECISION_BUDGET,
-        upstream: UPSTREAM_BUDGET,
         gate: GATE_LIFE,
     };
 }
@@ -149,6 +148,7 @@ struct Staged {
     upstream: PluginName,
     tool: ToolName,
     arguments: BTreeMap<String, ArgValue>,
+    bound: Duration,
 }
 
 /// A gated call between its decision record and the approval answer.
@@ -157,6 +157,7 @@ struct StagedGate {
     app: AppId,
     exposed: ExposedName,
     arguments: BTreeMap<String, ArgValue>,
+    bound: Duration,
 }
 
 /// The state one decision reads besides the call itself.
@@ -295,6 +296,8 @@ impl ChaperoneGateway {
             None => GateMaps::default(),
             Some(Err(fault)) => return AfterRecord::Done(self.fail_before_decision(audit, fault)),
         };
+        // The policy that decides the call also bounds its upstream call.
+        let bound = upstream_bound(policy.as_deref(), app_id.as_ref(), exposed.upstream());
         let facts = Facts {
             policy,
             caller,
@@ -344,6 +347,7 @@ impl ChaperoneGateway {
                     upstream: exposed.upstream().clone(),
                     tool: exposed.tool().clone(),
                     arguments,
+                    bound,
                 })
             }
             AfterDecision::Gated(call) => match app_id {
@@ -352,6 +356,7 @@ impl ChaperoneGateway {
                     app,
                     exposed,
                     arguments,
+                    bound,
                 }),
                 // The decision gates only a call of a known app instance.
                 None => {
@@ -447,6 +452,7 @@ impl ChaperoneGateway {
         app: AppId,
         exposed: ExposedName,
         arguments: BTreeMap<String, ArgValue>,
+        bound: Duration,
     ) {
         let gateway = Arc::clone(self);
         let gate = call.gate();
@@ -466,7 +472,13 @@ impl ChaperoneGateway {
                 Ok(Ok(GateAnswer::Approved)) => {
                     sender.send_replace(GateStatus::Running);
                     let result = gateway
-                        .run_upstream(&app, exposed.upstream(), exposed.tool(), arguments.clone())
+                        .run_upstream(
+                            &app,
+                            exposed.upstream(),
+                            exposed.tool(),
+                            arguments.clone(),
+                            bound,
+                        )
                         .await;
                     let finishing = Arc::clone(&gateway);
                     let kept = tokio::task::spawn_blocking(move || {
@@ -510,18 +522,20 @@ impl ChaperoneGateway {
     }
 
     /// Send an allowed call to its upstream and check the result
-    /// (`docs/design.md` 7.7). The wait is bounded (`docs/design.md` 5.5).
+    /// (`docs/design.md` 7.7). The wait is bounded by `bound`
+    /// (`docs/design.md` 5.5).
     async fn run_upstream(
         &self,
         app: &AppId,
         upstream: &PluginName,
         tool: &ToolName,
         arguments: BTreeMap<String, ArgValue>,
+        bound: Duration,
     ) -> Result<UpstreamResult, CallFault> {
         let Some(running) = self.upstreams.get(upstream) else {
             return Err(CallFault::NotConnected);
         };
-        let raw = tokio::time::timeout(self.bounds.upstream, running.call(app, tool, arguments))
+        let raw = tokio::time::timeout(bound, running.call(app, tool, arguments))
             .await
             .map_err(|_| CallFault::UpstreamTimeout)?;
         let raw = raw.map_err(|fault| match fault {
@@ -621,6 +635,18 @@ impl ChaperoneGateway {
     }
 }
 
+/// The bound of a call to `upstream` by `app` under `policy`
+/// (`docs/design.md` 5.5). A call that the policy does not grant is denied
+/// before it runs, so it takes the default bound.
+fn upstream_bound(policy: Option<&Policy>, app: Option<&AppId>, upstream: &PluginName) -> Duration {
+    let bound = policy
+        .zip(app)
+        .and_then(|(policy, app)| policy.app(app))
+        .and_then(|app| app.upstream_bound(upstream))
+        .unwrap_or(UpstreamBound::DEFAULT);
+    Duration::from_secs(bound.seconds())
+}
+
 /// The answer after the final record of a failed call: the fault, or the
 /// audit fault when the record is not durable (G6).
 fn outcome(written: Result<(), AuditError>, fault: CallFault) -> CallOutcome {
@@ -679,6 +705,7 @@ impl SharedGateway {
                 &staged.upstream,
                 &staged.tool,
                 staged.arguments,
+                staged.bound,
             )
             .await;
         let gateway = Arc::clone(&self.0);
@@ -733,6 +760,7 @@ impl SharedGateway {
                     staged.app,
                     staged.exposed,
                     staged.arguments,
+                    staged.bound,
                 );
             }
             // An identical call while the gate is pending or running ends

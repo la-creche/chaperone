@@ -23,11 +23,8 @@ const DELEGATE_PATH: &str = "/delegate";
 const DISPATCH_PATH: &str = "/dispatch";
 const JOBS_PATH: &str = "/dispatch/jobs";
 
-/// The longest wait for the delegate door, for the whole call.
-// DESIGN-QUESTION: docs/design.md 5.5 bounds an upstream call at 30
-// seconds, so chaperone ends a delegate call first, with
-// `upstream_timeout`. The reading: both bounds stay. A change gives this
-// upstream its own bound in 5.5.
+/// The longest wait for the delegate door, for the whole call. The policy
+/// sets the chaperone bound of the grant to match (`docs/design.md` 5.5).
 pub const DELEGATE_TIMEOUT: Duration = Duration::from_secs(120);
 
 /// The longest wait for the dispatch door. No call waits for a job.
