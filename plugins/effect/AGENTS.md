@@ -2,7 +2,7 @@
 
 Rules for effect plugins. Read `plugins/AGENTS.md` first.
 
-An effect plugin is a separate process. chaperone launches it with the `command` from `plugin.json` and speaks MCP to it over stdio. chaperone is the MCP client. The plugin can be written in any language.
+An effect plugin is a separate process. chaperone launches it with the `command` from `plugin.toml` and speaks MCP to it over stdio. chaperone is the MCP client. The plugin can be written in any language.
 
 Two kinds of effect plugin exist:
 
@@ -29,5 +29,5 @@ Two kinds of effect plugin exist:
 ## Patterns
 
 - `ha-approval` is the reference approval plugin. It sends the request through the operator's existing approval flow and waits for the tap (`docs/design.md` section 12).
-- An effect plugin takes what differs per deployment, such as an address, from `args` in `install.toml`. Its `plugin.json` is in git and names no deployment.
+- An effect plugin takes what differs per deployment, such as an address, from `args` in `install.toml`. Its `plugin.toml` is in git and names no deployment.
 - A third-party MCP server that reads secrets from the environment goes in `added/`, with `secret_delivery = "env"` in `install.toml`. chaperone logs a warning at each start.

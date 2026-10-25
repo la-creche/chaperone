@@ -79,7 +79,13 @@ mod tests {
             ("system-clock", "adapter", "clock", "clock"),
         ] {
             let text = format!(
-                r#"{{"name":"{name}","version":"1","kind":"{kind}","slot":"{slot}","hooks":["{hook}"]}}"#
+                r#"
+                    name = "{name}"
+                    version = "1"
+                    kind = "{kind}"
+                    slot = "{slot}"
+                    hooks = ["{hook}"]
+                "#
             );
             let manifest = Manifest::read(text.as_bytes()).unwrap();
             catalog.insert(
@@ -91,8 +97,14 @@ mod tests {
             );
         }
         let manifest = Manifest::read(
-            br#"{"name":"deny-all","version":"1","kind":"effect","slot":"approval_channel",
-                "hooks":["approval"],"command":["deny-all"]}"#,
+            br#"
+                name = "deny-all"
+                version = "1"
+                kind = "effect"
+                slot = "approval_channel"
+                hooks = ["approval"]
+                command = ["deny-all"]
+            "#,
         )
         .unwrap();
         catalog.insert(

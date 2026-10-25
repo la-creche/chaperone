@@ -36,9 +36,7 @@ pub use install::{
     Binding, Catalog, Found, INSTALL_FILE_CAP, InstallEntry, InstallError, InstallFile, Location,
     PluginKey, SecretDelivery, Setup, SetupError, resolve,
 };
-pub use plugin::{
-    Hook, Manifest, ManifestError, PLUGIN_FILE_CAP, PLUGIN_SCHEMA_ID, PluginKind, Runtime, Slot,
-};
+pub use plugin::{Hook, Manifest, ManifestError, PLUGIN_FILE_CAP, PluginKind, Runtime, Slot};
 pub use policy::{
     App, Approval, ArgumentFence, DigestError, Limits, POLICY_FILE_CAP, POLICY_SCHEMA_ID, Policy,
     PolicyError, Scalar, TokenDigest, ToolGrant, with_digest,

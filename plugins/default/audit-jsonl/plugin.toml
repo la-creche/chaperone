@@ -1,0 +1,5 @@
+name = "audit-jsonl"
+version = "1.0.0"
+kind = "adapter"
+slot = "audit_sink"
+hooks = ["audit_sink"]

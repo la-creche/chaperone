@@ -55,35 +55,71 @@ fn catalog() -> Catalog {
             &mut catalog,
             Location::Default,
             &format!(
-                r#"{{"name":"{plugin}","version":"1","kind":"{kind}","slot":"{slot}","hooks":["{slot}"]}}"#
+                r#"
+                    name = "{plugin}"
+                    version = "1"
+                    kind = "{kind}"
+                    slot = "{slot}"
+                    hooks = ["{slot}"]
+                "#
             ),
         );
     }
     put(
         &mut catalog,
         Location::Default,
-        r#"{"name":"deny-all","version":"1","kind":"effect","slot":"approval_channel",
-            "hooks":["approval"],"command":["deny-all"]}"#,
+        r#"
+            name = "deny-all"
+            version = "1"
+            kind = "effect"
+            slot = "approval_channel"
+            hooks = ["approval"]
+            command = ["deny-all"]
+        "#,
     );
     put(
         &mut catalog,
         Location::Included,
-        r#"{"name":"ha-call","version":"1","kind":"decision","hooks":["fence"],"pairs_with":"effect"}"#,
+        r#"
+            name = "ha-call"
+            version = "1"
+            kind = "decision"
+            hooks = ["fence"]
+            pairs_with = "effect"
+        "#,
     );
     put(
         &mut catalog,
         Location::Included,
-        r#"{"name":"ha-call","version":"1","kind":"effect","hooks":["upstream"],"pairs_with":"decision","command":["ha-call"]}"#,
+        r#"
+            name = "ha-call"
+            version = "1"
+            kind = "effect"
+            hooks = ["upstream"]
+            pairs_with = "decision"
+            command = ["ha-call"]
+        "#,
     );
     put(
         &mut catalog,
         Location::Included,
-        r#"{"name":"zz-extra","version":"1","kind":"decision","hooks":["fence"]}"#,
+        r#"
+            name = "zz-extra"
+            version = "1"
+            kind = "decision"
+            hooks = ["fence"]
+        "#,
     );
     put(
         &mut catalog,
         Location::Added,
-        r#"{"name":"vikunja","version":"1","kind":"effect","hooks":["upstream"],"command":["vikunja"]}"#,
+        r#"
+            name = "vikunja"
+            version = "1"
+            kind = "effect"
+            hooks = ["upstream"]
+            command = ["vikunja"]
+        "#,
     );
     catalog
 }

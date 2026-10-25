@@ -11,7 +11,7 @@ This crate wires the parts together. It reads the configuration, starts the plug
 3. Keep the rate counters and the gate state here. Pass them to `core` as values.
 4. Write the audit line through the audit sink before you return a result (G6).
 5. Blank each exact secret value in a tool result before the audit write and before the return (G9).
-6. Start effect plugins with the `command` from `plugin.json`. Send secrets over stdin (`docs/design.md` section 7.5). Check every upstream result before you return it (`docs/design.md` section 7.7).
+6. Start effect plugins with the `command` from `plugin.toml`. Send secrets over stdin (`docs/design.md` section 7.5). Check every upstream result before you return it (`docs/design.md` section 7.7).
 7. Build a manifest only from upstream tools that the policy grants. Never add a hook tool (G8).
 8. Refuse to start when a slot is empty or a named plugin is missing (G2, G10).
 9. Construct a compiled plugin only through a row of `src/registry.rs`. No other file names a plugin. A slot plugin without a row refuses start (G2).

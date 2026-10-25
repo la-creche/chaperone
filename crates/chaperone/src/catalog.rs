@@ -14,7 +14,7 @@ use chaperone_core::{
 use crate::files::{self, ReadError};
 
 /// The file that describes one plugin.
-pub const MANIFEST_FILE: &str = "plugin.json";
+pub const MANIFEST_FILE: &str = "plugin.toml";
 
 /// Why the plugin tree is not valid. Each one refuses start (G2).
 #[derive(Debug, thiserror::Error)]
@@ -49,7 +49,7 @@ const KIND_DIRS: [(&str, PluginKind); 3] = [
 const LOCATION_DIRS: [(&str, Location); 2] =
     [("included", Location::Included), ("added", Location::Added)];
 
-/// Read every `plugin.json` under `root`: `default/*`, then
+/// Read every `plugin.toml` under `root`: `default/*`, then
 /// `<kind>/included/*` and `<kind>/added/*`.
 ///
 /// # Errors

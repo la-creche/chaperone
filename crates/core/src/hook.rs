@@ -165,7 +165,7 @@ pub struct SectionError(pub String);
 
 /// The fence hook. Any number of fences can be active.
 pub trait Fence: Send + Sync + fmt::Debug {
-    /// The plugin name. It equals the name in `plugin.json`.
+    /// The plugin name. It equals the name in `plugin.toml`.
     fn name(&self) -> &PluginName;
 
     /// The JSON Schema of this plugin's section in an app instance of

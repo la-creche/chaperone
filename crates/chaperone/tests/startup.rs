@@ -65,7 +65,13 @@ fn a_manifest_in_a_directory_of_another_name_refuses_start() {
     write_manifest(
         &plugins,
         "effect/added/other",
-        r#"{"name":"vikunja","version":"1","kind":"effect","hooks":["upstream"],"command":["x"]}"#,
+        r#"
+            name = "vikunja"
+            version = "1"
+            kind = "effect"
+            hooks = ["upstream"]
+            command = ["x"]
+        "#,
     );
     let error = catalog::discover(&plugins).unwrap_err();
     assert!(
@@ -75,13 +81,34 @@ fn a_manifest_in_a_directory_of_another_name_refuses_start() {
 }
 
 #[test]
+fn a_plugin_with_only_a_json_manifest_refuses_start() {
+    let root = tempfile::tempdir().unwrap();
+    let plugins = plugin_tree(root.path());
+    let dir = plugins.join("effect/added/legacy");
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(
+        dir.join("plugin.json"),
+        r#"{"name":"legacy","version":"1","kind":"effect","hooks":["upstream"],"command":["x"]}"#,
+    )
+    .unwrap();
+    let error = catalog::discover(&plugins).unwrap_err();
+    assert!(matches!(error, CatalogError::Read(_)), "{error}");
+}
+
+#[test]
 fn a_manifest_in_the_directory_of_another_kind_refuses_start() {
     let root = tempfile::tempdir().unwrap();
     let plugins = plugin_tree(root.path());
     write_manifest(
         &plugins,
         "decision/included/misplaced",
-        r#"{"name":"misplaced","version":"1","kind":"effect","hooks":["upstream"],"command":["x"]}"#,
+        r#"
+            name = "misplaced"
+            version = "1"
+            kind = "effect"
+            hooks = ["upstream"]
+            command = ["x"]
+        "#,
     );
     let error = catalog::discover(&plugins).unwrap_err();
     assert!(
@@ -104,7 +131,13 @@ fn two_directories_with_one_plugin_refuse_start() {
     write_manifest(
         &plugins,
         "decision/included/bearer",
-        r#"{"name":"bearer","version":"2","kind":"decision","slot":"identity","hooks":["identity"]}"#,
+        r#"
+            name = "bearer"
+            version = "2"
+            kind = "decision"
+            slot = "identity"
+            hooks = ["identity"]
+        "#,
     );
     let error = catalog::discover(&plugins).unwrap_err();
     assert!(matches!(error, CatalogError::Duplicate { .. }), "{error}");
@@ -171,8 +204,14 @@ fn tree_with_a_bound_secret(root: &Path) -> (PathBuf, PathBuf) {
     write_manifest(
         &plugins,
         "effect/added/vikunja",
-        r#"{"name":"vikunja","version":"1","kind":"effect","hooks":["upstream"],
-            "secrets":["VIKUNJA_TOKEN"],"command":["vikunja-mcp"]}"#,
+        r#"
+            name = "vikunja"
+            version = "1"
+            kind = "effect"
+            hooks = ["upstream"]
+            secrets = ["VIKUNJA_TOKEN"]
+            command = ["vikunja-mcp"]
+        "#,
     );
     let install = "version = 1\nplugins.vikunja.secrets.VIKUNJA_TOKEN = \"vikunja_token\"\n";
     let config = config_dir(root, install, &policy_text(30));
@@ -259,7 +298,13 @@ fn another_plugin_in_a_slot_refuses_start() {
     write_manifest(
         &plugins,
         "decision/included/other-identity",
-        r#"{"name":"other-identity","version":"1","kind":"decision","slot":"identity","hooks":["identity"]}"#,
+        r#"
+            name = "other-identity"
+            version = "1"
+            kind = "decision"
+            slot = "identity"
+            hooks = ["identity"]
+        "#,
     );
     let install = r#"
         version = 1

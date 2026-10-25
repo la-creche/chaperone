@@ -20,7 +20,7 @@ Rules for every contributor and every agent that edits this repository. A direct
 | `plugins/decision` | Pure plugins, compiled in | No | `plugins/decision/AGENTS.md` |
 | `plugins/adapter` | I/O plugins, compiled in | Yes | `plugins/adapter/AGENTS.md` |
 | `plugins/effect` | Separate processes, MCP over stdio | Yes | `plugins/effect/AGENTS.md` |
-| `plugins/` as a whole | Kinds, slots, `plugin.json`, overrule rules | | `plugins/AGENTS.md` |
+| `plugins/` as a whole | Kinds, slots, `plugin.toml`, overrule rules | | `plugins/AGENTS.md` |
 
 ## Never do these
 

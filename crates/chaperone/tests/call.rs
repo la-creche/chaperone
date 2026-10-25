@@ -597,7 +597,12 @@ async fn a_decision_that_does_not_return_fails_no_decision() {
     write_manifest(
         &plugins,
         "decision/included/hang",
-        r#"{"name":"hang","version":"1","kind":"decision","hooks":["fence"]}"#,
+        r#"
+            name = "hang"
+            version = "1"
+            kind = "decision"
+            hooks = ["fence"]
+        "#,
     );
     let catalog = chaperone::catalog::discover(&plugins).unwrap();
     let install =

@@ -50,7 +50,8 @@ fn fake_binary() -> PathBuf {
     found.pop().expect("cargo built tests/fake_upstream.rs")
 }
 
-/// The command that runs the fake with `args`, as JSON.
+/// The command that runs the fake with `args`, as an array of strings. A
+/// JSON array of strings is also a TOML array.
 fn fake_command(args: &[&str]) -> String {
     let mut command = vec![fake_binary().to_str().unwrap().to_owned()];
     command.extend(args.iter().map(|arg| (*arg).to_owned()));
@@ -61,8 +62,14 @@ fn fake_command(args: &[&str]) -> String {
 fn vikunja_manifest(args: &[&str]) -> String {
     let command = fake_command(args);
     format!(
-        r#"{{"name":"vikunja","version":"1","kind":"effect","hooks":["upstream"],
-            "secrets":["VIKUNJA_TOKEN"],"command":{command}}}"#
+        r#"
+            name = "vikunja"
+            version = "1"
+            kind = "effect"
+            hooks = ["upstream"]
+            secrets = ["VIKUNJA_TOKEN"]
+            command = {command}
+        "#
     )
 }
 
@@ -70,8 +77,14 @@ fn vikunja_manifest(args: &[&str]) -> String {
 fn approval_manifest() -> String {
     let command = fake_command(&["--fake-approval"]);
     format!(
-        r#"{{"name":"fake-approval","version":"1","kind":"effect","slot":"approval_channel",
-            "hooks":["approval"],"command":{command}}}"#
+        r#"
+            name = "fake-approval"
+            version = "1"
+            kind = "effect"
+            slot = "approval_channel"
+            hooks = ["approval"]
+            command = {command}
+        "#
     )
 }
 
@@ -215,8 +228,13 @@ async fn a_command_that_does_not_exist_refuses_start() {
     write_manifest(
         &plugins,
         "effect/added/vikunja",
-        r#"{"name":"vikunja","version":"1","kind":"effect","hooks":["upstream"],
-            "command":["/nonexistent/chaperone-test-upstream"]}"#,
+        r#"
+            name = "vikunja"
+            version = "1"
+            kind = "effect"
+            hooks = ["upstream"]
+            command = ["/nonexistent/chaperone-test-upstream"]
+        "#,
     );
     let config = config_dir(root.path(), support::INSTALL, &policy_text(30));
     let secrets = secrets_dir(root.path());
@@ -334,8 +352,15 @@ async fn an_approval_channel_without_the_approve_tool_refuses_start() {
         &plugins,
         "effect/included/fake-approval",
         &format!(
-            r#"{{"name":"fake-approval","version":"1","kind":"effect","slot":"approval_channel",
-            "hooks":["approval"],"secrets":["VIKUNJA_TOKEN"],"command":{command}}}"#
+            r#"
+                name = "fake-approval"
+                version = "1"
+                kind = "effect"
+                slot = "approval_channel"
+                hooks = ["approval"]
+                secrets = ["VIKUNJA_TOKEN"]
+                command = {command}
+            "#
         ),
     );
     let install = r#"
@@ -375,8 +400,14 @@ async fn install_args_are_appended_to_the_command() {
         &plugins,
         "effect/added/vikunja",
         &format!(
-            r#"{{"name":"vikunja","version":"1","kind":"effect","hooks":["upstream"],
-            "secrets":["VIKUNJA_TOKEN"],"command":{command}}}"#
+            r#"
+                name = "vikunja"
+                version = "1"
+                kind = "effect"
+                hooks = ["upstream"]
+                secrets = ["VIKUNJA_TOKEN"]
+                command = {command}
+            "#
         ),
     );
     write_manifest(

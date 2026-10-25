@@ -47,7 +47,7 @@ fn every_row_names_a_shipped_plugin_in_its_slot() {
         let found = catalog
             .values()
             .find(|found| found.manifest.name() == &name)
-            .unwrap_or_else(|| panic!("{name} has a registry row and no plugin.json"));
+            .unwrap_or_else(|| panic!("{name} has a registry row and no plugin.toml"));
         assert_eq!(
             found.manifest.slot(),
             Some(entry.slot),

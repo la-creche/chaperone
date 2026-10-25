@@ -464,15 +464,27 @@ pub(crate) mod tests {
                 &mut catalog,
                 Location::Default,
                 &format!(
-                    r#"{{"name":"{name}","version":"1","kind":"{kind}","slot":"{slot}","hooks":["{hook}"]}}"#
+                    r#"
+                        name = "{name}"
+                        version = "1"
+                        kind = "{kind}"
+                        slot = "{slot}"
+                        hooks = ["{hook}"]
+                    "#
                 ),
             );
         }
         put(
             &mut catalog,
             Location::Default,
-            r#"{"name":"deny-all","version":"1","kind":"effect","slot":"approval_channel",
-                "hooks":["approval"],"command":["chaperone-deny-all"]}"#,
+            r#"
+                name = "deny-all"
+                version = "1"
+                kind = "effect"
+                slot = "approval_channel"
+                hooks = ["approval"]
+                command = ["chaperone-deny-all"]
+            "#,
         );
         catalog
     }
@@ -483,25 +495,51 @@ pub(crate) mod tests {
         put(
             &mut catalog,
             Location::Included,
-            r#"{"name":"ha-call","version":"1","kind":"decision","hooks":["fence"],"pairs_with":"effect"}"#,
+            r#"
+                name = "ha-call"
+                version = "1"
+                kind = "decision"
+                hooks = ["fence"]
+                pairs_with = "effect"
+            "#,
         );
         put(
             &mut catalog,
             Location::Included,
-            r#"{"name":"ha-call","version":"1","kind":"effect","hooks":["upstream"],
-                "secrets":["token"],"pairs_with":"decision","command":["ha-call"]}"#,
+            r#"
+                name = "ha-call"
+                version = "1"
+                kind = "effect"
+                hooks = ["upstream"]
+                secrets = ["token"]
+                pairs_with = "decision"
+                command = ["ha-call"]
+            "#,
         );
         put(
             &mut catalog,
             Location::Included,
-            r#"{"name":"ha-approval","version":"1","kind":"effect","slot":"approval_channel",
-                "hooks":["approval"],"secrets":["token"],"command":["ha-approval"]}"#,
+            r#"
+                name = "ha-approval"
+                version = "1"
+                kind = "effect"
+                slot = "approval_channel"
+                hooks = ["approval"]
+                secrets = ["token"]
+                command = ["ha-approval"]
+            "#,
         );
         put(
             &mut catalog,
             Location::Added,
-            r#"{"name":"vikunja","version":"1","kind":"effect","hooks":["upstream"],
-                "secrets":["VIKUNJA_TOKEN"],"command":["vikunja-mcp"]}"#,
+            r#"
+                name = "vikunja"
+                version = "1"
+                kind = "effect"
+                hooks = ["upstream"]
+                secrets = ["VIKUNJA_TOKEN"]
+                command = ["vikunja-mcp"]
+            "#,
         );
         catalog
     }
@@ -645,7 +683,13 @@ pub(crate) mod tests {
         put(
             &mut catalog,
             Location::Default,
-            r#"{"name":"other-identity","version":"1","kind":"decision","slot":"identity","hooks":["identity"]}"#,
+            r#"
+                name = "other-identity"
+                version = "1"
+                kind = "decision"
+                slot = "identity"
+                hooks = ["identity"]
+            "#,
         );
         let error = resolve(&install(EMPTY_INSTALL), &catalog).unwrap_err();
         assert_eq!(

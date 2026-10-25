@@ -1,7 +1,0 @@
-{
-  "name": "mcp-http",
-  "version": "1.0.0",
-  "kind": "adapter",
-  "slot": "front_door",
-  "hooks": ["front_door"]
-}

@@ -1,9 +1,0 @@
-{
-  "name": "ha-call",
-  "version": "1.0.0",
-  "kind": "effect",
-  "hooks": ["upstream"],
-  "secrets": ["HA_TOKEN"],
-  "pairs_with": "decision",
-  "command": ["chaperone-ha-call"]
-}
