@@ -107,7 +107,8 @@ struct Serve {
     /// The admin socket path. chaperone creates it with mode 0660.
     #[arg(long)]
     admin_socket: PathBuf,
-    /// The front door address. Only loopback in version 1.
+    /// The front door address. A LAN address needs the guard
+    /// host-firewall in install.toml.
     #[arg(long, default_value = DEFAULT_LISTEN)]
     listen: SocketAddr,
     /// A Host header value to accept, such as host.docker.internal:8300.
@@ -223,17 +224,20 @@ async fn run(args: Serve) -> ExitCode {
         mut allowed_hosts,
     } = args;
 
-    if let Err(error) = startup::check_listen(listen) {
-        tracing::error!(%error, "refusing to start");
-        return ExitCode::FAILURE;
-    }
-    let loaded = match startup::load(&config_dir, &plugins_dir, &audit_file, &secrets_dir) {
+    let mut loaded = match startup::load(&config_dir, &plugins_dir, &audit_file, &secrets_dir) {
         Ok(loaded) => loaded,
         Err(error) => {
             tracing::error!(%error, "refusing to start");
             return ExitCode::FAILURE;
         }
     };
+    match startup::check_listen(listen, loaded.setup.guard()) {
+        Ok(warning) => loaded.warnings.extend(warning),
+        Err(error) => {
+            tracing::error!(%error, "refusing to start");
+            return ExitCode::FAILURE;
+        }
+    }
     for warning in &loaded.warnings {
         tracing::warn!(%warning);
     }

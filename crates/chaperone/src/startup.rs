@@ -4,12 +4,12 @@
 
 use std::collections::BTreeMap;
 use std::fmt;
-use std::net::SocketAddr;
+use std::net::{IpAddr, SocketAddr};
 use std::path::Path;
 use std::sync::Arc;
 
 use chaperone_core::{
-    AuditSink, Catalog, Clock, Fence, INSTALL_FILE_CAP, Identity, InstallError, InstallFile,
+    AuditSink, Catalog, Clock, Fence, Guard, INSTALL_FILE_CAP, Identity, InstallError, InstallFile,
     NameError, POLICY_FILE_CAP, PluginKind, PluginName, Policy, PolicyError, RunId, Secret,
     SecretDelivery, SecretError, SecretName, SecretParam, SecretSource, Setup, SetupError, Slot,
     resolve,
@@ -60,9 +60,17 @@ pub enum StartError {
     #[error("the OS random source failed: {0}")]
     Random(getrandom::Error),
     #[error(
-        "the front door address {0} is not loopback, and TLS is not set up (docs/design.md 7.6)"
+        "the front door address {0} is unspecified. Bind one loopback or LAN address (docs/design.md 7.6)"
     )]
-    NotLoopback(SocketAddr),
+    Unspecified(SocketAddr),
+    #[error(
+        "the front door address {0} is not a unicast address. Bind one loopback or LAN address (docs/design.md 7.6)"
+    )]
+    NotUnicast(SocketAddr),
+    #[error(
+        "the front door address {0} is not loopback, and install.toml does not set guard = \"host-firewall\" for the front door (docs/design.md 7.6)"
+    )]
+    NoGuard(SocketAddr),
 }
 
 /// A fact the operator must see at each start. It does not refuse start.
@@ -70,6 +78,9 @@ pub enum StartError {
 pub enum Warning {
     /// The plugin uses the env exception of `docs/design.md` 7.5.
     EnvDelivery { plugin: PluginName },
+    /// The front door serves plain HTTP on a LAN address under the guard
+    /// `host-firewall` (`docs/design.md` 7.6).
+    HostFirewall(SocketAddr),
 }
 
 impl fmt::Display for Warning {
@@ -78,6 +89,10 @@ impl fmt::Display for Warning {
             Self::EnvDelivery { plugin } => write!(
                 f,
                 "{plugin} receives its secrets in its environment, and every child process of it inherits them"
+            ),
+            Self::HostFirewall(address) => write!(
+                f,
+                "the front door serves plain HTTP on {address}, and only the host firewall limits who reaches it"
             ),
         }
     }
@@ -203,16 +218,34 @@ pub fn policy_from(policy_bytes: &[u8], setup: &Setup) -> Result<Policy, StartEr
     Ok(Policy::load(policy_bytes, setup, &fence_refs)?)
 }
 
-/// Refuse a front door address that is not loopback (`docs/design.md` 7.6).
+/// Check the front door address against `guard` (`docs/design.md` 7.6).
+/// A loopback address passes. A LAN address passes only under
+/// [`Guard::HostFirewall`], with a warning that the operator must see.
 ///
 /// # Errors
 ///
-/// Returns [`StartError::NotLoopback`] for every other address.
-pub fn check_listen(address: SocketAddr) -> Result<(), StartError> {
-    if address.ip().is_loopback() {
-        return Ok(());
+/// Returns [`StartError::Unspecified`] for `0.0.0.0` and `::`,
+/// [`StartError::NotUnicast`] for a multicast or broadcast address, and
+/// [`StartError::NoGuard`] for a LAN address under [`Guard::Loopback`].
+pub fn check_listen(address: SocketAddr, guard: Guard) -> Result<Option<Warning>, StartError> {
+    let ip = address.ip().to_canonical();
+    if ip.is_unspecified() {
+        return Err(StartError::Unspecified(address));
     }
-    Err(StartError::NotLoopback(address))
+    let broadcast = match ip {
+        IpAddr::V4(v4) => v4.is_broadcast(),
+        IpAddr::V6(_) => false,
+    };
+    if ip.is_multicast() || broadcast {
+        return Err(StartError::NotUnicast(address));
+    }
+    if ip.is_loopback() {
+        return Ok(None);
+    }
+    match guard {
+        Guard::Loopback => Err(StartError::NoGuard(address)),
+        Guard::HostFirewall => Ok(Some(Warning::HostFirewall(address))),
+    }
 }
 
 /// Every active fence of the setup, built from its registry row. A fence
