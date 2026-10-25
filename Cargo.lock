@@ -330,6 +330,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "chaperone-plugin-deny-all"
+version = "0.0.0"
+dependencies = [
+ "rmcp",
+ "serde_json",
+ "tokio",
+]
+
+[[package]]
 name = "chaperone-plugin-mcp-http"
 version = "0.0.0"
 dependencies = [

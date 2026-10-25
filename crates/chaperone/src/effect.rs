@@ -1,19 +1,20 @@
-//! The effect host (`docs/design.md` 7.7). It launches each upstream with
-//! the command of its manifest and speaks MCP to it over stdio as the
-//! client. It checks each result before the call path returns it. Build
-//! step 6 adds the approval channel.
+//! The effect host (`docs/design.md` 7.7). It launches each upstream and
+//! the approval channel with the command of its manifest and speaks MCP to
+//! it over stdio as the client. It checks each upstream result before the
+//! call path returns it.
 
 use std::collections::BTreeMap;
 use std::fmt;
 use std::future::Future;
+use std::path::{Path, PathBuf};
 use std::pin::Pin;
 use std::process::Stdio;
 use std::sync::Arc;
 use std::time::Duration;
 
 use chaperone_core::{
-    ArgValue, Catalog, PluginKind, PluginName, Policy, Runtime, SecretDelivery, Setup, ToolName,
-    UpstreamResult,
+    APPROVE_TOOL, ArgValue, Catalog, PluginKind, PluginName, Policy, Runtime, SecretDelivery,
+    Setup, Slot, ToolName, UpstreamResult,
 };
 use rmcp::ServiceExt;
 use rmcp::model::{CallToolRequestParams, CallToolResult, Tool};
@@ -40,7 +41,7 @@ const SECRETS_KEY: &str = "secrets";
 
 /// One tool that an upstream lists.
 #[derive(Debug, Clone, PartialEq)]
-pub struct UpstreamTool {
+pub struct EffectTool {
     pub name: ToolName,
     pub description: Option<String>,
     pub input_schema: BTreeMap<String, ArgValue>,
@@ -48,17 +49,18 @@ pub struct UpstreamTool {
 
 /// Why a call to an upstream gave no result to check.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum UpstreamFault {
+pub enum EffectFault {
     /// The upstream is not running, or its connection is closed.
     NotConnected,
     /// The upstream answered with something that is not a tool result.
     BadResult,
 }
 
-/// A running upstream, as the call path sees it.
-pub trait Upstream: Send + Sync + fmt::Debug {
+/// A running effect plugin, as the call path sees it: an upstream, or the
+/// approval channel.
+pub trait Effect: Send + Sync + fmt::Debug {
     /// The tools the upstream listed at start.
-    fn tools(&self) -> &[UpstreamTool];
+    fn tools(&self) -> &[EffectTool];
 
     /// Send one `tools/call` and return the raw result. The call path
     /// bounds the wait and checks the result.
@@ -66,11 +68,11 @@ pub trait Upstream: Send + Sync + fmt::Debug {
         &'a self,
         tool: &'a ToolName,
         arguments: BTreeMap<String, ArgValue>,
-    ) -> Pin<Box<dyn Future<Output = Result<CallToolResult, UpstreamFault>> + Send + 'a>>;
+    ) -> Pin<Box<dyn Future<Output = Result<CallToolResult, EffectFault>> + Send + 'a>>;
 }
 
 /// Every running upstream, by plugin name.
-pub type Upstreams = BTreeMap<PluginName, Box<dyn Upstream>>;
+pub type Upstreams = BTreeMap<PluginName, Box<dyn Effect>>;
 
 /// Every secret chaperone holds, for blanking (G9). Clones share one set.
 #[derive(Debug, Clone)]
@@ -98,21 +100,21 @@ impl Redactor {
 ///
 /// # Errors
 ///
-/// Returns [`UpstreamFault::BadResult`] for a block of another type or for
+/// Returns [`EffectFault::BadResult`] for a block of another type or for
 /// more text than the cap.
 pub fn check_result(
     result: CallToolResult,
     redactor: &Redactor,
-) -> Result<UpstreamResult, UpstreamFault> {
+) -> Result<UpstreamResult, EffectFault> {
     let mut content = Vec::with_capacity(result.content.len());
     let mut total = 0_usize;
     for block in &result.content {
         let Some(text) = block.as_text() else {
-            return Err(UpstreamFault::BadResult);
+            return Err(EffectFault::BadResult);
         };
         total = total.saturating_add(text.text.len());
         if total > RESULT_CAP {
-            return Err(UpstreamFault::BadResult);
+            return Err(EffectFault::BadResult);
         }
         content.push(redactor.blank(&text.text));
     }
@@ -141,28 +143,39 @@ pub enum LaunchError {
     Initialize { plugin: PluginName, error: String },
     #[error("{plugin} did not list its tools: {error}")]
     ListTools { plugin: PluginName, error: String },
+    #[error("{plugin} fills the approval channel slot and does not list the tool {APPROVE_TOOL}")]
+    NoApproveTool { plugin: PluginName },
+    #[error("the approval channel slot has no plugin")]
+    NoApprovalChannel,
+}
+
+/// Every effect plugin the host launched.
+#[derive(Debug)]
+pub struct Launched {
+    pub upstreams: Upstreams,
+    pub approval: Box<dyn Effect>,
 }
 
 /// An upstream that runs as a child process.
-pub struct ProcessUpstream {
+pub struct EffectProcess {
     name: PluginName,
-    tools: Vec<UpstreamTool>,
+    tools: Vec<EffectTool>,
     service: RunningService<RoleClient, ()>,
     /// Held so the child is killed when the upstream is dropped.
     _child: Child,
 }
 
-impl fmt::Debug for ProcessUpstream {
+impl fmt::Debug for EffectProcess {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("ProcessUpstream")
+        f.debug_struct("EffectProcess")
             .field("name", &self.name)
             .field("tools", &self.tools.len())
             .finish_non_exhaustive()
     }
 }
 
-impl Upstream for ProcessUpstream {
-    fn tools(&self) -> &[UpstreamTool] {
+impl Effect for EffectProcess {
+    fn tools(&self) -> &[EffectTool] {
         &self.tools
     }
 
@@ -170,7 +183,7 @@ impl Upstream for ProcessUpstream {
         &'a self,
         tool: &'a ToolName,
         arguments: BTreeMap<String, ArgValue>,
-    ) -> Pin<Box<dyn Future<Output = Result<CallToolResult, UpstreamFault>> + Send + 'a>> {
+    ) -> Pin<Box<dyn Future<Output = Result<CallToolResult, EffectFault>> + Send + 'a>> {
         Box::pin(async move {
             let members: serde_json::Map<String, serde_json::Value> = arguments
                 .iter()
@@ -186,17 +199,17 @@ impl Upstream for ProcessUpstream {
                 ])),
                 Err(ServiceError::TransportSend(_))
                 | Err(ServiceError::TransportClosed)
-                | Err(ServiceError::Cancelled { .. }) => Err(UpstreamFault::NotConnected),
+                | Err(ServiceError::Cancelled { .. }) => Err(EffectFault::NotConnected),
                 // The error enum of the library is open. Any other error is
                 // an answer that is not a tool result (G2).
-                Err(_) => Err(UpstreamFault::BadResult),
+                Err(_) => Err(EffectFault::BadResult),
             }
         })
     }
 }
 
-/// Launch every active upstream of `setup`, in plugin name order
-/// (`docs/design.md` 7.7).
+/// Launch every active upstream of `setup`, in plugin name order, then the
+/// approval channel (`docs/design.md` 7.7).
 ///
 /// # Errors
 ///
@@ -205,30 +218,76 @@ pub async fn launch_all(
     setup: &Setup,
     catalog: &Catalog,
     redactor: &Redactor,
-) -> Result<Upstreams, LaunchError> {
+) -> Result<Launched, LaunchError> {
     let mut upstreams = Upstreams::new();
     for name in setup.upstreams() {
-        let command = catalog
-            .iter()
-            .find(|(key, _)| key.kind == PluginKind::Effect && key.name == *name)
-            .and_then(|(_, found)| match found.manifest.runtime() {
-                Runtime::Process { command } => Some(command.as_slice()),
-                Runtime::Compiled => None,
-            })
-            .ok_or_else(|| LaunchError::NoCommand {
-                plugin: name.clone(),
-            })?;
-        let delivery = setup
-            .binding(name)
-            .map_or(SecretDelivery::Stdin, |binding| binding.delivery);
-        let upstream = launch(name, command, delivery, redactor).await?;
+        let upstream = launch_named(name, setup, catalog, redactor).await?;
         upstreams.insert(name.clone(), Box::new(upstream));
     }
-    Ok(upstreams)
+    let name = setup
+        .slot(Slot::ApprovalChannel)
+        .ok_or(LaunchError::NoApprovalChannel)?;
+    let approval = launch_named(name, setup, catalog, redactor).await?;
+    let lists_approve = approval
+        .tools()
+        .iter()
+        .any(|tool| tool.name.as_str() == APPROVE_TOOL);
+    if !lists_approve {
+        return Err(LaunchError::NoApproveTool {
+            plugin: name.clone(),
+        });
+    }
+    Ok(Launched {
+        upstreams,
+        approval: Box::new(approval),
+    })
 }
 
-/// Launch one upstream: spawn it, hand it its secrets, initialize MCP and
-/// list its tools.
+/// Launch the effect plugin `name` with the command of its manifest and
+/// the secret delivery of its binding.
+async fn launch_named(
+    name: &PluginName,
+    setup: &Setup,
+    catalog: &Catalog,
+    redactor: &Redactor,
+) -> Result<EffectProcess, LaunchError> {
+    let command = catalog
+        .iter()
+        .find(|(key, _)| key.kind == PluginKind::Effect && key.name == *name)
+        .and_then(|(_, found)| match found.manifest.runtime() {
+            Runtime::Process { command } => Some(command.as_slice()),
+            Runtime::Compiled => None,
+        })
+        .ok_or_else(|| LaunchError::NoCommand {
+            plugin: name.clone(),
+        })?;
+    let delivery = setup
+        .binding(name)
+        .map_or(SecretDelivery::Stdin, |binding| binding.delivery);
+    launch(name, command, delivery, redactor).await
+}
+
+/// The program to run for `program` of a command (`docs/design.md` 7.7). A
+/// bare name is looked up next to the chaperone binary first. Any other
+/// name, and a bare name that is not there, is left to the OS.
+fn resolve_program(program: &str) -> PathBuf {
+    let bare = Path::new(program).components().count() == 1
+        && !program.starts_with('.')
+        && !program.starts_with('/');
+    if bare
+        && let Ok(exe) = std::env::current_exe()
+        && let Some(dir) = exe.parent()
+    {
+        let beside = dir.join(program);
+        if beside.is_file() {
+            return beside;
+        }
+    }
+    PathBuf::from(program)
+}
+
+/// Launch one effect plugin: spawn it, hand it its secrets, initialize MCP
+/// and list its tools.
 ///
 /// # Errors
 ///
@@ -238,13 +297,13 @@ pub async fn launch(
     command: &[String],
     delivery: SecretDelivery,
     redactor: &Redactor,
-) -> Result<ProcessUpstream, LaunchError> {
+) -> Result<EffectProcess, LaunchError> {
     let (program, args) = command
         .split_first()
         .ok_or_else(|| LaunchError::NoCommand {
             plugin: name.clone(),
         })?;
-    let mut spawn = Command::new(program);
+    let mut spawn = Command::new(resolve_program(program));
     spawn
         .args(args)
         .stdin(Stdio::piped())
@@ -308,7 +367,7 @@ pub async fn launch(
         .into_iter()
         .filter_map(|tool| upstream_tool(name, tool))
         .collect();
-    Ok(ProcessUpstream {
+    Ok(EffectProcess {
         name: name.clone(),
         tools,
         service,
@@ -343,7 +402,7 @@ fn secret_line(secrets: &BTreeMap<chaperone_core::SecretParam, chaperone_core::S
 
 /// One listed tool, or `None` with a warning when its name is not a tool
 /// name. Such a tool can never be granted.
-fn upstream_tool(plugin: &PluginName, tool: Tool) -> Option<UpstreamTool> {
+fn upstream_tool(plugin: &PluginName, tool: Tool) -> Option<EffectTool> {
     let Ok(name) = ToolName::try_new(&tool.name) else {
         tracing::warn!(%plugin, "the upstream lists a tool whose name is not a tool name");
         return None;
@@ -353,7 +412,7 @@ fn upstream_tool(plugin: &PluginName, tool: Tool) -> Option<UpstreamTool> {
         .iter()
         .map(|(key, value)| (key.clone(), ArgValue::from_json(value.clone())))
         .collect();
-    Some(UpstreamTool {
+    Some(EffectTool {
         name,
         description: tool.description.map(|text| text.into_owned()),
         input_schema,

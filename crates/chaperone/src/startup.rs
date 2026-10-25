@@ -10,8 +10,8 @@ use std::sync::Arc;
 
 use chaperone_core::{
     AuditSink, Catalog, Clock, INSTALL_FILE_CAP, Identity, InstallError, InstallFile,
-    POLICY_FILE_CAP, PluginName, Policy, PolicyError, RunId, Secret, SecretDelivery, SecretError,
-    SecretName, SecretParam, SecretSource, Setup, SetupError, Slot, resolve,
+    POLICY_FILE_CAP, PluginKind, PluginName, Policy, PolicyError, RunId, Secret, SecretDelivery,
+    SecretError, SecretName, SecretParam, SecretSource, Setup, SetupError, Slot, resolve,
 };
 use chaperone_plugin_audit_jsonl::OpenError;
 
@@ -113,6 +113,9 @@ pub fn load(
     let setup = resolve(&install, &catalog)?;
 
     for slot in Slot::ALL {
+        if slot.hook().kind() == PluginKind::Effect {
+            continue;
+        }
         entry_for(&setup, slot)?;
     }
     let identity = identity_for(&setup)?;
@@ -193,11 +196,9 @@ fn identity_for(setup: &Setup) -> Result<Box<dyn Identity>, StartError> {
     let (plugin, entry) = entry_for(setup, Slot::Identity)?;
     match entry.build {
         Build::Identity(build) => Ok(build()),
-        Build::AuditSink(_)
-        | Build::Clock(_)
-        | Build::SecretSource(_)
-        | Build::FrontDoor
-        | Build::Later => Err(no_code(Slot::Identity, plugin)),
+        Build::AuditSink(_) | Build::Clock(_) | Build::SecretSource(_) | Build::FrontDoor => {
+            Err(no_code(Slot::Identity, plugin))
+        }
     }
 }
 
@@ -207,11 +208,9 @@ fn audit_for(setup: &Setup, audit_file: &Path) -> Result<Arc<dyn AuditSink>, Sta
     let (plugin, entry) = entry_for(setup, Slot::AuditSink)?;
     match entry.build {
         Build::AuditSink(open) => Ok(open(audit_file)?),
-        Build::Identity(_)
-        | Build::Clock(_)
-        | Build::SecretSource(_)
-        | Build::FrontDoor
-        | Build::Later => Err(no_code(Slot::AuditSink, plugin)),
+        Build::Identity(_) | Build::Clock(_) | Build::SecretSource(_) | Build::FrontDoor => {
+            Err(no_code(Slot::AuditSink, plugin))
+        }
     }
 }
 
@@ -220,11 +219,9 @@ fn clock_for(setup: &Setup) -> Result<Box<dyn Clock>, StartError> {
     let (plugin, entry) = entry_for(setup, Slot::Clock)?;
     match entry.build {
         Build::Clock(build) => Ok(build()),
-        Build::Identity(_)
-        | Build::AuditSink(_)
-        | Build::SecretSource(_)
-        | Build::FrontDoor
-        | Build::Later => Err(no_code(Slot::Clock, plugin)),
+        Build::Identity(_) | Build::AuditSink(_) | Build::SecretSource(_) | Build::FrontDoor => {
+            Err(no_code(Slot::Clock, plugin))
+        }
     }
 }
 
@@ -237,11 +234,9 @@ fn secret_source_for(
     let (plugin, entry) = entry_for(setup, Slot::SecretSource)?;
     match entry.build {
         Build::SecretSource(build) => Ok(build(secrets_dir)),
-        Build::Identity(_)
-        | Build::AuditSink(_)
-        | Build::Clock(_)
-        | Build::FrontDoor
-        | Build::Later => Err(no_code(Slot::SecretSource, plugin)),
+        Build::Identity(_) | Build::AuditSink(_) | Build::Clock(_) | Build::FrontDoor => {
+            Err(no_code(Slot::SecretSource, plugin))
+        }
     }
 }
 

@@ -17,7 +17,8 @@ use std::pin::Pin;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-use chaperone::effect::{RESULT_CAP, Redactor, Upstream, UpstreamFault, UpstreamTool, Upstreams};
+use chaperone::approval::ApprovalChannel;
+use chaperone::effect::{Effect, EffectFault, EffectTool, RESULT_CAP, Redactor, Upstreams};
 use chaperone::gateway::{Bounds, ChaperoneGateway, Plugins, SharedGateway};
 use chaperone::startup::{self, Secrets};
 use chaperone_core::{
@@ -28,7 +29,10 @@ use chaperone_core::{
     ToolName, UpstreamResult,
 };
 use rmcp::model::{CallToolResult, ContentBlock};
-use support::{INSTALL, TOKEN, config_dir, plugin_tree, policy_text, secrets_dir, write_manifest};
+use support::{
+    FakeApproval, INSTALL, TOKEN, config_dir, fake_approval, plugin_tree, policy_text, secrets_dir,
+    write_manifest,
+};
 
 const RUN: RunId = RunId::from_bytes([9; 16]);
 const START: Timestamp = Timestamp::from_unix_millis(1_761_264_000_000);
@@ -145,7 +149,7 @@ fn secrets() -> Secrets {
 
 /// An upstream in memory. Each tool answers by its name.
 #[derive(Debug)]
-struct FakeUpstream(Vec<UpstreamTool>);
+struct FakeUpstream(Vec<EffectTool>);
 
 impl FakeUpstream {
     fn new() -> Self {
@@ -157,9 +161,12 @@ impl FakeUpstream {
             "broken",
             "slow",
             "secret_echo",
+            "delete_task",
+            "wait_task",
+            "odd_task",
         ]
         .into_iter()
-        .map(|name| UpstreamTool {
+        .map(|name| EffectTool {
             name: ToolName::try_new(name).unwrap(),
             description: Some(format!("the fake {name} tool")),
             input_schema: BTreeMap::new(),
@@ -169,8 +176,8 @@ impl FakeUpstream {
     }
 }
 
-impl Upstream for FakeUpstream {
-    fn tools(&self) -> &[UpstreamTool] {
+impl Effect for FakeUpstream {
+    fn tools(&self) -> &[EffectTool] {
         &self.0
     }
 
@@ -178,7 +185,7 @@ impl Upstream for FakeUpstream {
         &'a self,
         tool: &'a ToolName,
         _arguments: BTreeMap<String, ArgValue>,
-    ) -> Pin<Box<dyn Future<Output = Result<CallToolResult, UpstreamFault>> + Send + 'a>> {
+    ) -> Pin<Box<dyn Future<Output = Result<CallToolResult, EffectFault>> + Send + 'a>> {
         Box::pin(async move {
             let text = |text: String| CallToolResult::success(vec![ContentBlock::text(text)]);
             Ok(match tool.as_str() {
@@ -195,7 +202,10 @@ impl Upstream for FakeUpstream {
                     text("late".to_owned())
                 }
                 "secret_echo" => text(SECRET_VALUE.to_owned()),
-                _ => return Err(UpstreamFault::NotConnected),
+                "delete_task" => text("deleted".to_owned()),
+                "wait_task" => text("waited".to_owned()),
+                "odd_task" => text("odd".to_owned()),
+                _ => return Err(EffectFault::NotConnected),
             })
         })
     }
@@ -231,6 +241,7 @@ fn harness(calls_per_minute: u32) -> Harness {
             audit: Arc::clone(&sink) as Arc<dyn AuditSink>,
             clock: Box::new(SharedClock(Arc::clone(&clock))),
             upstreams: upstreams(),
+            approval: fake_approval(),
             redactor: Redactor::new(secrets()),
         },
         Bounds::DEFAULT,
@@ -312,20 +323,116 @@ async fn a_tool_without_a_grant_is_denied_with_one_record() {
 }
 
 #[tokio::test]
-async fn a_gated_call_fails_no_approval_channel_after_two_records() {
+async fn a_gated_call_runs_when_the_approval_comes_inside_the_window() {
     let Harness { gateway, sink, .. } = harness(30);
     let outcome = call(&gateway, Some(TOKEN), "vikunja__create_task").await;
-    assert!(matches!(
-        outcome,
-        CallOutcome::Failed(CallFault::NoApprovalChannel)
-    ));
+    let CallOutcome::Ran(result) = outcome else {
+        panic!("{outcome:?}");
+    };
+    assert_eq!(result.content, ["created"]);
     let events = sink.events();
     assert!(matches!(
         events[0],
         AuditEvent::Decided(AuditDecision::Gate(_))
     ));
-    assert_eq!(events[1], AuditEvent::Failed(CallFault::NoApprovalChannel));
+    assert_eq!(events[1], AuditEvent::Ran { is_error: false });
     assert_eq!(events.len(), 2);
+
+    // One approval runs one call. The next identical call gates again.
+    let again = call(&gateway, Some(TOKEN), "vikunja__create_task").await;
+    assert!(matches!(again, CallOutcome::Ran(_)));
+    assert!(matches!(
+        sink.events()[2],
+        AuditEvent::Decided(AuditDecision::Gate(_))
+    ));
+}
+
+#[tokio::test]
+async fn a_gated_call_fails_when_the_approval_is_denied() {
+    let Harness { gateway, sink, .. } = harness(30);
+    let outcome = call(&gateway, Some(TOKEN), "vikunja__delete_task").await;
+    assert!(matches!(
+        outcome,
+        CallOutcome::Failed(CallFault::ApprovalDenied)
+    ));
+    assert_eq!(
+        sink.events()[1],
+        AuditEvent::Failed(CallFault::ApprovalDenied)
+    );
+
+    // The denial holds for the life of the gate.
+    let again = call(&gateway, Some(TOKEN), "vikunja__delete_task").await;
+    assert!(matches!(
+        again,
+        CallOutcome::Denied(DenyReason::ApprovalDenied)
+    ));
+    assert_eq!(
+        sink.events()[2],
+        AuditEvent::Decided(AuditDecision::Deny("approval_denied"))
+    );
+}
+
+#[tokio::test]
+async fn an_answer_that_is_no_answer_faults_the_gate() {
+    let Harness { gateway, sink, .. } = harness(30);
+    let outcome = call(&gateway, Some(TOKEN), "vikunja__odd_task").await;
+    assert!(matches!(
+        outcome,
+        CallOutcome::Failed(CallFault::ApprovalFault)
+    ));
+    assert_eq!(
+        sink.events()[1],
+        AuditEvent::Failed(CallFault::ApprovalFault)
+    );
+    let again = call(&gateway, Some(TOKEN), "vikunja__odd_task").await;
+    assert!(matches!(
+        again,
+        CallOutcome::Denied(DenyReason::ApprovalDenied)
+    ));
+}
+
+#[tokio::test]
+async fn a_slow_approval_returns_waiting_and_a_retry_runs_after_it() {
+    let root = tempfile::tempdir().unwrap();
+    let loaded = loaded(root.path(), 30);
+    let sink = Arc::new(MemorySink::default());
+    let gateway = SharedGateway::new(ChaperoneGateway::new(
+        RUN,
+        loaded.policy,
+        Plugins {
+            identity: loaded.identity,
+            audit: Arc::clone(&sink) as Arc<dyn AuditSink>,
+            clock: Box::new(FixedClock(Mutex::new(START))),
+            upstreams: upstreams(),
+            approval: ApprovalChannel::new(Box::new(FakeApproval {
+                wait: Duration::from_millis(300),
+            })),
+            redactor: Redactor::new(secrets()),
+        },
+        Bounds {
+            approval_wait: Duration::from_millis(50),
+            ..Bounds::DEFAULT
+        },
+    ));
+    let outcome = call(&gateway, Some(TOKEN), "vikunja__wait_task").await;
+    let CallOutcome::Waiting(gate) = outcome else {
+        panic!("{outcome:?}");
+    };
+    assert_eq!(sink.events()[1], AuditEvent::Waiting(gate));
+
+    tokio::time::sleep(Duration::from_millis(500)).await;
+    let again = call(&gateway, Some(TOKEN), "vikunja__wait_task").await;
+    let CallOutcome::Ran(result) = again else {
+        panic!("{again:?}");
+    };
+    assert_eq!(result.content, ["waited"]);
+    let events = sink.events();
+    assert_eq!(events[2], AuditEvent::Decided(AuditDecision::Allow));
+    assert_eq!(events[3], AuditEvent::Ran { is_error: false });
+
+    // The approval is taken. A third call gates again and waits.
+    let third = call(&gateway, Some(TOKEN), "vikunja__wait_task").await;
+    assert!(matches!(third, CallOutcome::Waiting(_)));
 }
 
 #[tokio::test]
@@ -388,9 +495,12 @@ async fn a_known_caller_sees_the_granted_tools_the_upstream_lists() {
             "vikunja__big",
             "vikunja__broken",
             "vikunja__create_task",
+            "vikunja__delete_task",
             "vikunja__list_tasks",
+            "vikunja__odd_task",
             "vikunja__picture",
             "vikunja__slow",
+            "vikunja__wait_task",
         ]
     );
 }
@@ -442,6 +552,7 @@ async fn an_identity_hook_that_panics_resolves_to_nothing() {
             audit: Arc::clone(&sink) as Arc<dyn AuditSink>,
             clock: Box::new(FixedClock(Mutex::new(START))),
             upstreams: upstreams(),
+            approval: fake_approval(),
             redactor: Redactor::new(secrets()),
         },
         Bounds::DEFAULT,
@@ -484,11 +595,12 @@ async fn a_decision_that_does_not_return_fails_no_decision() {
             audit: Arc::clone(&sink) as Arc<dyn AuditSink>,
             clock: Box::new(FixedClock(Mutex::new(START))),
             upstreams: upstreams(),
+            approval: fake_approval(),
             redactor: Redactor::new(secrets()),
         },
         Bounds {
             decision: Duration::from_millis(100),
-            upstream: Duration::from_secs(1),
+            ..Bounds::DEFAULT
         },
     ));
     let began = Instant::now();
@@ -513,6 +625,7 @@ async fn a_sink_that_refuses_the_record_fails_the_call() {
             audit: Arc::new(RefusingSink),
             clock: Box::new(FixedClock(Mutex::new(START))),
             upstreams: upstreams(),
+            approval: fake_approval(),
             redactor: Redactor::new(secrets()),
         },
         Bounds::DEFAULT,
@@ -538,6 +651,7 @@ async fn the_audit_file_records_each_call_and_never_the_token() {
             audit: loaded.audit,
             clock: Box::new(FixedClock(Mutex::new(START))),
             upstreams: upstreams(),
+            approval: fake_approval(),
             redactor: Redactor::new(secrets()),
         },
         Bounds::DEFAULT,
@@ -559,7 +673,7 @@ async fn the_audit_file_records_each_call_and_never_the_token() {
     assert!(lines[1].contains(r#""event":"ran","detail":"is_error:false""#));
     assert!(lines[2].contains(r#""detail":"deny:tool_not_granted""#));
     assert!(lines[3].contains(r#""detail":"gate:"#));
-    assert!(lines[4].contains(r#""detail":"no_approval_channel""#));
+    assert!(lines[4].contains(r#""event":"ran","detail":"is_error:false""#));
     assert!(lines[5].contains(r#""detail":"unknown_tool""#));
     assert!(lines[6].contains(r#""app":null"#) && lines[6].contains("deny:unknown_credential"));
     assert!(lines.iter().all(|line| line.contains(&loaded.run.to_hex())));
@@ -579,7 +693,7 @@ async fn the_shared_gateway_answers_through_the_trait() {
         bearer: Some(&bearer),
         headers: &headers,
     };
-    assert_eq!(shared.list_tools(&credentials).await.unwrap().len(), 6);
+    assert_eq!(shared.list_tools(&credentials).await.unwrap().len(), 9);
     let outcome = shared
         .call_tool(&credentials, "vikunja__list_tasks", BTreeMap::new())
         .await;
@@ -607,6 +721,7 @@ fn harness_without_upstreams() -> Harness {
             audit: Arc::clone(&sink) as Arc<dyn AuditSink>,
             clock: Box::new(SharedClock(Arc::clone(&clock))),
             upstreams: Upstreams::new(),
+            approval: fake_approval(),
             redactor: Redactor::new(secrets()),
         },
         Bounds::DEFAULT,
@@ -689,11 +804,12 @@ async fn an_upstream_that_does_not_answer_in_time_fails_upstream_timeout() {
             audit: Arc::clone(&sink) as Arc<dyn AuditSink>,
             clock: Box::new(FixedClock(Mutex::new(START))),
             upstreams: upstreams(),
+            approval: fake_approval(),
             redactor: Redactor::new(secrets()),
         },
         Bounds {
-            decision: Duration::from_secs(5),
             upstream: Duration::from_millis(50),
+            ..Bounds::DEFAULT
         },
     ));
     let began = Instant::now();

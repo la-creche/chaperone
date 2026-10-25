@@ -6,9 +6,11 @@
 //! This crate holds the parts of the program that serve no connection. The
 //! `mcp-http` front door plugin serves them over MCP.
 
+pub mod approval;
 pub mod catalog;
 pub mod effect;
 mod files;
+pub mod gates;
 pub mod gateway;
 pub mod registry;
 pub mod startup;

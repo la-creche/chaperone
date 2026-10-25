@@ -18,14 +18,15 @@ mod value;
 
 pub use audit::{
     AfterDecision, AllowedCall, ArgumentsDigest, AuditApp, AuditDecision, AuditError, AuditEvent,
-    AuditRecord, AuditTool, CallAudit, CallNumber, GatedCall, RunId,
+    AuditRecord, AuditTool, CallAudit, CallNumber, GateMismatch, GatedCall, RunId,
 };
 pub use decide::{Decision, DenyReason, GateId, Gates, Request, decide};
 pub use exposed::{ExposedError, ExposedName, SEPARATOR};
 pub use gateway::{CallFault, CallOutcome, ListError, ListedTool, UpstreamResult};
 pub use hook::{
-    AuditSink, Caller, Clock, Credentials, Fence, FenceReason, FenceVerdict, Gateway, Identity,
-    PreparedFence, RawSection, Reach, SecretSource, SectionError, ToolCall,
+    ANSWER_CAP, APPROVE_TOOL, AnswerError, ApprovalRequest, AuditSink, Caller, Clock, Credentials,
+    DenialReason, Fence, FenceReason, FenceVerdict, GateAnswer, Gateway, Identity, PreparedFence,
+    RawSection, Reach, SecretSource, SectionError, ToolCall,
 };
 pub use ids::{
     AppId, ArgName, Name, NameError, NameKind, PluginName, SecretName, SecretParam, ToolName,

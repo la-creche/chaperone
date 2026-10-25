@@ -119,6 +119,19 @@ A gate is *pending* while it waits for an answer. It is *approved* after the app
 
 Only the approval channel can complete a gate. It can complete only a gate that a decision created, only with a matching gate ID, and only before the gate expires. A gate completion does not break G7: the policy already said "allowed if approved".
 
+The approval hook is the tool `approve` of the approval channel plugin. chaperone calls it once per gate, when the decision creates the gate, with these arguments:
+
+| Argument | Value |
+|---|---|
+| `gate` | The gate ID, as 32 lower-case hex characters |
+| `app` | The app ID |
+| `tool` | The exposed name of the tool |
+| `arguments` | The arguments of the call, as the app sent them |
+
+The answer is one text block that holds one strict JSON object: `{"answer":"approved"}` or `{"answer":"denied","reason":"<text>"}`. The reason is at most 200 characters. Any other result is a fault: an error result, another block, other JSON, an unknown field. A fault denies the gate for the rest of its life (G2), and the call fails with `approval_fault`.
+
+A gate lives 10 minutes from its creation (section 5.5). A denial, or a fault, holds for that life: an identical call finds the gate denied. An approval runs one call. chaperone removes the gate when that call runs, so the next identical call needs a new approval.
+
 ### 5.4 Audit records
 
 `CallAudit` in `crates/core` is the only way to build an audit record. Each call path yields these records:
@@ -131,6 +144,7 @@ Only the approval channel can complete a gate. It can complete only a gate that 
 | Allow, then the call cannot run | `decided`, `failed` |
 | Gate, then the wait window ends | `decided`, `waiting` |
 | Gate, then the approval channel fails | `decided`, `failed` |
+| Gate, then the approval is denied inside the wait window | `decided`, `failed` |
 | Gate, then the approval comes | `decided`, then `ran` or `failed` |
 
 Each record holds a run ID and a call number. These values match all records of one call.
@@ -152,6 +166,8 @@ The record keeps the arguments only as the SHA-256 of their canonical form. Clos
 | The decision | 5 seconds. A decision that takes longer fails the call with `no_decision` (G2). | A pure function over a policy file takes far less. A larger bound holds a caller longer on a stuck fence. A smaller bound fails a call on a slow host. |
 | The identity hook | None | The hook runs on the caller's thread, because `Credentials` borrows the request. A hook that never returns holds only that one call. A bound would need an owned copy of the bearer token. The hook is compiled code that the operator chooses in `install.json`. |
 | A call to an upstream | 30 seconds. A call that takes longer fails with `upstream_timeout` (G2). The audit holds a `failed` record. | A tool of version 1 answers in well under a second. A larger bound holds a caller on a stuck upstream. The upstream may still finish its work after the bound. chaperone does not retry (`crates/chaperone/AGENTS.md`). |
+| The wait window of a gated call | 60 seconds. The call then returns `waiting` (section 5.3). | An app's own request timeout is often near this. A human tap takes seconds to a minute. |
+| The life of a gate | 10 minutes from its creation. The approval hook call ends with it. | Long enough for a human away from the phone. Short enough that a forgotten gate does not approve a call hours later. |
 
 ## 6. Configuration
 
@@ -265,9 +281,9 @@ The effect host is the part of `chaperone serve` that runs effect plugins. It is
 
 Start:
 
-1. After the configuration loads, the host launches each active upstream with the `command` of its manifest, in plugin name order. Build step 6 launches the approval channel the same way.
+1. After the configuration loads, the host launches each active upstream with the `command` of its manifest, in plugin name order, then the approval channel the same way. A command whose program has no directory is looked up next to the chaperone binary first, then on `PATH`, so the plugins that ship with chaperone are found before any other program of that name.
 2. The host pipes stdin, stdout and stderr. It writes the secret line of section 7.5 when the manifest declares a secret. It sends the MCP `initialize` request, then `tools/list`, and keeps the list.
-3. A launch that fails, an `initialize` that fails or a `tools/list` that fails refuses start (G2).
+3. A launch that fails, an `initialize` that fails or a `tools/list` that fails refuses start (G2). An approval channel that does not list the tool `approve` refuses start.
 4. The host reads stderr as log text. It logs each line with the plugin name, after it blanks each exact secret value (G9).
 
 A call:
@@ -370,7 +386,6 @@ One pull request per step:
 
 | Item | Settle in |
 |---|---|
-| The final name of the approval hook, and its answer type | Step 6 |
 | JSON Schema generation for the editor | Step 8 |
 | The published `$schema` value of each file, and the step that makes it required | Step 8 |
 | Stage (b): sandbox per app instance, the OpenHands runtime, the model pass-through | After version 1 |

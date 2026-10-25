@@ -15,11 +15,16 @@ use std::future::Future;
 use serde::de::DeserializeOwned;
 use serde_json::value::RawValue;
 
+use serde::Deserialize;
+
 use crate::audit::{AuditError, AuditRecord};
+use crate::decide::GateId;
+use crate::exposed::ExposedName;
 use crate::gateway::{CallOutcome, ListError, ListedTool};
 use crate::ids::{AppId, PluginName, SecretName, ToolName};
 use crate::policy::Policy;
 use crate::secret::{Bearer, Secret, SecretError};
+use crate::strict::{self, ByteCap, StrictError};
 use crate::time::Timestamp;
 use crate::value::ArgValue;
 
@@ -205,6 +210,115 @@ pub trait Clock: Send + Sync + fmt::Debug {
     fn now(&self) -> Timestamp;
 }
 
+/// The tool of the approval channel plugin that chaperone calls for each
+/// gate (`docs/design.md` 5.3).
+pub const APPROVE_TOOL: &str = "approve";
+
+/// The largest answer of the approval hook chaperone reads.
+pub const ANSWER_CAP: ByteCap = ByteCap::new(4 * 1024);
+
+/// One request to the approval hook: the gate and the call it holds.
+#[derive(Debug)]
+pub struct ApprovalRequest<'a> {
+    pub gate: GateId,
+    pub app: &'a AppId,
+    pub tool: &'a ExposedName,
+    pub arguments: &'a BTreeMap<String, ArgValue>,
+}
+
+impl ApprovalRequest<'_> {
+    /// The arguments of the `approve` call (`docs/design.md` 5.3).
+    #[must_use]
+    pub fn arguments(&self) -> BTreeMap<String, ArgValue> {
+        BTreeMap::from([
+            ("gate".to_owned(), ArgValue::String(self.gate.to_hex())),
+            (
+                "app".to_owned(),
+                ArgValue::String(self.app.as_str().to_owned()),
+            ),
+            (
+                "tool".to_owned(),
+                ArgValue::String(self.tool.as_str().to_owned()),
+            ),
+            (
+                "arguments".to_owned(),
+                ArgValue::Object(self.arguments.clone()),
+            ),
+        ])
+    }
+}
+
+/// Why the approval channel denied a gate. At most [`DenialReason::MAX`]
+/// characters, cut from the plugin's text.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DenialReason(String);
+
+impl DenialReason {
+    /// The longest reason, in characters.
+    pub const MAX: usize = 200;
+
+    /// Wrap `text`, cut to [`Self::MAX`] characters.
+    #[must_use]
+    pub fn new(text: &str) -> Self {
+        Self(text.chars().take(Self::MAX).collect())
+    }
+
+    #[must_use]
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+/// The answer of the approval hook (`docs/design.md` 5.3).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum GateAnswer {
+    Approved,
+    Denied(DenialReason),
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RawAnswer {
+    answer: RawVerdict,
+    #[serde(default)]
+    reason: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "lowercase")]
+enum RawVerdict {
+    Approved,
+    Denied,
+}
+
+/// Why the text of the approval hook is not an answer. The gate is then
+/// denied for its life (G2).
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+pub enum AnswerError {
+    #[error("the answer is not strict JSON of the answer shape: {0}")]
+    Read(#[from] StrictError),
+    #[error("an approved answer carries a reason")]
+    ReasonOnApproved,
+}
+
+impl GateAnswer {
+    /// Read the text block of the approval hook's result.
+    ///
+    /// # Errors
+    ///
+    /// Returns an [`AnswerError`] when the text is not one answer.
+    pub fn read(bytes: &[u8]) -> Result<Self, AnswerError> {
+        let raw: RawAnswer = strict::read(bytes, ANSWER_CAP)?;
+        match (raw.answer, raw.reason) {
+            (RawVerdict::Approved, None) => Ok(Self::Approved),
+            (RawVerdict::Approved, Some(_)) => Err(AnswerError::ReasonOnApproved),
+            (RawVerdict::Denied, reason) => Ok(Self::Denied(DenialReason::new(
+                reason.as_deref().unwrap_or(""),
+            ))),
+        }
+    }
+}
+
 /// What a front door calls. chaperone implements it.
 pub trait Gateway: Send + Sync + 'static {
     /// The tools that these credentials may see.
@@ -238,6 +352,42 @@ mod tests {
         let shown = format!("{credentials:?}");
         assert!(shown.contains("authorization"));
         assert!(!shown.contains("SECRET"), "{shown}");
+    }
+
+    #[test]
+    fn an_answer_reads_approved_and_denied_and_refuses_the_rest() {
+        assert_eq!(
+            GateAnswer::read(br#"{"answer":"approved"}"#).unwrap(),
+            GateAnswer::Approved
+        );
+        assert_eq!(
+            GateAnswer::read(br#"{"answer":"denied","reason":"not today"}"#).unwrap(),
+            GateAnswer::Denied(DenialReason::new("not today"))
+        );
+        assert_eq!(
+            GateAnswer::read(br#"{"answer":"denied"}"#).unwrap(),
+            GateAnswer::Denied(DenialReason::new(""))
+        );
+        for bad in [
+            br#"{"answer":"maybe"}"#.as_slice(),
+            br#"{"answer":"approved","reason":"x"}"#,
+            br#"{"answer":"approved","extra":1}"#,
+            br#"{"answer":"approved","answer":"approved"}"#,
+            b"approved",
+            b"",
+        ] {
+            assert!(
+                GateAnswer::read(bad).is_err(),
+                "{}",
+                String::from_utf8_lossy(bad)
+            );
+        }
+    }
+
+    #[test]
+    fn a_denial_reason_is_cut_to_the_cap() {
+        let long = "x".repeat(DenialReason::MAX + 50);
+        assert_eq!(DenialReason::new(&long).as_str().len(), DenialReason::MAX);
     }
 
     #[test]

@@ -64,9 +64,68 @@ pub fn policy_text(calls_per_minute: u32) -> String {
                 "picture":{{}},
                 "big":{{}},
                 "broken":{{}},
-                "slow":{{}}
+                "slow":{{}},
+                "delete_task":{{"approval":"required"}},
+                "wait_task":{{"approval":"required"}},
+                "odd_task":{{"approval":"required"}}
             }}}}}}}}}}}}"#
     )
+}
+
+/// An approval channel in memory. It answers each gate by the tool it
+/// holds. `create_task` is approved. `delete_task` is denied. `wait_task`
+/// is approved after `wait`. `odd_task` gets text that is no answer.
+#[derive(Debug)]
+pub struct FakeApproval {
+    pub wait: std::time::Duration,
+}
+
+impl chaperone::effect::Effect for FakeApproval {
+    fn tools(&self) -> &[chaperone::effect::EffectTool] {
+        &[]
+    }
+
+    fn call<'a>(
+        &'a self,
+        _tool: &'a chaperone_core::ToolName,
+        arguments: std::collections::BTreeMap<String, chaperone_core::ArgValue>,
+    ) -> std::pin::Pin<
+        Box<
+            dyn std::future::Future<
+                    Output = Result<rmcp::model::CallToolResult, chaperone::effect::EffectFault>,
+                > + Send
+                + 'a,
+        >,
+    > {
+        Box::pin(async move {
+            let tool = match arguments.get("tool") {
+                Some(chaperone_core::ArgValue::String(tool)) => tool.clone(),
+                _ => String::new(),
+            };
+            let answer = |text: &str| {
+                rmcp::model::CallToolResult::success(vec![rmcp::model::ContentBlock::text(
+                    text.to_owned(),
+                )])
+            };
+            Ok(if tool.ends_with("delete_task") {
+                answer(r#"{"answer":"denied","reason":"not today"}"#)
+            } else if tool.ends_with("wait_task") {
+                tokio::time::sleep(self.wait).await;
+                answer(r#"{"answer":"approved"}"#)
+            } else if tool.ends_with("odd_task") {
+                answer("yes")
+            } else {
+                answer(r#"{"answer":"approved"}"#)
+            })
+        })
+    }
+}
+
+/// An approval channel over [`FakeApproval`] that answers at once.
+pub fn fake_approval() -> chaperone::approval::ApprovalChannel {
+    chaperone::approval::ApprovalChannel::new(Box::new(FakeApproval {
+        wait: std::time::Duration::from_secs(1),
+    }))
 }
 
 /// An empty secrets directory under `root`.

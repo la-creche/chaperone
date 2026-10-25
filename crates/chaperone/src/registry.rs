@@ -1,8 +1,10 @@
-//! The plugins this build can serve in each slot. A decision or adapter
-//! plugin is compiled into chaperone (`docs/design.md` 7.3), so the build
-//! must know how to construct each one. This table is the one place that
-//! names a compiled plugin. `startup` looks the plugin of each slot up here
-//! and refuses start when the table has no row for it (G2).
+//! The plugins this build can serve in each compiled slot. A decision or
+//! adapter plugin is compiled into chaperone (`docs/design.md` 7.3), so the
+//! build must know how to construct each one. This table is the one place
+//! that names a compiled plugin. `startup` looks the plugin of each
+//! compiled slot up here and refuses start when the table has no row for it
+//! (G2). An effect slot needs no row: the effect host launches its plugin
+//! as a process.
 //!
 //! A compiled plugin in `plugins/<kind>/added/` needs a row here and a
 //! build from source.
@@ -26,10 +28,6 @@ pub enum Build {
     /// A front door. `chaperone serve` starts it over the gateway after the
     /// configuration is loaded, so load time constructs nothing.
     FrontDoor,
-    /// A plugin whose code comes in build step 6 (the approval channel).
-    /// The slot accepts only this plugin until then, so that step never
-    /// meets a slot it cannot serve.
-    Later,
 }
 
 /// One row: a plugin name, the slot it fills and how to build it.
@@ -61,11 +59,6 @@ pub const ENTRIES: &[Entry] = &[
         name: "audit-jsonl",
         slot: Slot::AuditSink,
         build: Build::AuditSink(audit_jsonl),
-    },
-    Entry {
-        name: "deny-all",
-        slot: Slot::ApprovalChannel,
-        build: Build::Later,
     },
     Entry {
         name: "system-clock",

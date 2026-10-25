@@ -16,7 +16,7 @@ Two kinds of effect plugin exist:
 1. Read your secrets from the first line on stdin, if your manifest declares any: one JSON object, `{"secrets":{"<param>":"<value>"}}`. Then speak MCP. `docs/design.md` section 7.5 states the delivery.
 2. Keep each secret in memory only.
 3. Answer every hook call with a result that matches the hook's schema. chaperone treats any other answer as a fault, and a fault is a deny (G2).
-4. An approval plugin returns `Approved` only for a human approval of that exact gate ID.
+4. An approval plugin lists one tool, `approve`, and answers it with one text block that holds `{"answer":"approved"}` or `{"answer":"denied","reason":"<text>"}` (`docs/design.md` 5.3). It answers `approved` only for a human approval of that exact gate ID.
 5. An approval plugin owns any listener its flow needs, such as a callback endpoint. The core opens no inbound approval port.
 
 ## Never do these
