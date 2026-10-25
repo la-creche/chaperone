@@ -272,6 +272,7 @@ version = "0.0.0"
 dependencies = [
  "axum",
  "chaperone-core",
+ "chaperone-plugin-attendance-fence",
  "chaperone-plugin-audit-jsonl",
  "chaperone-plugin-bearer",
  "chaperone-plugin-ha-call-fence",
@@ -312,6 +313,15 @@ dependencies = [
 [[package]]
 name = "chaperone-lint"
 version = "0.0.0"
+
+[[package]]
+name = "chaperone-plugin-attendance-fence"
+version = "0.0.0"
+dependencies = [
+ "chaperone-core",
+ "proptest",
+ "serde",
+]
 
 [[package]]
 name = "chaperone-plugin-audit-jsonl"

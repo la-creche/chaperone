@@ -1,0 +1,17 @@
+[package]
+name = "chaperone-plugin-attendance-fence"
+description = "The decision half of attendance: per-app target lists for invoke_agent and enqueue"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+chaperone-core = { path = "../../../../crates/core" }
+serde = { workspace = true }
+
+[dev-dependencies]
+proptest = { workspace = true }
