@@ -14,8 +14,8 @@ mod support;
 use std::collections::BTreeSet;
 
 use chaperone::catalog;
-use chaperone::registry::{Build, ENTRIES, find};
-use chaperone_core::{PluginKind, PluginName, Slot};
+use chaperone::registry::{Build, ENTRIES, FENCES, find, find_fence};
+use chaperone_core::{Hook, PluginKind, PluginName, Slot};
 use support::repo_plugins;
 
 #[test]
@@ -116,4 +116,23 @@ fn a_name_outside_the_table_has_no_row() {
     assert!(find(Slot::Identity, &other).is_none());
     let bearer = PluginName::try_new("bearer").unwrap();
     assert!(find(Slot::AuditSink, &bearer).is_none());
+}
+
+#[test]
+fn every_shipped_fence_has_one_row_and_every_row_a_fence() {
+    let catalog = catalog::discover(&repo_plugins()).unwrap();
+    let shipped: BTreeSet<&str> = catalog
+        .values()
+        .filter(|found| found.manifest.kind() == PluginKind::Decision)
+        .filter(|found| found.manifest.serves(Hook::Fence))
+        .map(|found| found.manifest.name().as_str())
+        .collect();
+    let rows: BTreeSet<&str> = FENCES.iter().map(|entry| entry.name).collect();
+    assert_eq!(shipped, rows);
+    assert_eq!(rows.len(), FENCES.len(), "a fence appears twice");
+    for entry in FENCES {
+        let name = PluginName::try_new(entry.name).unwrap();
+        assert!(find_fence(&name).is_some());
+        assert_eq!((entry.build)().unwrap().name(), &name);
+    }
 }

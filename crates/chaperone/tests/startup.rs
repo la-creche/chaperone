@@ -34,19 +34,21 @@ fn load(root: &Path, install: &str, policy: &str) -> Result<Loaded, StartError> 
 }
 
 #[test]
-fn the_repository_plugin_tree_holds_the_defaults_and_ha_approval() {
+fn the_repository_plugin_tree_holds_the_defaults_and_the_included() {
     let catalog = catalog::discover(&repo_plugins()).unwrap();
     let names: Vec<&str> = catalog.keys().map(|key| key.name.as_str()).collect();
     assert_eq!(
         names,
         [
             "bearer",
+            "ha-call",
             "audit-jsonl",
             "mcp-http",
             "secret-files",
             "system-clock",
             "deny-all",
-            "ha-approval"
+            "ha-approval",
+            "ha-call"
         ]
     );
     let defaults = catalog
