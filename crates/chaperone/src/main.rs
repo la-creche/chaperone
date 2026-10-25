@@ -1,11 +1,14 @@
-//! `chaperone serve`: load the configuration, then serve the front door
-//! until SIGINT or SIGTERM.
+//! The command line (`docs/design.md` 10). `chaperone serve` loads the
+//! configuration, then serves the front door and the admin socket until
+//! SIGINT or SIGTERM. The other commands work with the service down, so a
+//! broken policy can be fixed.
 
 use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::process::ExitCode;
 use std::sync::Arc;
 
+use chaperone::admin::{self, ConfigFile};
 use chaperone::approval::ApprovalChannel;
 use chaperone::effect::{self, Redactor};
 use chaperone::gateway::{Bounds, ChaperoneGateway, Plugins, SharedGateway};
@@ -26,8 +29,47 @@ struct Cli {
 
 #[derive(Debug, Subcommand)]
 enum Command {
-    /// Load the configuration and serve the front door.
+    /// Load the configuration and serve the front door and the admin socket.
     Serve(Serve),
+    /// Print the JSON Schema of every configuration file and every plugin
+    /// policy section.
+    Schema,
+    /// Run the strict reader and every cross-file rule over one file.
+    Check(Check),
+    /// Tokens of app instances.
+    Token(TokenCommand),
+}
+
+#[derive(Debug, clap::Args)]
+struct Check {
+    /// The file: install.json or policy.json, in its configuration
+    /// directory.
+    file: PathBuf,
+    /// The plugin tree: default/, then <kind>/included and <kind>/added.
+    #[arg(long)]
+    plugins_dir: PathBuf,
+}
+
+#[derive(Debug, clap::Args)]
+struct TokenCommand {
+    #[command(subcommand)]
+    action: TokenAction,
+}
+
+#[derive(Debug, Subcommand)]
+enum TokenAction {
+    /// Create a token for an app instance and store its digest in
+    /// policy.json. The token is printed once.
+    New(TokenNew),
+}
+
+#[derive(Debug, clap::Args)]
+struct TokenNew {
+    /// The app ID in policy.json.
+    app: String,
+    /// The directory that holds policy.json.
+    #[arg(long)]
+    config_dir: PathBuf,
 }
 
 #[derive(Debug, clap::Args)]
@@ -45,6 +87,9 @@ struct Serve {
     /// user that runs chaperone.
     #[arg(long)]
     secrets_dir: PathBuf,
+    /// The admin socket path. chaperone creates it with mode 0660.
+    #[arg(long)]
+    admin_socket: PathBuf,
     /// The front door address. Only loopback in version 1.
     #[arg(long, default_value = "127.0.0.1:8300")]
     listen: SocketAddr,
@@ -65,6 +110,70 @@ fn main() -> ExitCode {
     let Cli { command } = Cli::parse();
     match command {
         Command::Serve(args) => serve(args),
+        Command::Schema => schema(),
+        Command::Check(args) => check(&args),
+        Command::Token(TokenCommand {
+            action: TokenAction::New(args),
+        }) => token_new(&args),
+    }
+}
+
+fn schema() -> ExitCode {
+    match serde_json::to_string_pretty(&admin::schema()) {
+        Ok(text) => {
+            println!("{text}");
+            ExitCode::SUCCESS
+        }
+        Err(error) => {
+            eprintln!("the schema could not be written as JSON: {error}");
+            ExitCode::FAILURE
+        }
+    }
+}
+
+fn check(args: &Check) -> ExitCode {
+    let name = args
+        .file
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or_default();
+    let file: ConfigFile = match name.parse() {
+        Ok(file) => file,
+        Err(error) => {
+            eprintln!("{error}");
+            return ExitCode::FAILURE;
+        }
+    };
+    let config_dir = args.file.parent().unwrap_or(std::path::Path::new("."));
+    let bytes = match std::fs::read(&args.file) {
+        Ok(bytes) => bytes,
+        Err(error) => {
+            eprintln!("cannot read {}: {error}", args.file.display());
+            return ExitCode::FAILURE;
+        }
+    };
+    match admin::check(file, &bytes, config_dir, &args.plugins_dir) {
+        Ok(()) => {
+            println!("{file}: ok");
+            ExitCode::SUCCESS
+        }
+        Err(error) => {
+            eprintln!("{file}: {error}");
+            ExitCode::FAILURE
+        }
+    }
+}
+
+fn token_new(args: &TokenNew) -> ExitCode {
+    match admin::token_new(&args.config_dir, &args.app) {
+        Ok(token) => {
+            println!("{}", token.reveal());
+            ExitCode::SUCCESS
+        }
+        Err(error) => {
+            eprintln!("no token: {error}");
+            ExitCode::FAILURE
+        }
     }
 }
 
@@ -88,6 +197,7 @@ async fn run(args: Serve) -> ExitCode {
         plugins_dir,
         audit_file,
         secrets_dir,
+        admin_socket,
         listen,
         mut allowed_hosts,
     } = args;
@@ -139,12 +249,29 @@ async fn run(args: Serve) -> ExitCode {
     )));
     let shutdown = CancellationToken::new();
     tokio::spawn(shutdown_on_signal(shutdown.clone()));
+    let admin = tokio::spawn(admin::serve_socket(
+        admin_socket.clone(),
+        config_dir,
+        plugins_dir,
+        shutdown.clone(),
+    ));
+    tracing::info!(socket = %admin_socket.display(), "serving the admin socket");
 
     tracing::info!(%listen, run = %loaded.run, "serving the front door");
-    match chaperone_plugin_mcp_http::serve(gateway, listener, allowed_hosts, shutdown).await {
-        Ok(()) => ExitCode::SUCCESS,
-        Err(error) => {
+    let front = chaperone_plugin_mcp_http::serve(gateway, listener, allowed_hosts, shutdown).await;
+    let admin = admin.await;
+    match (front, admin) {
+        (Ok(()), Ok(Ok(()))) => ExitCode::SUCCESS,
+        (Err(error), _) => {
             tracing::error!(%error, "the front door stopped");
+            ExitCode::FAILURE
+        }
+        (Ok(()), Ok(Err(error))) => {
+            tracing::error!(%error, "the admin socket stopped");
+            ExitCode::FAILURE
+        }
+        (Ok(()), Err(error)) => {
+            tracing::error!(%error, "the admin socket task did not return");
             ExitCode::FAILURE
         }
     }

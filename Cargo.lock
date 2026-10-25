@@ -270,6 +270,7 @@ dependencies = [
 name = "chaperone"
 version = "0.0.0"
 dependencies = [
+ "axum",
  "chaperone-core",
  "chaperone-plugin-audit-jsonl",
  "chaperone-plugin-bearer",
@@ -281,6 +282,8 @@ dependencies = [
  "getrandom 0.4.3",
  "hex",
  "rmcp",
+ "schemars",
+ "serde",
  "serde_json",
  "sha2",
  "tempfile",
@@ -298,6 +301,7 @@ version = "0.0.0"
 dependencies = [
  "hex",
  "proptest",
+ "schemars",
  "secrecy",
  "serde",
  "serde_json",
@@ -375,6 +379,7 @@ version = "0.0.0"
 dependencies = [
  "chaperone-core",
  "proptest",
+ "schemars",
  "serde",
  "serde_json",
 ]

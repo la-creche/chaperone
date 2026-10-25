@@ -115,10 +115,8 @@ pub fn load(
     audit_file: &Path,
     secrets_dir: &Path,
 ) -> Result<Loaded, StartError> {
-    let catalog = catalog::discover(plugins_dir)?;
     let install_bytes = files::read_capped(&config_dir.join(INSTALL_FILE), INSTALL_FILE_CAP)?;
-    let install = InstallFile::read(&install_bytes)?;
-    let setup = resolve(&install, &catalog)?;
+    let (catalog, setup) = setup_from(&install_bytes, plugins_dir)?;
 
     for slot in Slot::ALL {
         if slot.hook().kind() == PluginKind::Effect {
@@ -154,10 +152,8 @@ pub fn load(
         }
     }
 
-    let fences = fences_for(&setup)?;
-    let fence_refs: Vec<&dyn Fence> = fences.iter().map(AsRef::as_ref).collect();
     let policy_bytes = files::read_capped(&config_dir.join(POLICY_FILE), POLICY_FILE_CAP)?;
-    let policy = Policy::load(&policy_bytes, &setup, &fence_refs)?;
+    let policy = policy_from(&policy_bytes, &setup)?;
     let run = run_id()?;
     Ok(Loaded {
         run,
@@ -170,6 +166,35 @@ pub fn load(
         secrets,
         warnings,
     })
+}
+
+/// The plugin tree under `plugins_dir` and the setup that `install_bytes`
+/// names in it. This is the strict reader and every cross-file rule of the
+/// install file (`docs/design.md` 10).
+///
+/// # Errors
+///
+/// Returns the first [`StartError`] found.
+pub fn setup_from(
+    install_bytes: &[u8],
+    plugins_dir: &Path,
+) -> Result<(Catalog, Setup), StartError> {
+    let catalog = catalog::discover(plugins_dir)?;
+    let install = InstallFile::read(install_bytes)?;
+    let setup = resolve(&install, &catalog)?;
+    Ok((catalog, setup))
+}
+
+/// The policy that `policy_bytes` holds, checked against `setup` with the
+/// fences this build has code for (`docs/design.md` 10).
+///
+/// # Errors
+///
+/// Returns the first [`StartError`] found.
+pub fn policy_from(policy_bytes: &[u8], setup: &Setup) -> Result<Policy, StartError> {
+    let fences = fences_for(setup)?;
+    let fence_refs: Vec<&dyn Fence> = fences.iter().map(AsRef::as_ref).collect();
+    Ok(Policy::load(policy_bytes, setup, &fence_refs)?)
 }
 
 /// Refuse a front door address that is not loopback (`docs/design.md` 7.6).

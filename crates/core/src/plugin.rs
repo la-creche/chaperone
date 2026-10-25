@@ -4,6 +4,7 @@
 use std::collections::BTreeSet;
 use std::fmt;
 
+use schemars::JsonSchema;
 use serde::Deserialize;
 
 use crate::ids::{PluginName, SecretParam};
@@ -12,8 +13,11 @@ use crate::strict::{self, ByteCap, StrictError};
 /// The largest `plugin.json` chaperone reads.
 pub const PLUGIN_FILE_CAP: ByteCap = ByteCap::new(64 * 1024);
 
+/// The value of `$schema` in `plugin.json` (`docs/design.md` 6).
+pub const PLUGIN_SCHEMA_ID: &str = "urn:chaperone:plugin:1";
+
 /// How a plugin runs. The directory of a plugin names its kind.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Deserialize, JsonSchema)]
 #[serde(rename_all = "lowercase")]
 pub enum PluginKind {
     /// Compiled in. Pure.
@@ -25,7 +29,7 @@ pub enum PluginKind {
 }
 
 /// A job that exactly one plugin must do.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum Slot {
     FrontDoor,
@@ -76,7 +80,7 @@ impl fmt::Display for Slot {
 
 /// A named point where chaperone calls a plugin. `plugins/AGENTS.md` has
 /// the catalog.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum Hook {
     Identity,
@@ -104,11 +108,12 @@ impl Hook {
 }
 
 /// `plugin.json` as written.
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 struct RawManifest {
+    /// The schema of this file, `urn:chaperone:plugin:1`.
     #[serde(rename = "$schema", default)]
-    _schema: Option<String>,
+    schema: Option<String>,
     name: PluginName,
     version: String,
     kind: PluginKind,
@@ -121,6 +126,11 @@ struct RawManifest {
     pairs_with: Option<PluginKind>,
     #[serde(default)]
     command: Option<Vec<String>>,
+}
+
+/// The JSON Schema of `plugin.json`, from its types.
+pub(crate) fn manifest_schema() -> schemars::Schema {
+    schemars::schema_for!(RawManifest)
 }
 
 /// How chaperone runs a plugin.
@@ -150,6 +160,8 @@ pub struct Manifest {
 pub enum ManifestError {
     #[error("plugin.json is not valid JSON for a manifest: {0}")]
     Read(#[from] StrictError),
+    #[error("plugin.json names the schema {found}, this chaperone reads {PLUGIN_SCHEMA_ID}")]
+    Schema { found: String },
     #[error("the version is empty or longer than 64 characters")]
     BadVersion,
     #[error("the plugin serves no hook")]
@@ -188,6 +200,13 @@ impl Manifest {
     }
 
     fn check(raw: RawManifest) -> Result<Self, ManifestError> {
+        if let Some(found) = &raw.schema
+            && found != PLUGIN_SCHEMA_ID
+        {
+            return Err(ManifestError::Schema {
+                found: found.clone(),
+            });
+        }
         if raw.version.is_empty() || raw.version.len() > VERSION_MAX {
             return Err(ManifestError::BadVersion);
         }

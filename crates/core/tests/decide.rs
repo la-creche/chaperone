@@ -142,6 +142,10 @@ impl Fence for EntityFence {
         &self.0
     }
 
+    fn section_schema(&self) -> schemars::Schema {
+        schemars::Schema::from(true)
+    }
+
     fn prepare(
         &self,
         section: Option<RawSection<'_>>,
@@ -196,6 +200,10 @@ struct PreparedExtra(Behavior);
 impl Fence for ExtraFence {
     fn name(&self) -> &PluginName {
         &self.0
+    }
+
+    fn section_schema(&self) -> schemars::Schema {
+        schemars::Schema::from(true)
     }
 
     fn prepare(
