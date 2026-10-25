@@ -24,6 +24,7 @@ Each CLI command and its admin socket endpoint call the same function. Write the
 |---|---|
 | `chaperone check <file>` | `POST /check` |
 | `chaperone token new <app>` | `POST /token` |
+| `chaperone verify` | None. It probes the front door from outside. |
 
 The admin socket is a Unix socket with mode 0660. Only its owner and its group can open it. Never serve these endpoints on the front-door port.
 

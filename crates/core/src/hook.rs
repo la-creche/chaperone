@@ -19,7 +19,7 @@ use serde::Deserialize;
 use crate::audit::{AuditError, AuditRecord};
 use crate::decide::GateId;
 use crate::exposed::ExposedName;
-use crate::gateway::{CallOutcome, ListError, ListedTool};
+use crate::gateway::{CallOutcome, Health, ListError, ListedTool};
 use crate::ids::{AppId, PluginName, SecretName, ToolName};
 use crate::policy::Policy;
 use crate::secret::{Bearer, Secret, SecretError};
@@ -334,6 +334,10 @@ pub trait Gateway: Send + Sync + 'static {
         name: &str,
         arguments: BTreeMap<String, ArgValue>,
     ) -> impl Future<Output = CallOutcome> + Send;
+
+    /// Whether a valid policy is loaded, for a health probe. It reveals no
+    /// policy content.
+    fn health(&self) -> impl Future<Output = Health> + Send;
 }
 
 #[cfg(test)]

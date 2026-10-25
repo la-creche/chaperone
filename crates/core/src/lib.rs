@@ -22,7 +22,7 @@ pub use audit::{
 };
 pub use decide::{Decision, DenyReason, GateId, Gates, Request, decide};
 pub use exposed::{ExposedError, ExposedName, SEPARATOR};
-pub use gateway::{CallFault, CallOutcome, ListError, ListedTool, UpstreamResult};
+pub use gateway::{CallFault, CallOutcome, Health, ListError, ListedTool, UpstreamResult};
 pub use hook::{
     ANSWER_CAP, APPROVE_TOOL, AnswerError, ApprovalRequest, AuditSink, Caller, Clock, Credentials,
     DenialReason, Fence, FenceReason, FenceVerdict, GateAnswer, Gateway, Identity, PreparedFence,

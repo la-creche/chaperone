@@ -15,9 +15,9 @@ use std::time::Duration;
 use chaperone_core::{
     AfterDecision, AllowedCall, AppId, ApprovalRequest, ArgValue, ArgumentsDigest, AuditApp,
     AuditError, AuditSink, AuditTool, CallAudit, CallFault, CallNumber, CallOutcome, Caller, Clock,
-    Credentials, Decision, ExposedName, GateAnswer, GateId, GatedCall, Gates, Gateway, Identity,
-    ListError, ListedTool, PluginName, Policy, Request, RunId, Timestamp, ToolCall, ToolName,
-    UpstreamResult, WaitingCall,
+    Credentials, Decision, ExposedName, GateAnswer, GateId, GatedCall, Gates, Gateway, Health,
+    Identity, ListError, ListedTool, PluginName, Policy, Request, RunId, Timestamp, ToolCall,
+    ToolName, UpstreamResult, WaitingCall,
 };
 use tokio::sync::watch;
 
@@ -765,6 +765,13 @@ impl Gateway for SharedGateway {
         let caller = self.0.resolve(credentials, policy.as_deref());
         self.call_resolved(policy, caller, name.to_owned(), arguments)
             .await
+    }
+
+    async fn health(&self) -> Health {
+        match self.0.policy.current() {
+            Some(_) => Health::Serving,
+            None => Health::PolicyNotLoaded,
+        }
     }
 }
 
