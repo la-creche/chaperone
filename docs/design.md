@@ -108,7 +108,7 @@ The gate ID is the first 16 bytes of a SHA-256 hash over the app instance, the u
 
 A gated call never holds the app. It goes through these steps:
 
-1. The decision creates the gate. chaperone writes the `decided` record, then a `waiting` record, and returns at once an error result with a fixed text: "awaiting permission for tool call `<exposed name>` (gate `<gate_id>`). chaperone runs the call when the approval comes and keeps the result. Call again with the same arguments to collect it." The text is the same for every identical call, so a model sees one stable message. The app's turn ends there.
+1. The decision creates the gate. chaperone writes the `decided` record, then a `waiting` record, and returns at once an error result with a fixed text: "Awaiting permission for tool call `<exposed name>` (gate `<gate_id>`). Call again with the exact same arguments to gather the result." The text is the same for every identical call, so a model sees one stable message. The app's turn ends there.
 2. chaperone calls the approval hook of the approval channel slot on its own task and waits for the answer until the gate expires.
 3. When the answer is `Approved`, chaperone runs the call through its upstream, writes the `ran` record of the original call, and keeps the checked result until the gate expires.
 4. When the answer is `Denied`, chaperone writes the `failed` record of the original call with `approval_denied`. The gate stays denied until it expires.

@@ -130,9 +130,8 @@ fn render(name: &str, outcome: CallOutcome) -> CallToolResult {
         }
         // The same text for every identical call (`docs/design.md` 5.3).
         CallOutcome::Waiting(gate) => error_text(format!(
-            "awaiting permission for tool call {name} (gate {gate}). chaperone \
-             runs the call when the approval comes and keeps the result. Call \
-             again with the same arguments to collect it."
+            "Awaiting permission for tool call {name} (gate {gate}). Call again \
+             with the exact same arguments to gather the result."
         )),
         CallOutcome::Failed(fault) => error_text(format!(
             "chaperone could not run this call: {}",
