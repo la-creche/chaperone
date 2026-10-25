@@ -13,7 +13,7 @@ use chaperone_core::{
     AppId, ArgValue, AuditApp, AuditTool, Caller, Catalog, Decision, DenyReason, Fence,
     FenceReason, FenceVerdict, Found, GateId, Gates, InstallFile, Location, Manifest, PluginKey,
     PluginName, Policy, PolicyError, PreparedFence, RawSection, Reach, Request, SectionError,
-    Timestamp, ToolCall, ToolName, strict,
+    Timestamp, TokenDigest, ToolCall, ToolName, strict, with_digest,
 };
 use proptest::prelude::*;
 use serde::Deserialize;
@@ -132,29 +132,27 @@ const DIGEST: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
 
 fn policy_text(extra_section: &str) -> String {
     format!(
-        r#"{{
-        "version": 1,
-        "apps": {{
-            "librechat": {{
-                "note": "the test app",
-                "token_sha256": ["{DIGEST}"],
-                "limits": {{"calls_per_minute": 3, "max_pending_gates": 2}},
-                "grants": {{
-                    "vikunja": {{"tools": {{
-                        "list_tasks": {{}},
-                        "create_task": {{"approval": "required"}},
-                        "update_task": {{"arguments": {{"project": {{"allow": [1, 2]}}}}}},
-                        "delete_task": {{"arguments": {{"project": {{"deny": [1]}}}}}}
-                    }}}},
-                    "ha-call": {{"tools": {{"ha_call": {{}}}}}}
-                }},
-                "plugins": {{
-                    "ha-call": {{"allow": ["light.kitchen"], "gate": ["lock.front"]}}
-                    {extra_section}
-                }}
-            }}
-        }}
-    }}"#
+        r#"
+        version = 1
+
+        [apps.librechat]
+        note = "the test app"
+        token_sha256 = ["{DIGEST}"]
+        limits = {{ calls_per_minute = 3, max_pending_gates = 2 }}
+
+        [apps.librechat.grants.vikunja.tools]
+        list_tasks = {{}}
+        create_task = {{ approval = "required" }}
+        update_task = {{ arguments = {{ project = {{ allow = [1, 2] }} }} }}
+        delete_task = {{ arguments = {{ project = {{ deny = [1] }} }} }}
+
+        [apps.librechat.grants.ha-call.tools]
+        ha_call = {{}}
+
+        [apps.librechat.plugins]
+        ha-call = {{ allow = ["light.kitchen"], gate = ["lock.front"] }}
+        {extra_section}
+        "#
     )
 }
 
@@ -639,13 +637,13 @@ fn two_fences_of_one_name_do_not_load_in_either_order() {
 
 #[test]
 fn a_policy_with_a_bad_plugin_section_does_not_load() {
-    let text = policy_text("").replace(r#""gate": ["lock.front"]"#, r#""gates": []"#);
+    let text = policy_text("").replace(r#"gate = ["lock.front"]"#, "gates = []");
     assert!(matches!(load_error(&text), PolicyError::Section { .. }));
 }
 
 #[test]
 fn a_policy_with_a_section_for_an_inactive_plugin_does_not_load() {
-    let text = policy_text(r#", "zz-extra": {}"#);
+    let text = policy_text("zz-extra = {}");
     assert!(matches!(
         load_error(&text),
         PolicyError::UnknownSection { .. }
@@ -654,7 +652,7 @@ fn a_policy_with_a_section_for_an_inactive_plugin_does_not_load() {
 
 #[test]
 fn a_policy_that_grants_an_inactive_upstream_does_not_load() {
-    let text = policy_text("").replace(r#""vikunja": {"tools""#, r#""nope": {"tools""#);
+    let text = policy_text("").replace("grants.vikunja.tools", "grants.nope.tools");
     assert!(matches!(
         load_error(&text),
         PolicyError::UnknownUpstream { .. }
@@ -682,16 +680,17 @@ fn a_policy_with_an_upper_case_digest_does_not_load() {
 
 #[test]
 fn a_policy_with_an_empty_argument_list_does_not_load() {
-    let text = policy_text("").replace(r#"{"allow": [1, 2]}"#, r#"{"allow": []}"#);
+    let text = policy_text("").replace("{ allow = [1, 2] }", "{ allow = [] }");
     assert!(matches!(load_error(&text), PolicyError::EmptyFence { .. }));
 }
 
 #[test]
 fn two_apps_cannot_share_a_digest() {
     let text = policy_text("").replacen(
-        r#""apps": {"#,
+        "[apps.librechat]\n",
         &format!(
-            r#""apps": {{ "other": {{"token_sha256": ["{DIGEST}"], "limits": {{"calls_per_minute": 1, "max_pending_gates": 0}}}},"#
+            "[apps.other]\ntoken_sha256 = [\"{DIGEST}\"]\n\
+             limits = {{ calls_per_minute = 1, max_pending_gates = 0 }}\n\n[apps.librechat]\n"
         ),
         1,
     );
@@ -699,6 +698,75 @@ fn two_apps_cannot_share_a_digest() {
         load_error(&text),
         PolicyError::SharedDigest { .. }
     ));
+}
+
+#[test]
+fn refuses_a_json_policy_file() {
+    let text = format!(
+        r#"{{"version":1,"apps":{{"librechat":{{"token_sha256":["{DIGEST}"],
+            "limits":{{"calls_per_minute":1,"max_pending_gates":0}}}}}}}}"#
+    );
+    assert!(matches!(
+        load_error(&text),
+        PolicyError::Read(strict::StrictError::Syntax { line: 1, .. })
+    ));
+}
+
+#[test]
+fn refuses_a_schema_field() {
+    let text = format!(
+        "\"$schema\" = \"urn:chaperone:policy:1\"\n{}",
+        policy_text("")
+    );
+    assert!(matches!(
+        load_error(&text),
+        PolicyError::Read(strict::StrictError::Shape { .. })
+    ));
+}
+
+#[test]
+fn reads_comments_in_a_policy_file() {
+    let text = policy_text("# The extra fence is not active.").replace(
+        "version = 1",
+        "# The grants of each app instance.\nversion = 1 # The file shape.",
+    );
+    let entities = EntityFence(name("ha-call"));
+    assert!(load(INSTALL, &text, &[&entities]).is_ok());
+}
+
+#[test]
+fn reads_a_quoted_tool_name() {
+    let text = policy_text("").replace("list_tasks = {}", r#""tasks.list" = {}"#);
+    let entities = EntityFence(name("ha-call"));
+    let policy = load(INSTALL, &text, &[&entities]).unwrap();
+    let app = policy.app(&app_id("librechat")).unwrap();
+    assert!(app.grant(&name("vikunja"), &tool("tasks.list")).is_some());
+    assert!(app.grant(&name("vikunja"), &tool("list_tasks")).is_none());
+}
+
+#[test]
+fn a_new_digest_keeps_the_rest_of_the_text() {
+    let text = policy_text("").replace(
+        &format!(r#"["{DIGEST}"]"#),
+        &format!("[\n    \"{DIGEST}\", # The first token.\n]"),
+    );
+    let after = with_digest(
+        text.as_bytes(),
+        &app_id("librechat"),
+        TokenDigest::from_bytes([0xbb; 32]),
+    )
+    .unwrap();
+    let after = String::from_utf8(after).unwrap();
+    assert_eq!(
+        after,
+        text.replace(
+            &format!(r#""{DIGEST}","#),
+            &format!(r#""{DIGEST}", "{}","#, "b".repeat(64))
+        )
+    );
+    let entities = EntityFence(name("ha-call"));
+    let policy = load(INSTALL, &after, &[&entities]).unwrap();
+    assert_eq!(policy.app(&app_id("librechat")).unwrap().digests().len(), 2);
 }
 
 // ------------------------------------------------------------ properties
@@ -810,16 +878,36 @@ proptest! {
         }
     }
 
-    /// G2: every strict prefix of a valid policy fails to load.
+    /// G2: a strict prefix of a valid policy does not load, or it grants
+    /// nothing beyond the whole file.
+    // DESIGN-QUESTION: docs/design.md 6. TOML has no closing delimiter, so a
+    // policy file cut at the end of a line can still load. This test takes
+    // the reading that such a cut may only narrow, which holds for this
+    // fixture. A tool grant written as a table, with its arguments in a later
+    // table, can lose its fence to a cut. A required end marker in the file
+    // would close that gap, and it would change the file shape.
     #[test]
-    fn g2_a_cut_policy_does_not_load(cut in 0_usize..1000) {
+    fn g2_a_cut_policy_only_narrows(cut in 0_usize..1000) {
         let text = policy_text("");
         let end = cut.min(text.len() - 1);
         prop_assume!(text.is_char_boundary(end));
-        let prefix = &text[..end];
-        prop_assume!(!prefix.trim().is_empty() || end == 0);
         let entities = EntityFence(name("ha-call"));
-        prop_assert!(load(INSTALL, prefix, &[&entities]).is_err());
+        let whole = load(INSTALL, &text, &[&entities]).unwrap();
+        let Ok(prefix) = load(INSTALL, &text[..end], &[&entities]) else {
+            return Ok(());
+        };
+        for (id, app) in prefix.apps() {
+            let full = whole.app(id).unwrap();
+            prop_assert_eq!(app.limits(), full.limits());
+            for (upstream, tool) in app.granted() {
+                let grant = app.grant(upstream, tool).unwrap();
+                let original = full.grant(upstream, tool);
+                prop_assert!(original.is_some(), "{upstream} {tool}");
+                let original = original.unwrap();
+                prop_assert_eq!(grant.approval(), original.approval());
+                prop_assert_eq!(grant.arguments(), original.arguments());
+            }
+        }
     }
 
     /// No input makes a reader panic.

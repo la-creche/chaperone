@@ -23,8 +23,9 @@ use tokio_util::sync::CancellationToken;
 #[test]
 fn a_file_name_picks_the_check_and_another_is_refused() {
     assert_eq!("install.toml".parse(), Ok(ConfigFile::Install));
-    assert_eq!("policy.json".parse(), Ok(ConfigFile::Policy));
+    assert_eq!("policy.toml".parse(), Ok(ConfigFile::Policy));
     assert!("install.json".parse::<ConfigFile>().is_err());
+    assert!("policy.json".parse::<ConfigFile>().is_err());
     assert!("secrets.json".parse::<ConfigFile>().is_err());
 }
 
@@ -62,7 +63,7 @@ fn a_new_token_authenticates_and_the_previous_file_is_kept() {
     let root = tempfile::tempdir().unwrap();
     let plugins = plugin_tree(root.path());
     let config = config_dir(root.path(), INSTALL, &policy_text(30));
-    let before = std::fs::read_to_string(config.join("policy.json")).unwrap();
+    let before = std::fs::read_to_string(config.join("policy.toml")).unwrap();
 
     let token = admin::token_new(&config, "librechat").unwrap();
     let text = token.reveal().to_owned();
@@ -73,20 +74,21 @@ fn a_new_token_authenticates_and_the_previous_file_is_kept() {
     );
     assert_eq!(format!("{token:?}"), "Token(..)");
 
-    let after = std::fs::read_to_string(config.join("policy.json")).unwrap();
+    let after = std::fs::read_to_string(config.join("policy.toml")).unwrap();
     assert!(
-        after.contains(r#""$schema": "urn:chaperone:policy:1""#),
+        after.contains("# The app instance of the tests."),
         "{after}"
     );
+    assert!(!after.contains("$schema"), "{after}");
     assert!(
         !after.contains(&text),
         "the token itself must not be stored"
     );
     assert_eq!(
-        std::fs::read_to_string(config.join("policy.json.prev")).unwrap(),
+        std::fs::read_to_string(config.join("policy.toml.prev")).unwrap(),
         before
     );
-    assert!(!config.join("policy.json.tmp").exists());
+    assert!(!config.join("policy.toml.tmp").exists());
 
     let secrets = secrets_dir(root.path());
     let loaded = startup::load(
@@ -115,7 +117,7 @@ fn a_new_token_authenticates_and_the_previous_file_is_kept() {
     let error = admin::token_new(&config, "librechat").unwrap_err();
     assert!(error.to_string().contains("already holds"), "{error}");
     assert_eq!(
-        std::fs::read_to_string(config.join("policy.json")).unwrap(),
+        std::fs::read_to_string(config.join("policy.toml")).unwrap(),
         after
     );
     assert!(admin::token_new(&config, "nobody").is_err());
@@ -164,12 +166,12 @@ async fn the_socket_serves_check_and_token_only() {
     let (status, _) = request(&socket, "GET", "/schema", "").await;
     assert!(status.contains("404"), "{status}");
 
-    let good = serde_json::json!({ "file": "policy.json", "content": policy_text(30) });
+    let good = serde_json::json!({ "file": "policy.toml", "content": policy_text(30) });
     let (status, body) = request(&socket, "POST", "/check", &good.to_string()).await;
     assert!(status.contains("200"), "{status} {body}");
     assert!(body.contains(r#""ok":true"#));
 
-    let bad = serde_json::json!({ "file": "policy.json", "content": "{\"version\":2}" });
+    let bad = serde_json::json!({ "file": "policy.toml", "content": "version = 2\n" });
     let (status, body) = request(&socket, "POST", "/check", &bad.to_string()).await;
     assert!(status.contains("422"), "{status} {body}");
     assert!(body.contains("version"));

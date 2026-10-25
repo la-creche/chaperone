@@ -61,20 +61,25 @@ pub fn digest(token: &str) -> String {
 pub fn policy_text(calls_per_minute: u32) -> String {
     let digest = digest(TOKEN);
     format!(
-        r#"{{"version":1,"apps":{{"librechat":{{
-            "token_sha256":["{digest}"],
-            "limits":{{"calls_per_minute":{calls_per_minute},"max_pending_gates":1}},
-            "grants":{{"vikunja":{{"tools":{{
-                "list_tasks":{{}},
-                "create_task":{{"approval":"required"}},
-                "picture":{{}},
-                "big":{{}},
-                "broken":{{}},
-                "slow":{{}},
-                "delete_task":{{"approval":"required"}},
-                "wait_task":{{"approval":"required"}},
-                "odd_task":{{"approval":"required"}}
-            }}}}}}}}}}}}"#
+        r#"
+        # The app instance of the tests.
+        version = 1
+
+        [apps.librechat]
+        token_sha256 = ["{digest}"]
+        limits = {{ calls_per_minute = {calls_per_minute}, max_pending_gates = 1 }}
+
+        [apps.librechat.grants.vikunja.tools]
+        list_tasks = {{}}
+        create_task = {{ approval = "required" }}
+        picture = {{}}
+        big = {{}}
+        broken = {{}}
+        slow = {{}}
+        delete_task = {{ approval = "required" }}
+        wait_task = {{ approval = "required" }}
+        odd_task = {{ approval = "required" }}
+        "#
     )
 }
 
@@ -184,6 +189,6 @@ pub fn config_dir(root: &Path, install: &str, policy: &str) -> PathBuf {
     let config = root.join("config");
     std::fs::create_dir_all(&config).unwrap();
     std::fs::write(config.join("install.toml"), install).unwrap();
-    std::fs::write(config.join("policy.json"), policy).unwrap();
+    std::fs::write(config.join("policy.toml"), policy).unwrap();
     config
 }

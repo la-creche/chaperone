@@ -21,7 +21,7 @@ use chaperone_core::{
 use chaperone_plugin_ha_call_fence::{EntityFence, arguments};
 use proptest::prelude::*;
 
-const SECTION: &str = r#"{"entities":["light.kitchen","switch.fan_1"]}"#;
+const SECTION: &str = r#"{ entities = ["light.kitchen", "switch.fan_1"] }"#;
 const INSTALL: &str = r#"
 version = 1
 plugins.vikunja = {}
@@ -115,18 +115,17 @@ fn catalog() -> Catalog {
 fn load(section: Option<&str>) -> Result<Policy, PolicyError> {
     let install = InstallFile::read(INSTALL.as_bytes()).unwrap();
     let setup = resolve(&install, &catalog()).unwrap();
-    let plugins = section.map_or(String::new(), |text| {
-        format!(r#","plugins":{{"ha-call":{text}}}"#)
-    });
+    let plugins = section.map_or(String::new(), |text| format!("plugins.ha-call = {text}\n"));
     let text = format!(
-        r#"{{"version":1,"apps":{{"librechat":{{
-            "token_sha256":["{}"],
-            "limits":{{"calls_per_minute":100,"max_pending_gates":1}},
-            "grants":{{
-                "ha-call":{{"tools":{{"call_service":{{}}}}}},
-                "vikunja":{{"tools":{{"list_tasks":{{}}}}}}
-            }}{plugins}
-        }}}}}}"#,
+        r#"
+        version = 1
+
+        [apps.librechat]
+        token_sha256 = ["{}"]
+        limits = {{ calls_per_minute = 100, max_pending_gates = 1 }}
+        grants.ha-call.tools.call_service = {{}}
+        grants.vikunja.tools.list_tasks = {{}}
+        {plugins}"#,
         "0".repeat(64)
     );
     let fence = EntityFence::new().unwrap();
@@ -266,11 +265,11 @@ fn an_app_without_a_section_may_act_on_no_entity() {
 #[test]
 fn a_bad_section_does_not_load() {
     for bad in [
-        r#"{"entities":["kitchen"]}"#,
-        r#"{"entities":["Light.Kitchen"]}"#,
-        r#"{"entities":["light.kitchen"],"extra":1}"#,
-        r#"{"entities":"light.kitchen"}"#,
-        r#"[]"#,
+        r#"{ entities = ["kitchen"] }"#,
+        r#"{ entities = ["Light.Kitchen"] }"#,
+        r#"{ entities = ["light.kitchen"], extra = 1 }"#,
+        r#"{ entities = "light.kitchen" }"#,
+        "[]",
     ] {
         let error = load(Some(bad)).unwrap_err();
         assert!(

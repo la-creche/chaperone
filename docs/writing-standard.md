@@ -64,7 +64,7 @@ Use each name as it is written here. Do not use a synonym for one.
 | gate | A hold on one call until a human answers. A gate is pending, then approved, denied or expired. |
 | decision | The result of the decision function: allow, deny or gate. |
 | front door | The adapter that receives an app's connection. |
-| policy file | `policy.json`. |
+| policy file | `policy.toml`. |
 | install file | `install.toml`. |
 | audit line | One record of one call, written before the result returns. |
 | secret | A credential that chaperone holds for a plugin. |

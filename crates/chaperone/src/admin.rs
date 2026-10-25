@@ -26,7 +26,7 @@ use crate::startup::{self, StartError};
 /// The file name of the install file in a configuration directory.
 pub const INSTALL_FILE: &str = "install.toml";
 /// The file name of the policy file in a configuration directory.
-pub const POLICY_FILE: &str = "policy.json";
+pub const POLICY_FILE: &str = "policy.toml";
 
 /// The mode of the admin socket: the owner and the group, nobody else.
 const SOCKET_MODE: u32 = 0o660;
@@ -147,8 +147,8 @@ pub enum TokenError {
 }
 
 /// `chaperone token new` and `POST /token` (`docs/design.md` 9): a token
-/// for `app`, its digest added to `policy.json` in `config_dir`. The
-/// previous file stays as `policy.json.prev`. The new file lands by an
+/// for `app`, its digest added to `policy.toml` in `config_dir`. The
+/// previous file stays as `policy.toml.prev`. The new file lands by an
 /// atomic rename.
 ///
 /// # Errors
@@ -189,7 +189,7 @@ struct Dirs {
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct CheckRequest {
-    /// `install.toml` or `policy.json`.
+    /// `install.toml` or `policy.toml`.
     file: String,
     /// The candidate text of that file.
     content: String,

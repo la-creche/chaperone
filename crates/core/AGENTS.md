@@ -6,7 +6,7 @@ Rules for `crates/core`. Read the root `AGENTS.md` first.
 
 ## What lives here
 
-- The types of `install.toml`, `policy.json` and `plugin.toml`, with `deny_unknown_fields`.
+- The types of `install.toml`, `policy.toml` and `plugin.toml`, with `deny_unknown_fields`.
 - The strict reader, for JSON and TOML. It takes bytes. It refuses duplicate keys, a byte order mark, invalid UTF-8, unknown fields and input over the size cap.
 - The cross-file checks behind `chaperone check`.
 - The decision function in `docs/design.md` section 5.

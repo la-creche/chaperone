@@ -123,8 +123,8 @@ mod tests {
             .collect::<Vec<_>>()
             .join(",");
         let text = format!(
-            r#"{{"version":1,"apps":{{"librechat":{{"token_sha256":[{list}],
-                "limits":{{"calls_per_minute":1,"max_pending_gates":0}}}}}}}}"#
+            "version = 1\n[apps.librechat]\ntoken_sha256 = [{list}]\n\
+             limits = {{ calls_per_minute = 1, max_pending_gates = 0 }}\n"
         );
         Policy::load(text.as_bytes(), &setup, &[]).unwrap()
     }

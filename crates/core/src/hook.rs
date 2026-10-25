@@ -13,7 +13,6 @@ use std::fmt;
 use std::future::Future;
 
 use serde::de::DeserializeOwned;
-use serde_json::value::RawValue;
 
 use serde::Deserialize;
 
@@ -137,13 +136,13 @@ pub trait PreparedFence: Send + Sync + fmt::Debug {
     fn check(&self, call: &ToolCall<'_>) -> FenceVerdict;
 }
 
-/// The section of one plugin in one app instance of `policy.json`, as
-/// strict JSON text. The plugin reads it into its own type.
+/// The section of one plugin in one app instance of `policy.toml`, as
+/// the strict reader read it. The plugin reads it into its own type.
 #[derive(Debug)]
-pub struct RawSection<'a>(&'a RawValue);
+pub struct RawSection<'a>(&'a toml::Value);
 
 impl<'a> RawSection<'a> {
-    pub(crate) fn new(raw: &'a RawValue) -> Self {
+    pub(crate) fn new(raw: &'a toml::Value) -> Self {
         Self(raw)
     }
 
@@ -153,7 +152,7 @@ impl<'a> RawSection<'a> {
     ///
     /// Returns a [`SectionError`] when the section does not fit `T`.
     pub fn parse<T: DeserializeOwned>(&self) -> Result<T, SectionError> {
-        serde_json::from_str(self.0.get()).map_err(|error| SectionError(error.to_string()))
+        T::deserialize(self.0.clone()).map_err(|error| SectionError(error.message().to_owned()))
     }
 }
 

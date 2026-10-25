@@ -193,7 +193,7 @@ fn an_install_file_over_the_cap_refuses_start() {
 #[test]
 fn a_policy_that_does_not_parse_refuses_start() {
     let root = tempfile::tempdir().unwrap();
-    let error = load(root.path(), INSTALL, r#"{"version":1,"apps":{},"apps":{}}"#).unwrap_err();
+    let error = load(root.path(), INSTALL, "version = 1\napps = {}\napps = {}\n").unwrap_err();
     assert!(matches!(error, StartError::Policy(_)), "{error}");
 }
 
