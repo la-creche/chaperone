@@ -19,9 +19,10 @@ use chaperone_plugin_audit_jsonl::OpenError;
 use crate::catalog::{self, CatalogError};
 use crate::files::{self, ReadError};
 use crate::registry::{self, Build, Entry};
+use crate::reload::Stamp;
 
 const INSTALL_FILE: &str = "install.toml";
-const POLICY_FILE: &str = "policy.toml";
+pub(crate) const POLICY_FILE: &str = "policy.toml";
 
 /// Why chaperone refuses to start.
 #[derive(Debug, thiserror::Error)]
@@ -94,6 +95,8 @@ pub struct Loaded {
     pub catalog: Catalog,
     pub setup: Setup,
     pub policy: Policy,
+    /// The stamp of `policy.toml` when chaperone read it.
+    pub policy_stamp: Stamp,
     pub identity: Box<dyn Identity>,
     pub audit: Arc<dyn AuditSink>,
     pub clock: Box<dyn Clock>,
@@ -152,7 +155,9 @@ pub fn load(
         }
     }
 
-    let policy_bytes = files::read_capped(&config_dir.join(POLICY_FILE), POLICY_FILE_CAP)?;
+    let policy_path = config_dir.join(POLICY_FILE);
+    let policy_stamp = Stamp::of(&policy_path)?;
+    let policy_bytes = files::read_capped(&policy_path, POLICY_FILE_CAP)?;
     let policy = policy_from(&policy_bytes, &setup)?;
     let run = run_id()?;
     Ok(Loaded {
@@ -160,6 +165,7 @@ pub fn load(
         catalog,
         setup,
         policy,
+        policy_stamp,
         identity,
         audit,
         clock,
