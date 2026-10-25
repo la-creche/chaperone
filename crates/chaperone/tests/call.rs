@@ -30,8 +30,8 @@ use chaperone_core::{
 };
 use rmcp::model::{CallToolResult, ContentBlock};
 use support::{
-    FakeApproval, INSTALL, TOKEN, config_dir, fake_approval, plugin_tree, policy_text, secrets_dir,
-    write_manifest,
+    FakeApproval, INSTALL, TOKEN, config_dir, fake_approval, hanging_approval, plugin_tree,
+    policy_text, secrets_dir, write_manifest,
 };
 
 const RUN: RunId = RunId::from_bytes([9; 16]);
@@ -322,66 +322,87 @@ async fn a_tool_without_a_grant_is_denied_with_one_record() {
     assert_eq!(sink.records()[0].tool().as_str(), AuditTool::UNKNOWN);
 }
 
-#[tokio::test]
-async fn a_gated_call_runs_when_the_approval_comes_inside_the_window() {
-    let Harness { gateway, sink, .. } = harness(30);
-    let outcome = call(&gateway, Some(TOKEN), "vikunja__create_task").await;
-    let CallOutcome::Ran(result) = outcome else {
-        panic!("{outcome:?}");
-    };
-    assert_eq!(result.content, ["created"]);
-    let events = sink.events();
-    assert!(matches!(
-        events[0],
-        AuditEvent::Decided(AuditDecision::Gate(_))
-    ));
-    assert_eq!(events[1], AuditEvent::Ran { is_error: false });
-    assert_eq!(events.len(), 2);
-
-    // One approval runs one call. The next identical call gates again.
-    let again = call(&gateway, Some(TOKEN), "vikunja__create_task").await;
-    assert!(matches!(again, CallOutcome::Ran(_)));
-    assert!(matches!(
-        sink.events()[2],
-        AuditEvent::Decided(AuditDecision::Gate(_))
-    ));
+/// Wait until the sink holds `count` records, up to three seconds.
+async fn until_records(sink: &MemorySink, count: usize) {
+    for _ in 0..150 {
+        if sink.records().len() >= count {
+            return;
+        }
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    panic!(
+        "the sink holds {} records, not {count}",
+        sink.records().len()
+    );
 }
 
 #[tokio::test]
-async fn a_gated_call_fails_when_the_approval_is_denied() {
+async fn a_gated_call_waits_and_an_identical_call_collects_the_result() {
+    let Harness { gateway, sink, .. } = harness(30);
+    let outcome = call(&gateway, Some(TOKEN), "vikunja__create_task").await;
+    let CallOutcome::Waiting(gate) = outcome else {
+        panic!("{outcome:?}");
+    };
+    assert_eq!(
+        sink.events()[..2],
+        [
+            AuditEvent::Decided(AuditDecision::Gate(gate)),
+            AuditEvent::Waiting(gate),
+        ]
+    );
+
+    // The approval task runs the call and writes the ran record.
+    until_records(&sink, 3).await;
+    assert_eq!(sink.events()[2], AuditEvent::Ran { is_error: false });
+
+    let collected = call(&gateway, Some(TOKEN), "vikunja__create_task").await;
+    let CallOutcome::Ran(result) = collected else {
+        panic!("{collected:?}");
+    };
+    assert_eq!(result.content, ["created"]);
+    assert_eq!(
+        sink.events()[3..],
+        [
+            AuditEvent::Decided(AuditDecision::Allow),
+            AuditEvent::Delivered(gate),
+        ]
+    );
+
+    // The result is collected once. The next identical call gates again.
+    let again = call(&gateway, Some(TOKEN), "vikunja__create_task").await;
+    assert!(matches!(again, CallOutcome::Waiting(_)), "{again:?}");
+}
+
+#[tokio::test]
+async fn a_denied_gate_fails_the_call_and_holds() {
     let Harness { gateway, sink, .. } = harness(30);
     let outcome = call(&gateway, Some(TOKEN), "vikunja__delete_task").await;
-    assert!(matches!(
-        outcome,
-        CallOutcome::Failed(CallFault::ApprovalDenied)
-    ));
+    assert!(matches!(outcome, CallOutcome::Waiting(_)), "{outcome:?}");
+    until_records(&sink, 3).await;
     assert_eq!(
-        sink.events()[1],
+        sink.events()[2],
         AuditEvent::Failed(CallFault::ApprovalDenied)
     );
 
-    // The denial holds for the life of the gate.
     let again = call(&gateway, Some(TOKEN), "vikunja__delete_task").await;
     assert!(matches!(
         again,
         CallOutcome::Denied(DenyReason::ApprovalDenied)
     ));
     assert_eq!(
-        sink.events()[2],
+        sink.events()[3],
         AuditEvent::Decided(AuditDecision::Deny("approval_denied"))
     );
 }
 
 #[tokio::test]
-async fn an_answer_that_is_no_answer_faults_the_gate() {
+async fn an_answer_that_is_no_answer_faults_the_gate_and_holds() {
     let Harness { gateway, sink, .. } = harness(30);
     let outcome = call(&gateway, Some(TOKEN), "vikunja__odd_task").await;
-    assert!(matches!(
-        outcome,
-        CallOutcome::Failed(CallFault::ApprovalFault)
-    ));
+    assert!(matches!(outcome, CallOutcome::Waiting(_)), "{outcome:?}");
+    until_records(&sink, 3).await;
     assert_eq!(
-        sink.events()[1],
+        sink.events()[2],
         AuditEvent::Failed(CallFault::ApprovalFault)
     );
     let again = call(&gateway, Some(TOKEN), "vikunja__odd_task").await;
@@ -392,7 +413,7 @@ async fn an_answer_that_is_no_answer_faults_the_gate() {
 }
 
 #[tokio::test]
-async fn a_slow_approval_returns_waiting_and_a_retry_runs_after_it() {
+async fn an_identical_call_while_pending_waits_and_asks_once() {
     let root = tempfile::tempdir().unwrap();
     let loaded = loaded(root.path(), 30);
     let sink = Arc::new(MemorySink::default());
@@ -409,30 +430,25 @@ async fn a_slow_approval_returns_waiting_and_a_retry_runs_after_it() {
             })),
             redactor: Redactor::new(secrets()),
         },
-        Bounds {
-            approval_wait: Duration::from_millis(50),
-            ..Bounds::DEFAULT
-        },
+        Bounds::DEFAULT,
     ));
-    let outcome = call(&gateway, Some(TOKEN), "vikunja__wait_task").await;
-    let CallOutcome::Waiting(gate) = outcome else {
-        panic!("{outcome:?}");
+    let first = call(&gateway, Some(TOKEN), "vikunja__wait_task").await;
+    let CallOutcome::Waiting(gate) = first else {
+        panic!("{first:?}");
     };
-    assert_eq!(sink.events()[1], AuditEvent::Waiting(gate));
+    let second = call(&gateway, Some(TOKEN), "vikunja__wait_task").await;
+    assert!(matches!(second, CallOutcome::Waiting(g) if g == gate));
+    assert_eq!(sink.events().len(), 4, "{:?}", sink.events());
 
-    tokio::time::sleep(Duration::from_millis(500)).await;
-    let again = call(&gateway, Some(TOKEN), "vikunja__wait_task").await;
-    let CallOutcome::Ran(result) = again else {
-        panic!("{again:?}");
+    // The approval comes, the call runs once, and a later call collects it.
+    until_records(&sink, 5).await;
+    assert_eq!(sink.events()[4], AuditEvent::Ran { is_error: false });
+    let collected = call(&gateway, Some(TOKEN), "vikunja__wait_task").await;
+    let CallOutcome::Ran(result) = collected else {
+        panic!("{collected:?}");
     };
     assert_eq!(result.content, ["waited"]);
-    let events = sink.events();
-    assert_eq!(events[2], AuditEvent::Decided(AuditDecision::Allow));
-    assert_eq!(events[3], AuditEvent::Ran { is_error: false });
-
-    // The approval is taken. A third call gates again and waits.
-    let third = call(&gateway, Some(TOKEN), "vikunja__wait_task").await;
-    assert!(matches!(third, CallOutcome::Waiting(_)));
+    assert_eq!(sink.events()[6], AuditEvent::Delivered(gate));
 }
 
 #[tokio::test]
@@ -651,7 +667,7 @@ async fn the_audit_file_records_each_call_and_never_the_token() {
             audit: loaded.audit,
             clock: Box::new(FixedClock(Mutex::new(START))),
             upstreams: upstreams(),
-            approval: fake_approval(),
+            approval: hanging_approval(),
             redactor: Redactor::new(secrets()),
         },
         Bounds::DEFAULT,
@@ -673,7 +689,7 @@ async fn the_audit_file_records_each_call_and_never_the_token() {
     assert!(lines[1].contains(r#""event":"ran","detail":"is_error:false""#));
     assert!(lines[2].contains(r#""detail":"deny:tool_not_granted""#));
     assert!(lines[3].contains(r#""detail":"gate:"#));
-    assert!(lines[4].contains(r#""event":"ran","detail":"is_error:false""#));
+    assert!(lines[4].contains(r#""event":"waiting""#), "{}", lines[4]);
     assert!(lines[5].contains(r#""detail":"unknown_tool""#));
     assert!(lines[6].contains(r#""app":null"#) && lines[6].contains("deny:unknown_credential"));
     assert!(lines.iter().all(|line| line.contains(&loaded.run.to_hex())));

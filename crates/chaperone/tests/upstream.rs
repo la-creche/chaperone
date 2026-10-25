@@ -22,7 +22,7 @@ use chaperone::gateway::{Bounds, ChaperoneGateway, Plugins, SharedGateway};
 use chaperone::startup;
 use std::time::Duration;
 
-use chaperone_core::{Bearer, CallFault, CallOutcome, Credentials, Gateway, SecretDelivery};
+use chaperone_core::{Bearer, CallOutcome, Credentials, Gateway, SecretDelivery};
 use support::{
     TOKEN, config_dir, plugin_tree, policy_text, secrets_dir, write_manifest, write_secret,
 };
@@ -251,18 +251,23 @@ fn the_fake_binary_exists_and_exits_without_the_flag() {
     assert!(Path::new(&fake_binary()).is_absolute());
 }
 
+/// Wait until the audit file holds a line with `needle`, up to five seconds.
+async fn until_audit(path: &Path, needle: &str) -> String {
+    for _ in 0..250 {
+        let audit = std::fs::read_to_string(path).unwrap_or_default();
+        if audit.contains(needle) {
+            return audit;
+        }
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    panic!("the audit file never held {needle:?}");
+}
+
 #[tokio::test]
 async fn gates_go_through_the_approval_channel_process() {
-    let running = running(
-        &["--fake-upstream"],
-        STDIN_INSTALL,
-        Bounds {
-            approval_wait: Duration::from_millis(200),
-            ..Bounds::DEFAULT
-        },
-    )
-    .await
-    .unwrap();
+    let running = running(&["--fake-upstream"], STDIN_INSTALL, Bounds::DEFAULT)
+        .await
+        .unwrap();
     let bearer = Bearer::new(TOKEN.to_owned());
     let headers = BTreeMap::new();
     let credentials = Credentials {
@@ -275,37 +280,37 @@ async fn gates_go_through_the_approval_channel_process() {
             .call_tool(&credentials, name, BTreeMap::new())
     };
 
-    let approved = call("vikunja__create_task").await;
-    let CallOutcome::Ran(result) = approved else {
-        panic!("{approved:?}");
+    // Approved on the phone: the call waits, runs, and the result is collected.
+    let waiting = call("vikunja__create_task").await;
+    assert!(matches!(waiting, CallOutcome::Waiting(_)), "{waiting:?}");
+    until_audit(&running.audit_path, r#""event":"ran""#).await;
+    let collected = call("vikunja__create_task").await;
+    let CallOutcome::Ran(result) = collected else {
+        panic!("{collected:?}");
     };
     assert_eq!(result.content, ["created"]);
 
+    // Denied on the phone: the call waits, then an identical call is denied.
+    let waiting = call("vikunja__delete_task").await;
+    assert!(matches!(waiting, CallOutcome::Waiting(_)), "{waiting:?}");
+    until_audit(&running.audit_path, r#""detail":"approval_denied""#).await;
     let denied = call("vikunja__delete_task").await;
     assert!(
-        matches!(denied, CallOutcome::Failed(CallFault::ApprovalDenied)),
+        matches!(
+            denied,
+            CallOutcome::Denied(chaperone_core::DenyReason::ApprovalDenied)
+        ),
         "{denied:?}"
     );
 
-    let odd = call("vikunja__odd_task").await;
-    assert!(
-        matches!(odd, CallOutcome::Failed(CallFault::ApprovalFault)),
-        "{odd:?}"
-    );
-
-    let waiting = call("vikunja__wait_task").await;
+    // No answer of the right shape: a fault, and the gate holds.
+    let waiting = call("vikunja__odd_task").await;
     assert!(matches!(waiting, CallOutcome::Waiting(_)), "{waiting:?}");
-    tokio::time::sleep(Duration::from_millis(2500)).await;
-    let later = call("vikunja__wait_task").await;
-    let CallOutcome::Ran(result) = later else {
-        panic!("{later:?}");
-    };
-    assert_eq!(result.content, ["waited"]);
+    until_audit(&running.audit_path, r#""detail":"approval_fault""#).await;
 
     let audit = std::fs::read_to_string(&running.audit_path).unwrap();
-    assert!(audit.contains(r#""detail":"approval_denied""#), "{audit}");
-    assert!(audit.contains(r#""detail":"approval_fault""#), "{audit}");
     assert!(audit.contains(r#""event":"waiting""#), "{audit}");
+    assert!(audit.contains(r#""event":"delivered""#), "{audit}");
 }
 
 #[tokio::test]

@@ -134,6 +134,7 @@ fn event_parts(event: &AuditEvent) -> (&'static str, String) {
         AuditEvent::Decided(decision) => ("decided", decision.code()),
         AuditEvent::Ran { is_error } => ("ran", format!("is_error:{is_error}")),
         AuditEvent::Waiting(gate) => ("waiting", format!("gate:{gate}")),
+        AuditEvent::Delivered(gate) => ("delivered", format!("gate:{gate}")),
         AuditEvent::Failed(fault) => ("failed", fault.code().to_owned()),
     }
 }

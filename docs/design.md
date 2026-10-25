@@ -106,16 +106,15 @@ The core pull request may refine the reason names. It may not change the order w
 
 The gate ID is the first 16 bytes of a SHA-256 hash over the app instance, the upstream, the tool name and the canonical arguments, separated by NUL bytes. The canonical arguments are the arguments with sorted keys and no white space. An identical retry produces the same gate ID.
 
-A gated call goes through these steps:
+A gated call never holds the app. It goes through these steps:
 
-1. The core calls the approval hook of the approval channel slot.
-2. chaperone waits up to the wait window for the answer. The default window is 60 seconds.
-3. If the answer comes inside the window, the call runs or is denied at once.
-4. If no answer comes inside the window, chaperone returns a result that says: "waiting for approval, gate `<gate_id>`, call again with the same arguments after approval".
-5. chaperone keeps waiting for the hook answer until the gate expires.
-6. An identical call after the approval finds the gate approved and runs.
+1. The decision creates the gate. chaperone writes the `decided` record, then a `waiting` record, and returns at once an error result with a fixed text: "Awaiting permission for tool call `<exposed name>` (gate `<gate_id>`). Call again with the exact same arguments to gather the result." The text is the same for every identical call, so a model sees one stable message. The app's turn ends there.
+2. chaperone calls the approval hook of the approval channel slot on its own task and waits for the answer until the gate expires.
+3. When the answer is `Approved`, chaperone runs the call through its upstream, writes the `ran` record of the original call, and keeps the checked result until the gate expires.
+4. When the answer is `Denied`, chaperone writes the `failed` record of the original call with `approval_denied`. The gate stays denied until it expires.
+5. An identical call while the gate is pending, or while the call runs, returns the same text again, with its own `decided` and `waiting` records and nothing after them. An identical call after the run collects the kept result, with a `decided` and a `delivered` record, and removes the gate. An identical call after a denial is denied with `approval_denied`.
 
-A gate is *pending* while it waits for an answer. It is *approved* after the approval channel answers `Approved`. The policy caps the number of pending gates per app instance, so a looping model cannot flood the operator's phone.
+A gate is *pending* while it waits for an answer, *running* while the call runs, *done* while it holds a result, and *denied* after a denial or a fault. The policy caps the number of pending gates per app instance, so a looping model cannot flood the operator's phone.
 
 Only the approval channel can complete a gate. It can complete only a gate that a decision created, only with a matching gate ID, and only before the gate expires. A gate completion does not break G7: the policy already said "allowed if approved".
 
@@ -130,7 +129,9 @@ The approval hook is the tool `approve` of the approval channel plugin. chaperon
 
 The answer is one text block that holds one strict JSON object: `{"answer":"approved"}` or `{"answer":"denied","reason":"<text>"}`. The reason is at most 200 characters. Any other result is a fault: an error result, another block, other JSON, an unknown field. A fault denies the gate for the rest of its life (G2), and the call fails with `approval_fault`.
 
-A gate lives 10 minutes from its creation (section 5.5). A denial, or a fault, holds for that life: an identical call finds the gate denied. An approval runs one call. chaperone removes the gate when that call runs, so the next identical call needs a new approval.
+A gate lives 10 minutes from its creation (section 5.5). A denial, or a fault, holds for that life: an identical call finds the gate denied. An approval runs one call, and its result is collected once. chaperone removes the gate when the result is collected, so the next identical call needs a new approval. A result that nobody collects goes with the gate when it expires.
+
+In version 1 the app collects a kept result by asking again. Nothing tells the app that the result is there, because the chat apps of version 1 start a model turn only on a user message and take no inbound call. Stage (b) changes this: the harness in the sandbox subscribes to chaperone for the results of its gates, and chaperone publishes each kept result to it when the run ends. The kept result and the `delivered` record stay as they are, so that step adds a transport and changes no record (section 14).
 
 ### 5.4 Audit records
 
@@ -142,14 +143,15 @@ A gate lives 10 minutes from its creation (section 5.5). A denial, or a fault, h
 | Deny | `decided` |
 | Allow, then the call runs | `decided`, `ran` |
 | Allow, then the call cannot run | `decided`, `failed` |
-| Gate, then the wait window ends | `decided`, `waiting` |
-| Gate, then the approval channel fails | `decided`, `failed` |
-| Gate, then the approval is denied inside the wait window | `decided`, `failed` |
-| Gate, then the approval comes | `decided`, then `ran` or `failed` |
+| Gate | `decided`, `waiting`, then one of the rows below when the answer comes |
+| Gate, then the approval channel fails | `failed` |
+| Gate, then the approval is denied | `failed` |
+| Gate, then the approval comes and the call runs | `ran` or `failed` |
+| An identical call collects a kept result | `decided`, `delivered` |
 
 Each record holds a run ID and a call number. These values match all records of one call.
 
-Each record also holds the start time and the event time. A final record uses the time when the call ended.
+Each record also holds the start time and the event time. A final record uses the time when the call ended. For a gated call, that is when the approval answer is handled, which can be minutes after the app's request returned.
 
 The record keeps an app ID only when the policy configures that exact app instance. All other app text becomes no app.
 
@@ -166,8 +168,7 @@ The record keeps the arguments only as the SHA-256 of their canonical form. Clos
 | The decision | 5 seconds. A decision that takes longer fails the call with `no_decision` (G2). | A pure function over a policy file takes far less. A larger bound holds a caller longer on a stuck fence. A smaller bound fails a call on a slow host. |
 | The identity hook | None | The hook runs on the caller's thread, because `Credentials` borrows the request. A hook that never returns holds only that one call. A bound would need an owned copy of the bearer token. The hook is compiled code that the operator chooses in `install.json`. |
 | A call to an upstream | 30 seconds. A call that takes longer fails with `upstream_timeout` (G2). The audit holds a `failed` record. | A tool of version 1 answers in well under a second. A larger bound holds a caller on a stuck upstream. The upstream may still finish its work after the bound. chaperone does not retry (`crates/chaperone/AGENTS.md`). |
-| The wait window of a gated call | 60 seconds. The call then returns `waiting` (section 5.3). | An app's own request timeout is often near this. A human tap takes seconds to a minute. |
-| The life of a gate | 10 minutes from its creation. The approval hook call ends with it. | Long enough for a human away from the phone. Short enough that a forgotten gate does not approve a call hours later. |
+| The life of a gate | 10 minutes from its creation. The approval hook call ends with it, and so does a kept result. | Long enough for a human away from the phone. Short enough that a forgotten gate does not approve a call hours later. |
 
 ## 6. Configuration
 
@@ -399,3 +400,4 @@ One pull request per step:
 | JSON Schema generation for the editor | Step 8 |
 | The published `$schema` value of each file, and the step that makes it required | Step 8 |
 | Stage (b): sandbox per app instance, the OpenHands runtime, the model pass-through | After version 1 |
+| Stage (b): the harness subscribes to the results of its gates, and chaperone publishes each kept result when the run ends. The transport, and how a subscription is bound to one app instance, are open. | After version 1 |
