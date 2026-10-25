@@ -1,7 +1,7 @@
 //! The form of a policy file, built from its JSON Schema (`docs/design.md`
-//! 11). Nothing here knows the shape of the policy beyond two names: the
-//! `plugins` map of an app instance, whose values take the schema of the
-//! plugin named by the key, and `token_sha256`, which shows as a count.
+//! 11). Nothing here knows the shape of the policy beyond two names. The
+//! `plugins` map of an app instance takes, for each value, the schema of
+//! the plugin named by the key. `token_sha256` shows as a count.
 //!
 //! Every field name carries a kind and a JSON pointer, so a posted form
 //! decodes back into the draft without the schema.
