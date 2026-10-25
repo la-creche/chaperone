@@ -50,7 +50,8 @@ fn the_repository_plugin_tree_holds_the_defaults_and_the_included() {
             "system-clock",
             "deny-all",
             "ha-approval",
-            "ha-call"
+            "ha-call",
+            "release"
         ]
     );
     let defaults = catalog

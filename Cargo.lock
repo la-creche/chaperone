@@ -396,6 +396,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "chaperone-plugin-release"
+version = "0.0.0"
+dependencies = [
+ "clap",
+ "getrandom 0.4.3",
+ "rmcp",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror",
+ "tokio",
+]
+
+[[package]]
 name = "chaperone-plugin-secret-files"
 version = "0.0.0"
 dependencies = [
