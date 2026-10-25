@@ -18,7 +18,7 @@ mod value;
 
 pub use audit::{
     AfterDecision, AllowedCall, ArgumentsDigest, AuditApp, AuditDecision, AuditError, AuditEvent,
-    AuditRecord, AuditTool, CallAudit, CallNumber, GateMismatch, GatedCall, RunId,
+    AuditRecord, AuditTool, CallAudit, CallNumber, GateMismatch, GatedCall, RunId, WaitingCall,
 };
 pub use decide::{Decision, DenyReason, GateId, Gates, Request, decide};
 pub use exposed::{ExposedError, ExposedName, SEPARATOR};

@@ -180,8 +180,11 @@ pub enum AuditEvent {
     Decided(AuditDecision),
     /// Final: the upstream ran the call. `is_error` is the upstream's flag.
     Ran { is_error: bool },
-    /// Final: the gate's wait window ended without an answer.
+    /// The call waits on its gate. A final record follows when the answer
+    /// is handled (`docs/design.md` 5.3).
     Waiting(GateId),
+    /// Final: the kept result of an approved gate was collected.
+    Delivered(GateId),
     /// Final: chaperone could not run the call.
     Failed(CallFault),
 }
@@ -391,6 +394,26 @@ impl AllowedCall {
             event: AuditEvent::Failed(fault),
         })
     }
+
+    /// Final: the call collected the kept result of `gate` instead of
+    /// running (`docs/design.md` 5.3).
+    ///
+    /// # Errors
+    ///
+    /// Returns the [`AuditError`] of the sink. chaperone then returns no
+    /// result (G6).
+    pub fn delivered(
+        self,
+        gate: GateId,
+        at: Timestamp,
+        sink: &dyn AuditSink,
+    ) -> Result<(), AuditError> {
+        sink.write(&AuditRecord {
+            facts: self.0,
+            at,
+            event: AuditEvent::Delivered(gate),
+        })
+    }
 }
 
 /// An approval named another gate than the one the call waits on. The call
@@ -399,7 +422,53 @@ impl AllowedCall {
 #[error("the approval names another gate")]
 pub struct GateMismatch;
 
+/// A gated call after its `waiting` record. It ends when the approval
+/// answer is handled (`docs/design.md` 5.3).
+#[derive(Debug)]
+pub struct WaitingCall(CallFacts, GateId);
+
 impl GatedCall {
+    /// The gate this call waits on.
+    #[must_use]
+    pub fn gate(&self) -> GateId {
+        self.1
+    }
+
+    /// The call returned `waiting` to the app. The final record comes with
+    /// the answer.
+    ///
+    /// # Errors
+    ///
+    /// Returns the [`AuditError`] of the sink.
+    pub fn waiting(self, at: Timestamp, sink: &dyn AuditSink) -> Result<WaitingCall, AuditError> {
+        sink.write(&AuditRecord {
+            facts: self.0.clone(),
+            at,
+            event: AuditEvent::Waiting(self.1),
+        })?;
+        Ok(WaitingCall(self.0, self.1))
+    }
+
+    /// Final: chaperone could not get an approval.
+    ///
+    /// # Errors
+    ///
+    /// Returns the [`AuditError`] of the sink.
+    pub fn failed(
+        self,
+        fault: CallFault,
+        at: Timestamp,
+        sink: &dyn AuditSink,
+    ) -> Result<(), AuditError> {
+        sink.write(&AuditRecord {
+            facts: self.0,
+            at,
+            event: AuditEvent::Failed(fault),
+        })
+    }
+}
+
+impl WaitingCall {
     /// The gate this call waits on.
     #[must_use]
     pub fn gate(&self) -> GateId {
@@ -419,20 +488,7 @@ impl GatedCall {
         Ok(AllowedCall(self.0))
     }
 
-    /// Final: the wait window ended without an answer.
-    ///
-    /// # Errors
-    ///
-    /// Returns the [`AuditError`] of the sink.
-    pub fn waiting(self, at: Timestamp, sink: &dyn AuditSink) -> Result<(), AuditError> {
-        sink.write(&AuditRecord {
-            facts: self.0,
-            at,
-            event: AuditEvent::Waiting(self.1),
-        })
-    }
-
-    /// Final: chaperone could not get an approval.
+    /// Final: the approval channel denied the gate, or gave no answer.
     ///
     /// # Errors
     ///
@@ -565,21 +621,73 @@ mod tests {
     }
 
     #[test]
-    fn a_gate_ends_in_a_waiting_record() {
+    fn a_gate_waits_then_runs_after_its_approval() {
         let (sink, written) = sink();
         let next = audit().decided(Decision::Gate(GATE), START, &sink).unwrap();
         let AfterDecision::Gated(call) = next else {
             panic!("a gate must need a final record");
         };
-        call.waiting(END, &sink).unwrap();
-        let first = written.recv().unwrap();
-        let last = written.recv().unwrap();
+        let waiting = call.waiting(END, &sink).unwrap();
+        let allowed = waiting.approved(GATE).unwrap();
+        allowed.ran(false, END, &sink).unwrap();
+        let events: Vec<AuditEvent> = (0..3)
+            .map(|_| written.recv().unwrap().event().clone())
+            .collect();
         assert_eq!(
-            first.event(),
-            &AuditEvent::Decided(AuditDecision::Gate(GATE))
+            events,
+            [
+                AuditEvent::Decided(AuditDecision::Gate(GATE)),
+                AuditEvent::Waiting(GATE),
+                AuditEvent::Ran { is_error: false },
+            ]
         );
-        assert_eq!(last.event(), &AuditEvent::Waiting(GATE));
+    }
+
+    #[test]
+    fn an_approval_of_another_gate_is_refused() {
+        let (sink, _written) = sink();
+        let next = audit().decided(Decision::Gate(GATE), START, &sink).unwrap();
+        let AfterDecision::Gated(call) = next else {
+            panic!("a gate must need a final record");
+        };
+        let waiting = call.waiting(END, &sink).unwrap();
+        assert_eq!(
+            waiting.approved(GateId::from_bytes([1; 16])).unwrap_err(),
+            GateMismatch
+        );
+    }
+
+    #[test]
+    fn a_gate_waits_then_fails_after_a_denial() {
+        let (sink, written) = sink();
+        let next = audit().decided(Decision::Gate(GATE), START, &sink).unwrap();
+        let AfterDecision::Gated(call) = next else {
+            panic!("a gate must need a final record");
+        };
+        let waiting = call.waiting(END, &sink).unwrap();
+        waiting
+            .failed(CallFault::ApprovalDenied, END, &sink)
+            .unwrap();
+        written.recv().unwrap();
+        written.recv().unwrap();
+        let last = written.recv().unwrap();
+        assert_eq!(last.event(), &AuditEvent::Failed(CallFault::ApprovalDenied));
         assert_eq!((last.started_at(), last.time()), (START, END));
+    }
+
+    #[test]
+    fn an_allow_can_end_in_a_delivered_record() {
+        let (sink, written) = sink();
+        let next = audit().decided(Decision::Allow, START, &sink).unwrap();
+        let AfterDecision::Allowed(call) = next else {
+            panic!("an allow must need a final record");
+        };
+        call.delivered(GATE, END, &sink).unwrap();
+        written.recv().unwrap();
+        assert_eq!(
+            written.recv().unwrap().event(),
+            &AuditEvent::Delivered(GATE)
+        );
     }
 
     #[test]

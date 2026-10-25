@@ -114,8 +114,8 @@ fn error_text(text: String) -> CallToolResult {
     CallToolResult::error(vec![ContentBlock::text(text)])
 }
 
-/// The MCP result of one outcome.
-fn render(outcome: CallOutcome) -> CallToolResult {
+/// The MCP result of one outcome. `name` is the tool as the app named it.
+fn render(name: &str, outcome: CallOutcome) -> CallToolResult {
     match outcome {
         CallOutcome::Ran(result) => {
             let blocks = result.content.into_iter().map(ContentBlock::text).collect();
@@ -128,9 +128,11 @@ fn render(outcome: CallOutcome) -> CallToolResult {
         CallOutcome::Denied(reason) => {
             error_text(format!("chaperone denied this call: {}", reason.code()))
         }
+        // The same text for every identical call (`docs/design.md` 5.3).
         CallOutcome::Waiting(gate) => error_text(format!(
-            "chaperone holds this call for a human approval (gate {gate}). \
-             Call the tool again with the same arguments after the approval."
+            "awaiting permission for tool call {name} (gate {gate}). chaperone \
+             runs the call when the approval comes and keeps the result. Call \
+             again with the same arguments to collect it."
         )),
         CallOutcome::Failed(fault) => error_text(format!(
             "chaperone could not run this call: {}",
@@ -187,7 +189,7 @@ impl<G: Gateway> ServerHandler for Front<G> {
             .gateway
             .call_tool(&facts.credentials(), &request.name, arguments)
             .await;
-        Ok(render(outcome).into())
+        Ok(render(&request.name, outcome).into())
     }
 }
 
@@ -255,9 +257,10 @@ mod tests {
 
     #[test]
     fn a_denial_renders_as_an_error_result_with_the_code() {
-        let result = render(CallOutcome::Denied(
-            chaperone_core::DenyReason::ToolNotGranted,
-        ));
+        let result = render(
+            "x__y",
+            CallOutcome::Denied(chaperone_core::DenyReason::ToolNotGranted),
+        );
         assert_eq!(result.is_error, Some(true));
         let text: String = result
             .content

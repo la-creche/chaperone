@@ -23,7 +23,9 @@ use rmcp::ServiceExt;
 use rmcp::model::CallToolRequestParams;
 use rmcp::transport::StreamableHttpClientTransport;
 use rmcp::transport::streamable_http_client::StreamableHttpClientTransportConfig;
-use support::{INSTALL, TOKEN, config_dir, fake_approval, plugin_tree, policy_text, secrets_dir};
+use support::{
+    INSTALL, TOKEN, config_dir, hanging_approval, plugin_tree, policy_text, secrets_dir,
+};
 use tokio_util::sync::CancellationToken;
 
 const OTHER_TOKEN: &str = "fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210";
@@ -53,7 +55,7 @@ async fn serve() -> Served {
             audit: loaded.audit,
             clock: loaded.clock,
             upstreams: Upstreams::new(),
-            approval: fake_approval(),
+            approval: hanging_approval(),
             redactor: Redactor::new(loaded.secrets),
         },
         Bounds::DEFAULT,
@@ -153,13 +155,15 @@ async fn the_front_door_decides_and_audits_each_call() {
         .unwrap();
     assert!(text_of(&ungranted).contains("tool_not_granted"));
 
-    // The approval channel approves, and no upstream runs in this test.
+    // The approval channel never answers, so the gate stays pending.
     let gated = known
         .call_tool(CallToolRequestParams::new("vikunja__create_task"))
         .await
         .unwrap();
+    assert_eq!(gated.is_error, Some(true));
     assert!(
-        text_of(&gated).contains("not_connected"),
+        text_of(&gated)
+            .starts_with("awaiting permission for tool call vikunja__create_task (gate "),
         "{}",
         text_of(&gated)
     );
@@ -183,9 +187,8 @@ async fn the_front_door_decides_and_audits_each_call() {
     let audit = served.stop().await;
     let lines: Vec<&str> = audit.lines().collect();
     // An allowed call writes `decided` and `failed`. An ungranted call writes
-    // `decided`. A gated call that is approved writes `decided` and then
-    // `failed`, because no upstream runs. A bad name writes `failed`. An
-    // unknown caller writes `decided`.
+    // `decided`. A gated call writes `decided` and `waiting`. A bad name
+    // writes `failed`. An unknown caller writes `decided`.
     assert_eq!(lines.len(), 7, "{audit}");
     assert!(
         lines[0].contains(r#""event":"decided","detail":"allow""#),
@@ -195,7 +198,7 @@ async fn the_front_door_decides_and_audits_each_call() {
     assert!(lines[1].contains(r#""detail":"not_connected""#));
     assert!(lines[2].contains(r#""detail":"deny:tool_not_granted""#));
     assert!(lines[3].contains(r#""detail":"gate:"#));
-    assert!(lines[4].contains(r#""detail":"not_connected""#));
+    assert!(lines[4].contains(r#""event":"waiting""#), "{}", lines[4]);
     assert!(lines[5].contains(r#""detail":"unknown_tool""#));
     assert!(lines[6].contains(r#""app":null"#) && lines[6].contains("deny:unknown_credential"));
     assert!(

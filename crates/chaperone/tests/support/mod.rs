@@ -121,6 +121,36 @@ impl chaperone::effect::Effect for FakeApproval {
     }
 }
 
+/// An approval channel that never answers. A gate stays pending.
+#[derive(Debug)]
+pub struct HangingApproval;
+
+impl chaperone::effect::Effect for HangingApproval {
+    fn tools(&self) -> &[chaperone::effect::EffectTool] {
+        &[]
+    }
+
+    fn call<'a>(
+        &'a self,
+        _tool: &'a chaperone_core::ToolName,
+        _arguments: std::collections::BTreeMap<String, chaperone_core::ArgValue>,
+    ) -> std::pin::Pin<
+        Box<
+            dyn std::future::Future<
+                    Output = Result<rmcp::model::CallToolResult, chaperone::effect::EffectFault>,
+                > + Send
+                + 'a,
+        >,
+    > {
+        Box::pin(std::future::pending())
+    }
+}
+
+/// An approval channel that never answers.
+pub fn hanging_approval() -> chaperone::approval::ApprovalChannel {
+    chaperone::approval::ApprovalChannel::new(Box::new(HangingApproval))
+}
+
 /// An approval channel over [`FakeApproval`] that answers at once.
 pub fn fake_approval() -> chaperone::approval::ApprovalChannel {
     chaperone::approval::ApprovalChannel::new(Box::new(FakeApproval {

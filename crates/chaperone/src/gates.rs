@@ -1,16 +1,12 @@
 //! The gate state of each app instance (`docs/design.md` 5.3). The program
 //! keeps it here and passes it to the decision as values (G3). Each gate
-//! carries a watch channel, so a call that waits on it wakes when the
-//! approval channel answers.
+//! carries a watch channel that the approval task moves along.
 
 use std::collections::BTreeMap;
 use std::time::Duration;
 
-use chaperone_core::{AppId, DenialReason, GateId, Timestamp};
+use chaperone_core::{AppId, DenialReason, GateId, Timestamp, UpstreamResult};
 use tokio::sync::watch;
-
-/// The wait window of a gated call (`docs/design.md` 5.5).
-pub const APPROVAL_WINDOW: Duration = Duration::from_secs(60);
 
 /// The life of a gate from its creation (`docs/design.md` 5.5).
 pub const GATE_LIFE: Duration = Duration::from_secs(600);
@@ -20,12 +16,15 @@ pub const GATE_LIFE: Duration = Duration::from_secs(600);
 pub enum GateStatus {
     /// The approval channel has not answered.
     Pending,
-    /// The approval channel approved. One call may run.
-    Approved,
+    /// The approval channel approved, and the call runs.
+    Running,
+    /// The call ran. The result waits to be collected once.
+    Done(UpstreamResult),
     /// The approval channel denied, with its reason.
     Denied(DenialReason),
     /// The approval channel gave no answer of the right shape, or none in
-    /// the life of the gate. The gate counts as denied (G2).
+    /// the life of the gate, or the call could not run. The gate counts as
+    /// denied (G2).
     Faulted,
 }
 
@@ -67,8 +66,8 @@ impl GateBook {
         gates.retain(|_, gate| gate.expires > now);
         for (id, gate) in gates.iter() {
             let into = match &*gate.status.borrow() {
-                GateStatus::Pending => &mut maps.pending,
-                GateStatus::Approved => &mut maps.approved,
+                GateStatus::Pending | GateStatus::Running => &mut maps.pending,
+                GateStatus::Done(_) => &mut maps.approved,
                 GateStatus::Denied(_) | GateStatus::Faulted => &mut maps.denied,
             };
             into.insert(*id, gate.expires);
@@ -111,19 +110,19 @@ impl GateBook {
         (receiver, Opened::Created, Some(sender))
     }
 
-    /// Consume the approval of `gate`: remove it if it is approved. One
-    /// approval runs one call (`docs/design.md` 5.3).
-    pub fn take_approval(&mut self, app: &AppId, gate: GateId) -> bool {
-        let Some(gates) = self.gates.get_mut(app) else {
-            return false;
+    /// Collect the kept result of `gate` and remove the gate. A result is
+    /// collected once (`docs/design.md` 5.3).
+    pub fn take_result(&mut self, app: &AppId, gate: GateId) -> Option<UpstreamResult> {
+        let gates = self.gates.get_mut(app)?;
+        let result = match &*gates.get(&gate)?.status.borrow() {
+            GateStatus::Done(result) => result.clone(),
+            GateStatus::Pending
+            | GateStatus::Running
+            | GateStatus::Denied(_)
+            | GateStatus::Faulted => return None,
         };
-        let approved = gates
-            .get(&gate)
-            .is_some_and(|found| *found.status.borrow() == GateStatus::Approved);
-        if approved {
-            gates.remove(&gate);
-        }
-        approved
+        gates.remove(&gate);
+        Some(result)
     }
 }
 
@@ -153,14 +152,25 @@ mod tests {
         assert!(maps.approved.is_empty() && maps.denied.is_empty());
     }
 
+    fn result() -> UpstreamResult {
+        UpstreamResult {
+            content: vec!["done".to_owned()],
+            is_error: false,
+        }
+    }
+
     #[test]
-    fn an_answer_moves_the_gate_and_an_approval_is_taken_once() {
+    fn a_result_moves_the_gate_and_is_taken_once() {
         let mut book = GateBook::default();
         let (_, _, sender) = book.open(&app(), GATE, NOW, GATE_LIFE);
-        sender.unwrap().send_replace(GateStatus::Approved);
+        let sender = sender.unwrap();
+        sender.send_replace(GateStatus::Running);
+        assert_eq!(book.snapshot(&app(), NOW).pending.len(), 1);
+        assert_eq!(book.take_result(&app(), GATE), None);
+        sender.send_replace(GateStatus::Done(result()));
         assert_eq!(book.snapshot(&app(), NOW).approved.len(), 1);
-        assert!(book.take_approval(&app(), GATE));
-        assert!(!book.take_approval(&app(), GATE));
+        assert_eq!(book.take_result(&app(), GATE), Some(result()));
+        assert_eq!(book.take_result(&app(), GATE), None);
         assert_eq!(book.snapshot(&app(), NOW), GateMaps::default());
     }
 
@@ -175,14 +185,14 @@ mod tests {
             .send_replace(GateStatus::Denied(DenialReason::new("no")));
         faulted.unwrap().send_replace(GateStatus::Faulted);
         assert_eq!(book.snapshot(&app(), NOW).denied.len(), 2);
-        assert!(!book.take_approval(&app(), GATE));
+        assert_eq!(book.take_result(&app(), GATE), None);
     }
 
     #[test]
     fn an_expired_gate_is_dropped_and_opened_anew() {
         let mut book = GateBook::default();
         let (_, _, sender) = book.open(&app(), GATE, NOW, GATE_LIFE);
-        sender.unwrap().send_replace(GateStatus::Approved);
+        sender.unwrap().send_replace(GateStatus::Done(result()));
         let later = NOW.checked_add(GATE_LIFE).unwrap();
         assert_eq!(book.snapshot(&app(), later), GateMaps::default());
         let (_, opened, _) = book.open(&app(), GATE, later, GATE_LIFE);

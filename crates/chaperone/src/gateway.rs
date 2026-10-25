@@ -1,7 +1,8 @@
 //! The call path of the program. It resolves the caller, counts the call,
 //! decides and writes the decision record. It then runs the call through
 //! its upstream, checks the result, writes the final record and answers. A
-//! gated call waits on its gate for the approval channel's answer
+//! gated call returns `waiting` at once. The approval task runs it when the
+//! answer comes and keeps the result for an identical call to collect
 //! (`docs/design.md` 5.3).
 
 use std::collections::BTreeMap;
@@ -16,13 +17,13 @@ use chaperone_core::{
     AuditError, AuditSink, AuditTool, CallAudit, CallFault, CallNumber, CallOutcome, Caller, Clock,
     Credentials, Decision, ExposedName, GateAnswer, GateId, GatedCall, Gates, Gateway, Identity,
     ListError, ListedTool, PluginName, Policy, Request, RunId, Timestamp, ToolCall, ToolName,
-    UpstreamResult,
+    UpstreamResult, WaitingCall,
 };
 use tokio::sync::watch;
 
 use crate::approval::ApprovalChannel;
 use crate::effect::{self, EffectFault, Redactor, UPSTREAM_BUDGET, Upstreams};
-use crate::gates::{APPROVAL_WINDOW, GATE_LIFE, GateBook, GateMaps, GateStatus, Opened};
+use crate::gates::{GATE_LIFE, GateBook, GateMaps, GateStatus, Opened};
 
 /// The longest the program waits for one decision (`docs/design.md` 5.5).
 /// A decision that takes longer fails the call with `no_decision` (G2).
@@ -33,9 +34,7 @@ pub const DECISION_BUDGET: Duration = Duration::from_secs(5);
 pub struct Bounds {
     pub decision: Duration,
     pub upstream: Duration,
-    /// How long a gated call waits before it returns `waiting`.
-    pub approval_wait: Duration,
-    /// How long a gate lives.
+    /// How long a gate lives, with its approval ask and its kept result.
     pub gate: Duration,
 }
 
@@ -44,7 +43,6 @@ impl Bounds {
     pub const DEFAULT: Self = Self {
         decision: DECISION_BUDGET,
         upstream: UPSTREAM_BUDGET,
-        approval_wait: APPROVAL_WINDOW,
         gate: GATE_LIFE,
     };
 }
@@ -167,14 +165,6 @@ enum AfterRecord {
     Allowed(Staged),
     /// The call waits on its gate.
     Gated(StagedGate),
-}
-
-/// How a gated call ends without running.
-enum GateEnd {
-    /// The wait window ended with the gate pending.
-    Waiting,
-    /// The approval channel denied, faulted or is gone.
-    Failed(CallFault),
 }
 
 impl ChaperoneGateway {
@@ -309,10 +299,19 @@ impl ChaperoneGateway {
         match next {
             AfterDecision::Denied(reason) => AfterRecord::Done(CallOutcome::Denied(reason)),
             AfterDecision::Allowed(call) => {
-                // An approved gate may have allowed this call. One approval
-                // runs one call (`docs/design.md` 5.3).
-                if let Some(app) = &app_id {
-                    self.consume_approval(app, &exposed, &arguments, started_at);
+                // A done gate allowed this call: it collects the kept result
+                // instead of running (`docs/design.md` 5.3).
+                if let Some(app) = &app_id
+                    && let Some((gate, result)) =
+                        self.take_result(app, &exposed, &arguments, started_at)
+                {
+                    return AfterRecord::Done(match call.delivered(gate, self.clock.now(), sink) {
+                        Ok(()) => CallOutcome::Ran(result),
+                        Err(error) => {
+                            tracing::error!(%error, "the delivered record is not durable");
+                            CallOutcome::Failed(CallFault::AuditFailed)
+                        }
+                    });
                 }
                 AfterRecord::Allowed(Staged {
                     call,
@@ -343,14 +342,15 @@ impl ChaperoneGateway {
         Ok(counters.gates.snapshot(app, now))
     }
 
-    /// Remove the approval that allowed this call, if one did.
-    fn consume_approval(
+    /// The kept result of the done gate of this call, if there is one. The
+    /// gate is removed with it.
+    fn take_result(
         &self,
         app: &AppId,
         exposed: &ExposedName,
         arguments: &BTreeMap<String, ArgValue>,
         now: Timestamp,
-    ) {
+    ) -> Option<(GateId, UpstreamResult)> {
         let gate = GateId::from_call(&ToolCall {
             app,
             upstream: exposed.upstream(),
@@ -358,39 +358,72 @@ impl ChaperoneGateway {
             arguments,
             now,
         });
-        if let Ok(mut counters) = self.counters.lock() {
-            counters.gates.take_approval(app, gate);
+        let mut counters = self.counters.lock().ok()?;
+        let result = counters.gates.take_result(app, gate)?;
+        Some((gate, result))
+    }
+
+    /// Write the `waiting` record of a gated call. It blocks on the audit
+    /// sink. The returned state ends the call when the answer comes.
+    fn wait_gate(&self, call: GatedCall) -> Result<WaitingCall, CallOutcome> {
+        call.waiting(self.clock.now(), self.audit.as_ref())
+            .map_err(|error| {
+                tracing::error!(%error, "the waiting record is not durable");
+                CallOutcome::Failed(CallFault::AuditFailed)
+            })
+    }
+
+    /// Write the final record of a gated call that the answer ended without
+    /// a run. It blocks on the audit sink.
+    fn fail_waiting(&self, call: WaitingCall, fault: CallFault) {
+        if let Err(error) = call.failed(fault, self.clock.now(), self.audit.as_ref()) {
+            tracing::error!(%error, "the final record of a gated call is not durable");
         }
     }
 
-    /// Write the final record of a gated call that does not run, and
-    /// answer. It blocks on the audit sink.
-    fn finish_gated(&self, call: GatedCall, end: GateEnd) -> CallOutcome {
+    /// Write the final record of a gated call that ran. It blocks on the
+    /// audit sink. The result is kept only after the record is durable (G6).
+    fn finish_waiting(
+        &self,
+        call: WaitingCall,
+        gate: GateId,
+        result: Result<UpstreamResult, CallFault>,
+    ) -> Option<UpstreamResult> {
         let sink = self.audit.as_ref();
-        let gate = call.gate();
-        match end {
-            GateEnd::Waiting => match call.waiting(self.clock.now(), sink) {
-                Ok(()) => CallOutcome::Waiting(gate),
+        let Ok(allowed) = call.approved(gate) else {
+            tracing::error!(%gate, "the approval names another gate");
+            return None;
+        };
+        match result {
+            Ok(result) => match allowed.ran(result.is_error, self.clock.now(), sink) {
+                Ok(()) => Some(result),
                 Err(error) => {
-                    tracing::error!(%error, "the waiting record is not durable");
-                    CallOutcome::Failed(CallFault::AuditFailed)
+                    tracing::error!(%error, "the ran record is not durable, so the result is dropped");
+                    None
                 }
             },
-            GateEnd::Failed(fault) => outcome(call.failed(fault, self.clock.now(), sink), fault),
+            Err(fault) => {
+                if let Err(error) = allowed.failed(fault, self.clock.now(), sink) {
+                    tracing::error!(%error, "the final record of a gated call is not durable");
+                }
+                None
+            }
         }
     }
 
-    /// Ask the approval channel about one gate, on its own task, and record
-    /// the answer on the gate. The ask ends with the life of the gate.
-    fn ask_approval(
+    /// Ask the approval channel about one gate on its own task. On an
+    /// approval, run the call and keep the result on the gate. The ask ends
+    /// with the life of the gate (`docs/design.md` 5.3).
+    fn approve_and_run(
         self: &Arc<Self>,
         sender: watch::Sender<GateStatus>,
-        gate: GateId,
+        call: WaitingCall,
         app: AppId,
         exposed: ExposedName,
         arguments: BTreeMap<String, ArgValue>,
     ) {
         let gateway = Arc::clone(self);
+        let gate = call.gate();
         tokio::spawn(async move {
             let request = ApprovalRequest {
                 gate,
@@ -403,19 +436,50 @@ impl ChaperoneGateway {
                 gateway.approval.ask(&request, &gateway.redactor),
             )
             .await;
-            let status = match asked {
-                Ok(Ok(GateAnswer::Approved)) => GateStatus::Approved,
-                Ok(Ok(GateAnswer::Denied(reason))) => GateStatus::Denied(reason),
+            let fault = match asked {
+                Ok(Ok(GateAnswer::Approved)) => {
+                    sender.send_replace(GateStatus::Running);
+                    let result = gateway
+                        .run_upstream(exposed.upstream(), exposed.tool(), arguments.clone())
+                        .await;
+                    let finishing = Arc::clone(&gateway);
+                    let kept = tokio::task::spawn_blocking(move || {
+                        finishing.finish_waiting(call, gate, result)
+                    })
+                    .await;
+                    let status = match kept {
+                        Ok(Some(result)) => GateStatus::Done(result),
+                        Ok(None) => GateStatus::Faulted,
+                        Err(error) => {
+                            tracing::error!(%error, "the final record did not return");
+                            GateStatus::Faulted
+                        }
+                    };
+                    sender.send_replace(status);
+                    return;
+                }
+                Ok(Ok(GateAnswer::Denied(reason))) => {
+                    tracing::info!(%app, %gate, reason = reason.as_str(), "the approval channel denied the gate");
+                    sender.send_replace(GateStatus::Denied(reason));
+                    CallFault::ApprovalDenied
+                }
                 Ok(Err(fault)) => {
                     tracing::warn!(%app, %gate, ?fault, "the approval channel gave no answer");
-                    GateStatus::Faulted
+                    sender.send_replace(GateStatus::Faulted);
+                    CallFault::ApprovalFault
                 }
                 Err(_) => {
                     tracing::warn!(%app, %gate, "the approval channel did not answer in the life of the gate");
-                    GateStatus::Faulted
+                    sender.send_replace(GateStatus::Faulted);
+                    CallFault::ApprovalFault
                 }
             };
-            sender.send_replace(status);
+            let finishing = Arc::clone(&gateway);
+            if let Err(error) =
+                tokio::task::spawn_blocking(move || finishing.fail_waiting(call, fault)).await
+            {
+                tracing::error!(%error, "the final record did not return");
+            }
         });
     }
 
@@ -561,7 +625,7 @@ impl SharedGateway {
         let staged = match staged.await {
             Ok(AfterRecord::Done(outcome)) => return outcome,
             Ok(AfterRecord::Allowed(staged)) => staged,
-            Ok(AfterRecord::Gated(staged)) => return self.await_gate(staged).await,
+            Ok(AfterRecord::Gated(staged)) => return self.gate_call(staged).await,
             // The blocking task did not return its outcome (G2).
             Err(error) => {
                 tracing::error!(%error, "the call did not return");
@@ -590,96 +654,63 @@ impl SharedGateway {
         }
     }
 
-    /// Wait on the gate of a gated call up to the wait window
-    /// (`docs/design.md` 5.3). Ask the approval channel when this call
-    /// created the gate.
-    async fn await_gate(&self, staged: StagedGate) -> CallOutcome {
+    /// Open the gate of a gated call, write its `waiting` record and answer
+    /// `waiting` at once (`docs/design.md` 5.3). The call that created the
+    /// gate also starts the approval task.
+    async fn gate_call(&self, staged: StagedGate) -> CallOutcome {
         let gateway = &self.0;
         let gate = staged.call.gate();
         let now = gateway.clock.now();
         // The guard ends inside the closure, so no lock is held across an
         // await.
         let opened = gateway.counters.lock().ok().map(|mut counters| {
-            counters
-                .gates
-                .open(&staged.app, gate, now, gateway.bounds.gate)
+            let (_, opened, sender) =
+                counters
+                    .gates
+                    .open(&staged.app, gate, now, gateway.bounds.gate);
+            (opened, sender)
         });
-        let Some((mut status, opened, sender)) = opened else {
+        let Some((opened, sender)) = opened else {
             tracing::error!("the call counters are poisoned, so every call fails");
-            return self
-                .end_gate(staged.call, GateEnd::Failed(CallFault::Halted))
-                .await;
+            return self.end_gate(staged.call, CallFault::Halted).await;
         };
-        if opened == Opened::Created
-            && let Some(sender) = sender
-        {
-            gateway.ask_approval(
-                sender,
-                gate,
-                staged.app.clone(),
-                staged.exposed.clone(),
-                staged.arguments.clone(),
-            );
-        }
 
-        let deadline = tokio::time::Instant::now() + gateway.bounds.approval_wait;
-        loop {
-            let seen = status.borrow_and_update().clone();
-            match seen {
-                GateStatus::Pending => {
-                    match tokio::time::timeout_at(deadline, status.changed()).await {
-                        Ok(Ok(())) => {}
-                        // The gate was dropped while this call waited on it.
-                        Ok(Err(_)) => {
-                            return self
-                                .end_gate(staged.call, GateEnd::Failed(CallFault::ApprovalFault))
-                                .await;
-                        }
-                        Err(_) => return self.end_gate(staged.call, GateEnd::Waiting).await,
-                    }
-                }
-                GateStatus::Approved => {
-                    let taken = gateway
-                        .counters
-                        .lock()
-                        .ok()
-                        .map(|mut counters| counters.gates.take_approval(&staged.app, gate));
-                    // Another identical call took this approval first.
-                    if taken != Some(true) {
-                        return self.end_gate(staged.call, GateEnd::Waiting).await;
-                    }
-                    let Ok(call) = staged.call.approved(gate) else {
-                        // The gate of the call is the gate it waited on.
-                        return CallOutcome::Failed(CallFault::ApprovalFault);
-                    };
-                    return self
-                        .run_and_finish(Staged {
-                            call,
-                            upstream: staged.exposed.upstream().clone(),
-                            tool: staged.exposed.tool().clone(),
-                            arguments: staged.arguments,
-                        })
-                        .await;
-                }
-                GateStatus::Denied(reason) => {
-                    tracing::info!(app = %staged.app, %gate, reason = reason.as_str(), "the approval channel denied the gate");
-                    return self
-                        .end_gate(staged.call, GateEnd::Failed(CallFault::ApprovalDenied))
-                        .await;
-                }
-                GateStatus::Faulted => {
-                    return self
-                        .end_gate(staged.call, GateEnd::Failed(CallFault::ApprovalFault))
-                        .await;
-                }
+        let recording = Arc::clone(gateway);
+        let waiting = tokio::task::spawn_blocking(move || recording.wait_gate(staged.call)).await;
+        let waiting = match waiting {
+            Ok(Ok(waiting)) => waiting,
+            Ok(Err(outcome)) => return outcome,
+            Err(error) => {
+                tracing::error!(%error, "the waiting record did not return");
+                return CallOutcome::Failed(CallFault::AuditFailed);
             }
+        };
+        match (opened, sender) {
+            (Opened::Created, Some(sender)) => {
+                gateway.approve_and_run(
+                    sender,
+                    waiting,
+                    staged.app,
+                    staged.exposed,
+                    staged.arguments,
+                );
+            }
+            // An identical call while the gate is pending or running ends
+            // with its waiting record.
+            (Opened::Created, None) | (Opened::Found, _) => {}
         }
+        CallOutcome::Waiting(gate)
     }
 
-    /// Write the final record of a gated call that does not run.
-    async fn end_gate(&self, call: GatedCall, end: GateEnd) -> CallOutcome {
+    /// Write the final record of a gated call that fails before it waits.
+    async fn end_gate(&self, call: GatedCall, fault: CallFault) -> CallOutcome {
         let gateway = Arc::clone(&self.0);
-        match tokio::task::spawn_blocking(move || gateway.finish_gated(call, end)).await {
+        let written = tokio::task::spawn_blocking(move || {
+            let sink = gateway.audit.as_ref();
+            outcome(call.failed(fault, gateway.clock.now(), sink), fault)
+        })
+        .await;
+        match written {
             Ok(outcome) => outcome,
             Err(error) => {
                 tracing::error!(%error, "the final record did not return");
