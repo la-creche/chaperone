@@ -2,12 +2,12 @@
 
 Rules for `crates/core`. Read the root `AGENTS.md` first.
 
-`core` holds the policy types, the strict JSON reader, the decision function and the hook traits. It does no I/O. The crate boundary keeps the decision pure: `cargo` refuses a dependency on an I/O crate here, and review refuses an I/O call.
+`core` holds the policy types, the strict reader, the decision function and the hook traits. It does no I/O. The crate boundary keeps the decision pure: `cargo` refuses a dependency on an I/O crate here, and review refuses an I/O call.
 
 ## What lives here
 
-- The types of `install.json`, `policy.json` and `plugin.json`, with `deny_unknown_fields`.
-- The strict JSON reader. It takes bytes. It refuses duplicate keys, a byte order mark, invalid UTF-8, unknown fields and input over the size cap.
+- The types of `install.toml`, `policy.json` and `plugin.json`, with `deny_unknown_fields`.
+- The strict reader, for JSON and TOML. It takes bytes. It refuses duplicate keys, a byte order mark, invalid UTF-8, unknown fields and input over the size cap.
 - The JSON Schema generation from those types.
 - The cross-file checks behind `chaperone check`.
 - The decision function in `docs/design.md` section 5.

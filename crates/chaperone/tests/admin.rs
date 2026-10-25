@@ -32,8 +32,9 @@ fn the_schema_names_each_file_and_each_fence_section() {
 
 #[test]
 fn a_file_name_picks_the_check_and_another_is_refused() {
-    assert_eq!("install.json".parse(), Ok(ConfigFile::Install));
+    assert_eq!("install.toml".parse(), Ok(ConfigFile::Install));
     assert_eq!("policy.json".parse(), Ok(ConfigFile::Policy));
+    assert!("install.json".parse::<ConfigFile>().is_err());
     assert!("secrets.json".parse::<ConfigFile>().is_err());
 }
 
@@ -58,7 +59,7 @@ fn the_check_passes_the_fixture_and_refuses_a_broken_policy() {
 
     let error = admin::check(
         ConfigFile::Install,
-        br#"{"version":1,"plugins":{"ghost":{}}}"#,
+        b"version = 1\nplugins.ghost = {}\n",
         &config,
         &plugins,
     )
@@ -183,6 +184,10 @@ async fn the_socket_serves_the_three_endpoints() {
     let (status, body) = request(&socket, "POST", "/check", &bad.to_string()).await;
     assert!(status.contains("422"), "{status} {body}");
     assert!(body.contains("version"));
+
+    let install = serde_json::json!({ "file": "install.toml", "content": INSTALL });
+    let (status, body) = request(&socket, "POST", "/check", &install.to_string()).await;
+    assert!(status.contains("200"), "{status} {body}");
 
     let (status, body) = request(&socket, "POST", "/token", r#"{"app":"librechat"}"#).await;
     assert!(status.contains("200"), "{status} {body}");

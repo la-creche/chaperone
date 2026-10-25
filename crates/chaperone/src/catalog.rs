@@ -1,5 +1,5 @@
 //! Find every plugin on disk. A plugin found here does nothing until
-//! `install.json` enables it (G10). The result is a sorted map, so the
+//! `install.toml` enables it (G10). The result is a sorted map, so the
 //! directory order changes nothing.
 
 use std::fs;

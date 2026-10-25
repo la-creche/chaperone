@@ -22,8 +22,11 @@ use chaperone_plugin_ha_call_fence::{EntityFence, arguments};
 use proptest::prelude::*;
 
 const SECTION: &str = r#"{"entities":["light.kitchen","switch.fan_1"]}"#;
-const INSTALL: &str =
-    r#"{"version":1,"plugins":{"ha-call":{"secrets":{"HA_TOKEN":"ha_token"}},"vikunja":{}}}"#;
+const INSTALL: &str = r#"
+version = 1
+plugins.vikunja = {}
+plugins.ha-call.secrets.HA_TOKEN = "ha_token"
+"#;
 
 fn put(catalog: &mut Catalog, location: Location, text: &str) {
     let manifest = Manifest::read(text.as_bytes()).unwrap();

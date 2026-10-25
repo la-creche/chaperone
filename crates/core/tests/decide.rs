@@ -88,8 +88,9 @@ fn catalog() -> Catalog {
     catalog
 }
 
-const INSTALL: &str = r#"{"version":1,"plugins":{"ha-call":{},"vikunja":{}}}"#;
-const INSTALL_EXTRA: &str = r#"{"version":1,"plugins":{"ha-call":{},"vikunja":{},"zz-extra":{}}}"#;
+const INSTALL: &str = "version = 1\nplugins = { ha-call = {}, vikunja = {} }\n";
+const INSTALL_EXTRA: &str =
+    "version = 1\nplugins = { ha-call = {}, vikunja = {}, zz-extra = {} }\n";
 
 const DIGEST: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
 

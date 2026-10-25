@@ -33,7 +33,7 @@ Each line cites the guarantee it protects. A pull request that does one of these
 5. Do not put a hook tool of an effect plugin into a manifest. (G8)
 6. Do not write a secret value to a log, an audit line, an error, a result, argv, the environment or the policy file. Do not add `Display`, `Serialize` or a value-printing `Debug` to `Secret`. (G9)
 7. Do not return a result before the audit line is written. (G6)
-8. Do not load, enable or order plugins by directory listing. Only `install.json` enables a plugin or fills a slot. (G10)
+8. Do not load, enable or order plugins by directory listing. Only `install.toml` enables a plugin or fills a slot. (G10)
 9. Do not write cryptography code. Use the crates named in `docs/design.md` section 9. Ask before you add another one.
 10. Do not bind `0.0.0.0`. Bind a LAN address, `127.0.0.1` or a Unix socket.
 11. Do not merge a pull request. Do not push to `main`. Do not publish a release or a tag. A maintainer does each of these.

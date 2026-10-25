@@ -27,7 +27,7 @@ use crate::registry;
 use crate::startup::{self, StartError};
 
 /// The file name of the install file in a configuration directory.
-pub const INSTALL_FILE: &str = "install.json";
+pub const INSTALL_FILE: &str = "install.toml";
 /// The file name of the policy file in a configuration directory.
 pub const POLICY_FILE: &str = "policy.json";
 
@@ -218,7 +218,7 @@ struct Dirs {
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct CheckRequest {
-    /// `install.json` or `policy.json`.
+    /// `install.toml` or `policy.json`.
     file: String,
     /// The candidate text of that file.
     content: String,

@@ -10,6 +10,7 @@
 !/plugins/effect/added/.gitkeep
 
 # Local configuration and secrets never enter the repository.
+/install.toml
 /install.json
 /policy.json
 /secrets/

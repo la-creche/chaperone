@@ -54,24 +54,24 @@ Each plugin directory holds a `plugin.json`. The strict reader reads it. It hold
 - `pairs_with`: the kind of the other half, if any
 - for an effect plugin: `command`
 
-`crates/core/src/plugin.rs` holds the exact shape. A compiled plugin's policy schema comes from its Rust type. The operator sets `secret_delivery` in `install.json`, not here.
+`crates/core/src/plugin.rs` holds the exact shape. A compiled plugin's policy schema comes from its Rust type. The operator sets `secret_delivery` in `install.toml`, not here.
 
 ## Slots and overrule
 
 1. Each slot needs exactly one plugin.
-2. The plugin in `default/` fills a slot when `install.json` names no other plugin for it.
-3. To overrule a default, name another plugin for that slot in `install.json`.
+2. The plugin in `default/` fills a slot when `install.toml` names no other plugin for it.
+3. To overrule a default, name another plugin for that slot in `install.toml`.
 4. chaperone refuses to start in these cases:
    1. A slot is empty.
-   2. `install.json` names a plugin that does not exist.
-   3. Two enabled plugins claim one slot and `install.json` does not choose.
+   2. `install.toml` names a plugin that does not exist.
+   3. Two enabled plugins claim one slot and `install.toml` does not choose.
    4. A plugin names a pair half that does not exist.
-5. A plugin on disk does nothing until `install.json` enables it (G10).
+5. A plugin on disk does nothing until `install.toml` enables it (G10).
 
 ## Never do these
 
 1. Do not read another plugin's state, files or secrets.
-2. Do not read a secret that `install.json` does not bind to this plugin.
+2. Do not read a secret that `install.toml` does not bind to this plugin.
 3. Do not log a secret value or a token (G9).
 4. Do not depend on load order or directory order (G10).
 5. Do not add a hook without a row in the catalog above and in `docs/design.md`.

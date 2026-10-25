@@ -119,13 +119,19 @@ async fn running(args: &[&str], install: &str, bounds: Bounds) -> Result<Running
     })
 }
 
-const STDIN_INSTALL: &str = r#"{"version":1,"plugins":{
-    "vikunja":{"secrets":{"VIKUNJA_TOKEN":"vikunja_token"}},"fake-approval":{}},
-    "slots":{"approval_channel":"fake-approval"}}"#;
-const ENV_INSTALL: &str = r#"{"version":1,"plugins":{
-    "vikunja":{"secrets":{"VIKUNJA_TOKEN":"vikunja_token"},"secret_delivery":"env"},
-    "fake-approval":{}},
-    "slots":{"approval_channel":"fake-approval"}}"#;
+const STDIN_INSTALL: &str = r#"
+version = 1
+slots.approval_channel = "fake-approval"
+plugins.fake-approval = {}
+plugins.vikunja.secrets.VIKUNJA_TOKEN = "vikunja_token"
+"#;
+const ENV_INSTALL: &str = r#"
+version = 1
+slots.approval_channel = "fake-approval"
+plugins.fake-approval = {}
+plugins.vikunja.secrets.VIKUNJA_TOKEN = "vikunja_token"
+plugins.vikunja.secret_delivery = "env"
+"#;
 
 async fn list_and_call(running: &Running) {
     let bearer = Bearer::new(TOKEN.to_owned());
@@ -332,10 +338,12 @@ async fn an_approval_channel_without_the_approve_tool_refuses_start() {
             "hooks":["approval"],"secrets":["VIKUNJA_TOKEN"],"command":{command}}}"#
         ),
     );
-    let install = r#"{"version":1,"plugins":{
-        "vikunja":{"secrets":{"VIKUNJA_TOKEN":"vikunja_token"}},
-        "fake-approval":{"secrets":{"VIKUNJA_TOKEN":"vikunja_token"}}},
-        "slots":{"approval_channel":"fake-approval"}}"#;
+    let install = r#"
+        version = 1
+        slots.approval_channel = "fake-approval"
+        plugins.vikunja.secrets.VIKUNJA_TOKEN = "vikunja_token"
+        plugins.fake-approval.secrets.VIKUNJA_TOKEN = "vikunja_token"
+    "#;
     let config = config_dir(root.path(), install, &policy_text(30));
     let secrets = secrets_dir(root.path());
     write_secret(&secrets, "vikunja_token", "tok-123");
@@ -376,10 +384,13 @@ async fn install_args_are_appended_to_the_command() {
         "effect/included/fake-approval",
         &approval_manifest(),
     );
-    let install = r#"{"version":1,"plugins":{
-        "vikunja":{"secrets":{"VIKUNJA_TOKEN":"vikunja_token"},"args":["--fake-upstream"]},
-        "fake-approval":{}},
-        "slots":{"approval_channel":"fake-approval"}}"#;
+    let install = r#"
+        version = 1
+        slots.approval_channel = "fake-approval"
+        plugins.fake-approval = {}
+        plugins.vikunja.secrets.VIKUNJA_TOKEN = "vikunja_token"
+        plugins.vikunja.args = ["--fake-upstream"]
+    "#;
     let config = config_dir(root.path(), install, &policy_text(30));
     let secrets = secrets_dir(root.path());
     write_secret(&secrets, "vikunja_token", "tok-123");

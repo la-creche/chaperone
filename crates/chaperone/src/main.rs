@@ -42,7 +42,7 @@ enum Command {
 
 #[derive(Debug, clap::Args)]
 struct Check {
-    /// The file: install.json or policy.json, in its configuration
+    /// The file: install.toml or policy.json, in its configuration
     /// directory.
     file: PathBuf,
     /// The plugin tree: default/, then <kind>/included and <kind>/added.
@@ -74,7 +74,7 @@ struct TokenNew {
 
 #[derive(Debug, clap::Args)]
 struct Serve {
-    /// The directory that holds install.json and policy.json.
+    /// The directory that holds install.toml and policy.json.
     #[arg(long)]
     config_dir: PathBuf,
     /// The plugin tree: default/, then <kind>/included and <kind>/added.
