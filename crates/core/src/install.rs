@@ -47,6 +47,10 @@ pub struct InstallEntry {
     secrets: BTreeMap<SecretParam, SecretName>,
     #[serde(default)]
     secret_delivery: SecretDelivery,
+    /// Arguments appended to the command of an effect plugin's manifest
+    /// (`docs/design.md` 7.4). Never a secret value (G9).
+    #[serde(default)]
+    args: Vec<String>,
 }
 
 impl InstallEntry {
@@ -131,11 +135,13 @@ impl PluginKey {
 /// Every plugin found on disk.
 pub type Catalog = BTreeMap<PluginKey, Found>;
 
-/// The secrets of one active plugin and how it receives them.
+/// The secrets of one active plugin, how it receives them, and the
+/// arguments the install file adds to its command.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Binding {
     pub secrets: BTreeMap<SecretParam, SecretName>,
     pub delivery: SecretDelivery,
+    pub args: Vec<String>,
 }
 
 /// The resolved setup: which plugin fills each slot, which fences and
@@ -220,6 +226,8 @@ pub enum SetupError {
     EnvNotAllowed { plugin: PluginName },
     #[error("{plugin} has no effect half, so secret_delivery env means nothing")]
     EnvWithoutProcess { plugin: PluginName },
+    #[error("{plugin} has no effect half, so args mean nothing")]
+    ArgsWithoutProcess { plugin: PluginName },
 }
 
 /// Resolve the setup from `install.json` and the plugins found on disk.
@@ -369,6 +377,15 @@ fn bind(
         found.iter().flat_map(|f| f.manifest.secrets()).collect();
     let secrets = entry.map(|e| e.secrets.clone()).unwrap_or_default();
     let delivery = entry.map(|e| e.secret_delivery).unwrap_or_default();
+    let args = entry.map(|e| e.args.clone()).unwrap_or_default();
+    let has_process = found
+        .iter()
+        .any(|f| f.manifest.kind() == PluginKind::Effect);
+    if !args.is_empty() && !has_process {
+        return Err(SetupError::ArgsWithoutProcess {
+            plugin: name.clone(),
+        });
+    }
 
     for param in &declared {
         if !secrets.contains_key(*param) {
@@ -401,7 +418,11 @@ fn bind(
         }
     }
 
-    Ok(Binding { secrets, delivery })
+    Ok(Binding {
+        secrets,
+        delivery,
+        args,
+    })
 }
 
 #[cfg(test)]
@@ -547,6 +568,35 @@ pub(crate) mod tests {
         assert!(setup.fences().is_empty());
         assert!(setup.upstreams().is_empty());
         assert_eq!(setup.slot(Slot::ApprovalChannel), Some(&name("deny-all")));
+    }
+
+    #[test]
+    fn args_reach_the_binding_of_an_effect_plugin_only() {
+        let setup = resolve(
+            &install(
+                r#"{"version":1,"plugins":{"vikunja":{
+                    "secrets":{"VIKUNJA_TOKEN":"vikunja_token"},"args":["--port","1"]}}}"#,
+            ),
+            &v1_catalog(),
+        )
+        .unwrap();
+        assert_eq!(
+            setup.binding(&name("vikunja")).unwrap().args,
+            ["--port", "1"]
+        );
+        assert!(setup.binding(&name("bearer")).unwrap().args.is_empty());
+
+        let error = resolve(
+            &install(r#"{"version":1,"plugins":{"bearer":{"args":["x"]}}}"#),
+            &v1_catalog(),
+        )
+        .unwrap_err();
+        assert_eq!(
+            error,
+            SetupError::ArgsWithoutProcess {
+                plugin: name("bearer")
+            }
+        );
     }
 
     #[test]

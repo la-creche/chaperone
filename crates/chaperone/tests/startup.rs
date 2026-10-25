@@ -34,7 +34,7 @@ fn load(root: &Path, install: &str, policy: &str) -> Result<Loaded, StartError> 
 }
 
 #[test]
-fn the_repository_plugin_tree_holds_the_six_defaults() {
+fn the_repository_plugin_tree_holds_the_defaults_and_ha_approval() {
     let catalog = catalog::discover(&repo_plugins()).unwrap();
     let names: Vec<&str> = catalog.keys().map(|key| key.name.as_str()).collect();
     assert_eq!(
@@ -45,10 +45,15 @@ fn the_repository_plugin_tree_holds_the_six_defaults() {
             "mcp-http",
             "secret-files",
             "system-clock",
-            "deny-all"
+            "deny-all",
+            "ha-approval"
         ]
     );
-    assert_eq!(catalog.len(), Slot::ALL.len());
+    let defaults = catalog
+        .values()
+        .filter(|found| found.location == chaperone_core::Location::Default)
+        .count();
+    assert_eq!(defaults, Slot::ALL.len());
 }
 
 #[test]

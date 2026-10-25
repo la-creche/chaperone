@@ -261,10 +261,13 @@ async fn launch_named(
         .ok_or_else(|| LaunchError::NoCommand {
             plugin: name.clone(),
         })?;
-    let delivery = setup
-        .binding(name)
-        .map_or(SecretDelivery::Stdin, |binding| binding.delivery);
-    launch(name, command, delivery, redactor).await
+    let binding = setup.binding(name);
+    let delivery = binding.map_or(SecretDelivery::Stdin, |binding| binding.delivery);
+    let mut command = command.to_vec();
+    if let Some(binding) = binding {
+        command.extend(binding.args.iter().cloned());
+    }
+    launch(name, &command, delivery, redactor).await
 }
 
 /// The program to run for `program` of a command (`docs/design.md` 7.7). A
