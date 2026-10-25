@@ -1,6 +1,6 @@
 //! The editor binary against a fake admin socket. It covers the token
-//! challenge, the form built from the schema, a check, a save with the
-//! previous file kept, a refused save, and a new token shown once.
+//! challenge and the form built from the schema. It covers a check, a save
+//! that keeps the previous file, a refused save, and a new token shown once.
 
 #![allow(
     clippy::unwrap_used,
