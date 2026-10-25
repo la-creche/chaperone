@@ -131,6 +131,8 @@ The answer is one text block that holds one strict JSON object: `{"answer":"appr
 
 A gate lives 10 minutes from its creation (section 5.5). A denial, or a fault, holds for that life: an identical call finds the gate denied. An approval runs one call, and its result is collected once. chaperone removes the gate when the result is collected, so the next identical call needs a new approval. A result that nobody collects goes with the gate when it expires.
 
+In version 1 the app collects a kept result by asking again. Nothing tells the app that the result is there, because the chat apps of version 1 start a model turn only on a user message and take no inbound call. Stage (b) changes this: the harness in the sandbox subscribes to chaperone for the results of its gates, and chaperone publishes each kept result to it when the run ends. The kept result and the `delivered` record stay as they are, so that step adds a transport and changes no record (section 14).
+
 ### 5.4 Audit records
 
 `CallAudit` in `crates/core` is the only way to build an audit record. Each call path yields these records:
@@ -398,3 +400,4 @@ One pull request per step:
 | JSON Schema generation for the editor | Step 8 |
 | The published `$schema` value of each file, and the step that makes it required | Step 8 |
 | Stage (b): sandbox per app instance, the OpenHands runtime, the model pass-through | After version 1 |
+| Stage (b): the harness subscribes to the results of its gates, and chaperone publishes each kept result when the run ends. The transport, and how a subscription is bound to one app instance, are open. | After version 1 |
