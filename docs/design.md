@@ -184,6 +184,7 @@ Rules:
 
 - Each file can name its schema in `$schema`. Step 8 publishes the schemas. It then fixes the value of `$schema` for each file and makes the field required.
 - Grants and install entries take a typed `note` field for the reason. JSON has no comments.
+- An install entry of an effect plugin can hold `args`: arguments that chaperone appends to the command of the manifest at launch. The manifest names the program. The install file adds what differs per deployment, such as an address. An argument is never a secret value (G9).
 - The policy file names a plugin by name only. It cannot launch a binary or bind a secret.
 - The editor's OS user cannot write `install.json`.
 - chaperone reloads `policy.json` when the file changes. A reload that fails denies every call until a valid file loads (G2).
@@ -351,6 +352,13 @@ Version 1 proves the idea with one client app.
 | Upstream | An existing Vikunja MCP server, unchanged, with the env exception |
 | Decision plugin | `ha-call` decision half: an entity allow-list for Home Assistant calls |
 | Effect plugins | `ha-call` effect half: the Home Assistant call. `ha-approval`: the approval channel, through the operator's existing approval flow. |
+
+`ha-approval` sits in `plugins/effect/included`. The operator's flow is a Node-RED instance in front of Home Assistant with two legs. The plugin speaks the flow's language and changes nothing in the flow:
+
+1. **Out.** For each gate, the plugin sends `POST` to the flow's hook with the bearer `APPROVAL_TOKEN` and the body `{"job_id", "gate_id", "agent", "summary", "kind": "approval"}`. The flow pushes a card with Approve and Deny to the operator's phone. The gate ID of chaperone is 16 bytes. `job_id` is those bytes as 26 lower-case base32 characters of the ULID alphabet, and `gate_id` is the first 8 bytes as 16 hex characters, because the flow accepts only those shapes. `agent` is the app ID. `summary` is the exposed tool name and the canonical arguments, cut to 400 characters.
+2. **Back.** The plugin serves `POST /resume` on the address of its `--listen` argument. The flow sends the tap there with the bearer `RESUME_TOKEN` and the body `{"job", "gate", "decision"}`, where `decision` is `approve` or `deny`. The plugin decodes `job` to the gate, answers chaperone's `approve` call, and returns `200`. A repeat of the same decision returns `200`. A contradicting decision returns `409` and the first answer stands. An unknown gate returns `404`. A wrong bearer returns `401`.
+
+The plugin takes `--hook-url` and `--listen` through `args` in `install.json`. It refuses an unspecified listen address. It holds the two tokens in memory only, from the secret line of section 7.5. A hook that does not answer `2xx`, or a tap that does not come in the life of the gate, is a denial.
 
 Version 1 is done when a LibreChat agent makes three calls with this result:
 

@@ -350,3 +350,53 @@ async fn an_approval_channel_without_the_approve_tool_refuses_start() {
         "{error}"
     );
 }
+
+#[tokio::test]
+async fn install_args_are_appended_to_the_command() {
+    let root = tempfile::tempdir().unwrap();
+    let plugins = plugin_tree(root.path());
+    // The manifest names the program alone. The install file adds the flag
+    // that makes it an upstream.
+    let command = fake_command(&[]);
+    write_manifest(
+        &plugins,
+        "effect/added/vikunja",
+        &format!(
+            r#"{{"name":"vikunja","version":"1","kind":"effect","hooks":["upstream"],
+            "secrets":["VIKUNJA_TOKEN"],"command":{command}}}"#
+        ),
+    );
+    write_manifest(
+        &plugins,
+        "effect/included/fake-approval",
+        &approval_manifest(),
+    );
+    let install = r#"{"version":1,"plugins":{
+        "vikunja":{"secrets":{"VIKUNJA_TOKEN":"vikunja_token"},"args":["--fake-upstream"]},
+        "fake-approval":{}},
+        "slots":{"approval_channel":"fake-approval"}}"#;
+    let config = config_dir(root.path(), install, &policy_text(30));
+    let secrets = secrets_dir(root.path());
+    write_secret(&secrets, "vikunja_token", "tok-123");
+    let loaded = startup::load(
+        &config,
+        &plugins,
+        &root.path().join("audit.jsonl"),
+        &secrets,
+    )
+    .unwrap();
+    let redactor = Redactor::new(loaded.secrets);
+    let launched = effect::launch_all(&loaded.setup, &loaded.catalog, &redactor)
+        .await
+        .unwrap();
+    let vikunja = launched
+        .upstreams
+        .get(&chaperone_core::PluginName::try_new("vikunja").unwrap())
+        .unwrap();
+    assert!(
+        vikunja
+            .tools()
+            .iter()
+            .any(|tool| tool.name.as_str() == "list_tasks")
+    );
+}
