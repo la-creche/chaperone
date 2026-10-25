@@ -12,6 +12,7 @@ use std::path::{Path, PathBuf};
 use std::sync::{Mutex, PoisonError};
 use std::time::Duration;
 
+pub use chaperone_ulid::Ulid as RequestId;
 use serde::{Deserialize, Serialize};
 
 /// The most components that one request names.
@@ -32,12 +33,6 @@ const LATEST: &str = "latest";
 /// The calls of this process then never file more than [`MAX_PENDING`].
 static PUBLISH: Mutex<()> = Mutex::new(());
 
-/// Upper-case Crockford base32: no I, L, O or U.
-const ULID_ALPHABET: &[u8; 32] = b"0123456789ABCDEFGHJKMNPQRSTVWXYZ";
-const ULID_CHARS: usize = 26;
-const TIME_BITS: u32 = 48;
-const RANDOM_BITS: u32 = 80;
-
 /// Whether `text` is `a-z`, then 1 to 30 of `a-z`, `0-9` and `-`.
 fn is_name(text: &str) -> bool {
     let Some((first, rest)) = text.as_bytes().split_first() else {
@@ -57,37 +52,6 @@ fn is_version(text: &str) -> bool {
         && parts
             .iter()
             .all(|part| !part.is_empty() && part.bytes().all(|byte| byte.is_ascii_digit()))
-}
-
-fn is_ulid(text: &str) -> bool {
-    text.len() == ULID_CHARS && text.bytes().all(|byte| ULID_ALPHABET.contains(&byte))
-}
-
-/// A request ID: 26 characters of upper-case Crockford base32.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct RequestId(String);
-
-impl RequestId {
-    /// The ID of 48 bits of milliseconds since the Unix epoch, then 80 bits
-    /// of `entropy`. A later request sorts after an earlier one.
-    #[must_use]
-    pub fn new(now: Duration, entropy: [u8; 10]) -> Self {
-        let millis = now.as_millis() & ((1 << TIME_BITS) - 1);
-        let random = entropy
-            .iter()
-            .fold(0_u128, |value, byte| (value << 8) | u128::from(*byte));
-        let value = (millis << RANDOM_BITS) | random;
-        let text = (0..ULID_CHARS)
-            .rev()
-            .map(|place| char::from(ULID_ALPHABET[((value >> (place * 5)) & 0x1f) as usize]))
-            .collect();
-        Self(text)
-    }
-
-    #[must_use]
-    pub fn as_str(&self) -> &str {
-        &self.0
-    }
 }
 
 /// The name that a request states as its requester. The executor treats it
@@ -208,8 +172,7 @@ impl Arguments {
         }
         let target = match raw.rollback_of {
             None => None,
-            Some(text) if is_ulid(&text) => Some(RequestId(text)),
-            Some(_) => return Err(ArgumentError::RollbackOf),
+            Some(text) => Some(RequestId::parse(&text).ok_or(ArgumentError::RollbackOf)?),
         };
         let action = match (raw.kind.as_deref().unwrap_or("release"), target) {
             ("release", None) => Action::Release,

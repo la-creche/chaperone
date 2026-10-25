@@ -399,6 +399,7 @@ dependencies = [
 name = "chaperone-plugin-release"
 version = "0.0.0"
 dependencies = [
+ "chaperone-ulid",
  "clap",
  "getrandom 0.4.3",
  "rmcp",
@@ -424,6 +425,14 @@ name = "chaperone-plugin-system-clock"
 version = "0.0.0"
 dependencies = [
  "chaperone-core",
+]
+
+[[package]]
+name = "chaperone-ulid"
+version = "0.0.0"
+dependencies = [
+ "getrandom 0.4.3",
+ "thiserror",
 ]
 
 [[package]]
