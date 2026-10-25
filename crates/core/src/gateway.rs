@@ -37,6 +37,12 @@ pub enum CallFault {
     /// A lock of the call path is poisoned. chaperone refuses every call
     /// until it restarts (G2).
     Halted,
+    /// The upstream did not answer inside the bound of `docs/design.md`
+    /// 5.5 (G2).
+    UpstreamTimeout,
+    /// The upstream answered with a result that fails the check of
+    /// `docs/design.md` 7.7.
+    BadResult,
 }
 
 impl CallFault {
@@ -50,14 +56,26 @@ impl CallFault {
             Self::NoDecision => "no_decision",
             Self::AuditFailed => "audit_failed",
             Self::Halted => "halted",
+            Self::UpstreamTimeout => "upstream_timeout",
+            Self::BadResult => "bad_result",
         }
     }
 }
 
-/// The answer to one tool call. Build step 5 adds `Ran`, with the checked
-/// upstream result.
+/// The checked result of a call that an upstream ran (`docs/design.md`
+/// 7.7): text blocks only, each secret value blanked, the upstream's error
+/// flag.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct UpstreamResult {
+    pub content: Vec<String>,
+    pub is_error: bool,
+}
+
+/// The answer to one tool call.
 #[derive(Debug, Clone)]
 pub enum CallOutcome {
+    /// The upstream ran the call. The `ran` record is durable (G6).
+    Ran(UpstreamResult),
     /// The decision denied the call.
     Denied(DenyReason),
     /// The call waits for an approval. Call again with the same arguments.
@@ -89,6 +107,9 @@ mod tests {
             CallFault::NoApprovalChannel,
             CallFault::NoDecision,
             CallFault::AuditFailed,
+            CallFault::Halted,
+            CallFault::UpstreamTimeout,
+            CallFault::BadResult,
         ];
         let codes: BTreeSet<&str> = faults.iter().map(|fault| fault.code()).collect();
         assert_eq!(codes.len(), faults.len());

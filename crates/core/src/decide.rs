@@ -5,7 +5,7 @@ use std::collections::BTreeMap;
 use std::fmt;
 use std::panic::{self, AssertUnwindSafe};
 
-use crate::hook::{Caller, FenceReason, FenceVerdict, Reach, ToolCall};
+use crate::hook::{Caller, FenceReason, FenceVerdict, ToolCall};
 use crate::ids::{ArgName, PluginName, ToolName};
 use crate::policy::{App, Approval, ArgumentFence, Policy, Scalar};
 use crate::time::Timestamp;
@@ -154,7 +154,7 @@ pub fn decide(policy: Option<&Policy>, request: &Request<'_>) -> Decision {
     let Some(grant) = app.grant(request.upstream, request.tool) else {
         return Decision::Deny(DenyReason::ToolNotGranted);
     };
-    if !in_reach(&caller.reach, request.upstream, request.tool) {
+    if !caller.reach.holds(request.upstream, request.tool) {
         return Decision::Deny(DenyReason::ToolNotGranted);
     }
 
@@ -182,15 +182,6 @@ pub fn decide(policy: Option<&Policy>, request: &Request<'_>) -> Decision {
         return decide_gate(app, &call, request.gates, request.now);
     }
     Decision::Allow
-}
-
-fn in_reach(reach: &Reach, upstream: &PluginName, tool: &ToolName) -> bool {
-    match reach {
-        Reach::Full => true,
-        Reach::Only(tools) => tools
-            .get(upstream)
-            .is_some_and(|names| names.contains(tool)),
-    }
 }
 
 fn passes(fence: &ArgumentFence, value: Option<&ArgValue>) -> bool {

@@ -15,7 +15,8 @@ use std::io::{Read, Write};
 use std::net::SocketAddr;
 use std::sync::Arc;
 
-use chaperone::gateway::{ChaperoneGateway, DECISION_BUDGET, SharedGateway};
+use chaperone::effect::{Redactor, Upstreams};
+use chaperone::gateway::{Bounds, ChaperoneGateway, Plugins, SharedGateway};
 use chaperone::startup;
 use chaperone_plugin_mcp_http::BODY_CAP;
 use rmcp::ServiceExt;
@@ -47,10 +48,14 @@ async fn serve() -> Served {
     let gateway = Arc::new(SharedGateway::new(ChaperoneGateway::new(
         loaded.run,
         loaded.policy,
-        loaded.identity,
-        loaded.audit,
-        loaded.clock,
-        DECISION_BUDGET,
+        Plugins {
+            identity: loaded.identity,
+            audit: loaded.audit,
+            clock: loaded.clock,
+            upstreams: Upstreams::new(),
+            redactor: Redactor::new(loaded.secrets),
+        },
+        Bounds::DEFAULT,
     )));
 
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -128,7 +133,7 @@ async fn the_front_door_decides_and_audits_each_call() {
 
     let known = client(&served.url, Some(TOKEN)).await;
     let tools = known.list_all_tools().await.unwrap();
-    assert!(tools.is_empty(), "no upstream runs in step 3: {tools:?}");
+    assert!(tools.is_empty(), "no upstream runs in this test: {tools:?}");
 
     let allowed = known
         .call_tool(CallToolRequestParams::new("vikunja__list_tasks"))

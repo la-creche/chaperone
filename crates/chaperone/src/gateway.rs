@@ -1,7 +1,8 @@
-//! The call path of the program: resolve the caller, count the call,
-//! decide, write the audit and answer. In build step 3 no upstream runs, so
-//! an allowed call fails with `not_connected`. No approval channel answers,
-//! so a gated call fails with `no_approval_channel`. Both fail closed (G2).
+//! The call path of the program. It resolves the caller, counts the call,
+//! decides and writes the decision record. It then runs the call through
+//! its upstream, checks the result, writes the final record and answers.
+//! No approval channel answers in build step 5, so a gated call fails with
+//! `no_approval_channel` (G2).
 
 use std::collections::BTreeMap;
 use std::panic::{self, AssertUnwindSafe};
@@ -11,15 +12,32 @@ use std::thread;
 use std::time::Duration;
 
 use chaperone_core::{
-    AfterDecision, AppId, ArgValue, ArgumentsDigest, AuditApp, AuditError, AuditSink, AuditTool,
-    CallAudit, CallFault, CallNumber, CallOutcome, Caller, Clock, Credentials, Decision,
-    ExposedName, Gates, Gateway, Identity, ListError, ListedTool, Policy, Request, RunId,
-    Timestamp,
+    AfterDecision, AllowedCall, AppId, ArgValue, ArgumentsDigest, AuditApp, AuditError, AuditSink,
+    AuditTool, CallAudit, CallFault, CallNumber, CallOutcome, Caller, Clock, Credentials, Decision,
+    ExposedName, Gates, Gateway, Identity, ListError, ListedTool, PluginName, Policy, Request,
+    RunId, Timestamp, ToolName, UpstreamResult,
 };
+
+use crate::effect::{self, Redactor, UPSTREAM_BUDGET, UpstreamFault, Upstreams};
 
 /// The longest the program waits for one decision (`docs/design.md` 5.5).
 /// A decision that takes longer fails the call with `no_decision` (G2).
 pub const DECISION_BUDGET: Duration = Duration::from_secs(5);
+
+/// The time bounds of one call (`docs/design.md` 5.5).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Bounds {
+    pub decision: Duration,
+    pub upstream: Duration,
+}
+
+impl Bounds {
+    /// The bounds of `docs/design.md` 5.5.
+    pub const DEFAULT: Self = Self {
+        decision: DECISION_BUDGET,
+        upstream: UPSTREAM_BUDGET,
+    };
+}
 
 const MINUTE_MILLIS: i64 = 60_000;
 
@@ -85,8 +103,9 @@ fn begin(
     Ok((call, calls_this_minute))
 }
 
-/// The program's side of the gateway. It decides each call through core and
-/// writes the audit records of the call.
+/// The program's side of the gateway. It decides each call through core,
+/// runs an allowed call through its upstream and writes the audit records
+/// of the call.
 #[derive(Debug)]
 pub struct ChaperoneGateway {
     run: RunId,
@@ -94,28 +113,59 @@ pub struct ChaperoneGateway {
     identity: Box<dyn Identity>,
     audit: Arc<dyn AuditSink>,
     clock: Box<dyn Clock>,
-    budget: Duration,
+    upstreams: Upstreams,
+    redactor: Redactor,
+    bounds: Bounds,
     counters: Mutex<Counters>,
 }
 
+/// The plugins one gateway runs with: the slot plugins the call path uses,
+/// the running upstreams and every secret for blanking.
+#[derive(Debug)]
+pub struct Plugins {
+    pub identity: Box<dyn Identity>,
+    pub audit: Arc<dyn AuditSink>,
+    pub clock: Box<dyn Clock>,
+    pub upstreams: Upstreams,
+    pub redactor: Redactor,
+}
+
+/// An allowed call between its decision record and its upstream call.
+struct Staged {
+    call: AllowedCall,
+    upstream: PluginName,
+    tool: ToolName,
+    arguments: BTreeMap<String, ArgValue>,
+}
+
+/// Where a call stands after the decision record.
+enum AfterRecord {
+    /// The call is answered. No upstream runs.
+    Done(CallOutcome),
+    /// The call is allowed, and its upstream runs next.
+    Allowed(Staged),
+}
+
 impl ChaperoneGateway {
-    /// A gateway over a loaded policy. `budget` bounds each decision.
+    /// A gateway over a loaded policy and the running upstreams.
     #[must_use]
-    pub fn new(
-        run: RunId,
-        policy: Policy,
-        identity: Box<dyn Identity>,
-        audit: Arc<dyn AuditSink>,
-        clock: Box<dyn Clock>,
-        budget: Duration,
-    ) -> Self {
+    pub fn new(run: RunId, policy: Policy, plugins: Plugins, bounds: Bounds) -> Self {
+        let Plugins {
+            identity,
+            audit,
+            clock,
+            upstreams,
+            redactor,
+        } = plugins;
         Self {
             run,
             policy: Arc::new(policy),
             identity,
             audit,
             clock,
-            budget,
+            upstreams,
+            redactor,
+            bounds,
             counters: Mutex::new(Counters {
                 rates: RateBook::default(),
                 next_call: Some(CallNumber::FIRST),
@@ -123,49 +173,66 @@ impl ChaperoneGateway {
         }
     }
 
-    /// The tools that these credentials may see.
+    /// The tools that these credentials may see (`docs/design.md` 7.7): the
+    /// policy grants each one, the reach holds it, its upstream lists it and
+    /// its exposed name is valid.
     ///
     /// # Errors
     ///
     /// Returns [`ListError::UnknownCredential`] when the credentials resolve
     /// to no app instance.
     pub fn list_tools(&self, credentials: &Credentials<'_>) -> Result<Vec<ListedTool>, ListError> {
-        if self.resolve(credentials).is_none() {
-            return Err(ListError::UnknownCredential);
+        let caller = self
+            .resolve(credentials)
+            .ok_or(ListError::UnknownCredential)?;
+        let app = self
+            .policy
+            .app(&caller.app)
+            .ok_or(ListError::UnknownCredential)?;
+        let mut listed = Vec::new();
+        for (upstream, tool) in app.granted() {
+            if !caller.reach.holds(upstream, tool) {
+                continue;
+            }
+            let Some(running) = self.upstreams.get(upstream) else {
+                continue;
+            };
+            let Some(info) = running.tools().iter().find(|t| t.name == *tool) else {
+                continue;
+            };
+            let Ok(name) = ExposedName::join(upstream, tool) else {
+                tracing::warn!(%upstream, %tool, "the manifest leaves out a tool with an invalid exposed name");
+                continue;
+            };
+            listed.push(ListedTool {
+                name,
+                description: info.description.clone(),
+                input_schema: info.input_schema.clone(),
+            });
         }
-        // Build step 5 lists the granted tools of each running upstream.
-        Ok(Vec::new())
+        Ok(listed)
     }
 
-    /// Decide one call and write its audit records. `name` is the exposed
-    /// name as the app sent it.
-    pub fn call_tool(
-        &self,
-        credentials: &Credentials<'_>,
-        name: &str,
-        arguments: BTreeMap<String, ArgValue>,
-    ) -> CallOutcome {
-        let caller = self.resolve(credentials);
-        self.call_resolved(caller, name, arguments)
-    }
-
-    /// The call path after the identity hook. It blocks on the audit sink
-    /// and on the decision, so an async caller runs it on a blocking thread.
-    pub(crate) fn call_resolved(
+    /// The call path from the identity result to the decision record. It
+    /// blocks on the audit sink and on the decision, so an async caller runs
+    /// it on a blocking thread.
+    fn stage(
         &self,
         caller: Option<Caller>,
         name: &str,
         arguments: BTreeMap<String, ArgValue>,
-    ) -> CallOutcome {
+    ) -> AfterRecord {
         let started_at = self.clock.now();
         let app = caller.as_ref().map(|caller| &caller.app);
         let (call, calls_this_minute) = match begin(&self.counters, app, started_at) {
             Ok(begun) => begun,
             // Without a call number no record can be written (G6).
-            Err(BeginFault::Exhausted) => return CallOutcome::Failed(CallFault::AuditFailed),
+            Err(BeginFault::Exhausted) => {
+                return AfterRecord::Done(CallOutcome::Failed(CallFault::AuditFailed));
+            }
             Err(BeginFault::Poisoned) => {
                 tracing::error!("the call counters are poisoned, so every call fails");
-                return CallOutcome::Failed(CallFault::Halted);
+                return AfterRecord::Done(CallOutcome::Failed(CallFault::Halted));
             }
         };
         let audit = CallAudit::new(
@@ -178,11 +245,12 @@ impl ChaperoneGateway {
         );
 
         let Ok(exposed) = ExposedName::parse(name) else {
-            return self.fail_before_decision(audit, CallFault::UnknownTool);
+            return AfterRecord::Done(self.fail_before_decision(audit, CallFault::UnknownTool));
         };
-        let Some(decision) = self.decide(caller, exposed, arguments, calls_this_minute, started_at)
+        let Some(decision) =
+            self.decide(caller, &exposed, &arguments, calls_this_minute, started_at)
         else {
-            return self.fail_before_decision(audit, CallFault::NoDecision);
+            return AfterRecord::Done(self.fail_before_decision(audit, CallFault::NoDecision));
         };
 
         let sink = self.audit.as_ref();
@@ -190,21 +258,62 @@ impl ChaperoneGateway {
             Ok(next) => next,
             Err(error) => {
                 tracing::error!(%error, "the decision record is not durable");
-                return CallOutcome::Failed(CallFault::AuditFailed);
+                return AfterRecord::Done(CallOutcome::Failed(CallFault::AuditFailed));
             }
         };
         match next {
-            AfterDecision::Denied(reason) => CallOutcome::Denied(reason),
-            AfterDecision::Allowed(call) => {
-                // Build step 5 runs the call. No upstream runs yet.
-                let fault = CallFault::NotConnected;
-                outcome(call.failed(fault, self.clock.now(), sink), fault)
-            }
+            AfterDecision::Denied(reason) => AfterRecord::Done(CallOutcome::Denied(reason)),
+            AfterDecision::Allowed(call) => AfterRecord::Allowed(Staged {
+                call,
+                upstream: exposed.upstream().clone(),
+                tool: exposed.tool().clone(),
+                arguments,
+            }),
             AfterDecision::Gated(call) => {
                 // Build step 6 asks the approval channel. None answers yet.
                 let fault = CallFault::NoApprovalChannel;
-                outcome(call.failed(fault, self.clock.now(), sink), fault)
+                AfterRecord::Done(outcome(call.failed(fault, self.clock.now(), sink), fault))
             }
+        }
+    }
+
+    /// Send an allowed call to its upstream and check the result
+    /// (`docs/design.md` 7.7). The wait is bounded (`docs/design.md` 5.5).
+    async fn run_upstream(
+        &self,
+        upstream: &PluginName,
+        tool: &ToolName,
+        arguments: BTreeMap<String, ArgValue>,
+    ) -> Result<UpstreamResult, CallFault> {
+        let Some(running) = self.upstreams.get(upstream) else {
+            return Err(CallFault::NotConnected);
+        };
+        let raw = tokio::time::timeout(self.bounds.upstream, running.call(tool, arguments))
+            .await
+            .map_err(|_| CallFault::UpstreamTimeout)?;
+        let raw = raw.map_err(|fault| match fault {
+            UpstreamFault::NotConnected => CallFault::NotConnected,
+            UpstreamFault::BadResult => CallFault::BadResult,
+        })?;
+        effect::check_result(raw, &self.redactor).map_err(|fault| match fault {
+            UpstreamFault::NotConnected => CallFault::NotConnected,
+            UpstreamFault::BadResult => CallFault::BadResult,
+        })
+    }
+
+    /// Write the final record of an allowed call and answer. It blocks on
+    /// the audit sink.
+    fn finish(&self, call: AllowedCall, result: Result<UpstreamResult, CallFault>) -> CallOutcome {
+        let sink = self.audit.as_ref();
+        match result {
+            Ok(result) => match call.ran(result.is_error, self.clock.now(), sink) {
+                Ok(()) => CallOutcome::Ran(result),
+                Err(error) => {
+                    tracing::error!(%error, "the final record is not durable");
+                    CallOutcome::Failed(CallFault::AuditFailed)
+                }
+            },
+            Err(fault) => outcome(call.failed(fault, self.clock.now(), sink), fault),
         }
     }
 
@@ -225,12 +334,14 @@ impl ChaperoneGateway {
     fn decide(
         &self,
         caller: Option<Caller>,
-        name: ExposedName,
-        arguments: BTreeMap<String, ArgValue>,
+        name: &ExposedName,
+        arguments: &BTreeMap<String, ArgValue>,
         calls_this_minute: u32,
         now: Timestamp,
     ) -> Option<Decision> {
         let policy = Arc::clone(&self.policy);
+        let name = name.clone();
+        let arguments = arguments.clone();
         let (sender, receiver) = mpsc::sync_channel(1);
         let spawned = thread::Builder::new()
             .name("decide".to_owned())
@@ -260,7 +371,7 @@ impl ChaperoneGateway {
         if spawned.is_err() {
             return None;
         }
-        receiver.recv_timeout(self.budget).ok()
+        receiver.recv_timeout(self.bounds.decision).ok()
     }
 
     /// Write the only record of a call that fails before a decision, and
@@ -284,9 +395,9 @@ fn outcome(written: Result<(), AuditError>, fault: CallFault) -> CallOutcome {
 }
 
 /// The gateway as a front door holds it. The identity hook runs on the
-/// calling thread, because `Credentials` borrows the request. The rest of
-/// the call runs on a blocking thread. There, the audit sink syncs each
-/// record to disk, and the decision waits up to its budget.
+/// calling thread, because `Credentials` borrows the request. The audit
+/// writes and the decision wait run on a blocking thread. The upstream
+/// call is awaited.
 #[derive(Debug, Clone)]
 pub struct SharedGateway(Arc<ChaperoneGateway>);
 
@@ -294,6 +405,41 @@ impl SharedGateway {
     #[must_use]
     pub fn new(gateway: ChaperoneGateway) -> Self {
         Self(Arc::new(gateway))
+    }
+
+    /// The call path after the identity hook.
+    async fn call_resolved(
+        &self,
+        caller: Option<Caller>,
+        name: String,
+        arguments: BTreeMap<String, ArgValue>,
+    ) -> CallOutcome {
+        let gateway = Arc::clone(&self.0);
+        let staged = tokio::task::spawn_blocking(move || gateway.stage(caller, &name, arguments));
+        let staged = match staged.await {
+            Ok(AfterRecord::Done(outcome)) => return outcome,
+            Ok(AfterRecord::Allowed(staged)) => staged,
+            // The blocking task did not return its outcome (G2).
+            Err(error) => {
+                tracing::error!(%error, "the call did not return");
+                return CallOutcome::Failed(CallFault::NoDecision);
+            }
+        };
+        let result = self
+            .0
+            .run_upstream(&staged.upstream, &staged.tool, staged.arguments)
+            .await;
+        let gateway = Arc::clone(&self.0);
+        let finished =
+            tokio::task::spawn_blocking(move || gateway.finish(staged.call, result)).await;
+        match finished {
+            Ok(outcome) => outcome,
+            // The final record may not be written, so no result returns (G6).
+            Err(error) => {
+                tracing::error!(%error, "the final record did not return");
+                CallOutcome::Failed(CallFault::AuditFailed)
+            }
+        }
     }
 }
 
@@ -312,18 +458,7 @@ impl Gateway for SharedGateway {
         arguments: BTreeMap<String, ArgValue>,
     ) -> CallOutcome {
         let caller = self.0.resolve(credentials);
-        let gateway = Arc::clone(&self.0);
-        let name = name.to_owned();
-        let call =
-            tokio::task::spawn_blocking(move || gateway.call_resolved(caller, &name, arguments));
-        match call.await {
-            Ok(outcome) => outcome,
-            // The blocking task did not return its outcome (G2).
-            Err(error) => {
-                tracing::error!(%error, "the call did not return");
-                CallOutcome::Failed(CallFault::NoDecision)
-            }
-        }
+        self.call_resolved(caller, name.to_owned(), arguments).await
     }
 }
 

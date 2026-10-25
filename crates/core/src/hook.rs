@@ -51,6 +51,20 @@ pub enum Reach {
     Only(BTreeMap<PluginName, BTreeSet<ToolName>>),
 }
 
+impl Reach {
+    /// Whether `tool` of `upstream` is within this reach. The grant is
+    /// checked separately.
+    #[must_use]
+    pub fn holds(&self, upstream: &PluginName, tool: &ToolName) -> bool {
+        match self {
+            Self::Full => true,
+            Self::Only(tools) => tools
+                .get(upstream)
+                .is_some_and(|names| names.contains(tool)),
+        }
+    }
+}
+
 /// The result of the identity hook: one app instance and its reach.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Caller {

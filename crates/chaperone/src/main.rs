@@ -6,7 +6,8 @@ use std::path::PathBuf;
 use std::process::ExitCode;
 use std::sync::Arc;
 
-use chaperone::gateway::{ChaperoneGateway, DECISION_BUDGET, SharedGateway};
+use chaperone::effect::{self, Redactor};
+use chaperone::gateway::{Bounds, ChaperoneGateway, Plugins, SharedGateway};
 use chaperone::startup;
 use clap::{Parser, Subcommand};
 use tokio_util::sync::CancellationToken;
@@ -104,6 +105,15 @@ async fn run(args: Serve) -> ExitCode {
     for warning in &loaded.warnings {
         tracing::warn!(%warning);
     }
+    let redactor = Redactor::new(loaded.secrets);
+    let upstreams = match effect::launch_all(&loaded.setup, &loaded.catalog, &redactor).await {
+        Ok(upstreams) => upstreams,
+        Err(error) => {
+            tracing::error!(%error, "refusing to start");
+            return ExitCode::FAILURE;
+        }
+    };
+    effect::warn_unlisted(&loaded.policy, &upstreams);
     let listener = match tokio::net::TcpListener::bind(listen).await {
         Ok(listener) => listener,
         Err(error) => {
@@ -116,10 +126,14 @@ async fn run(args: Serve) -> ExitCode {
     let gateway = Arc::new(SharedGateway::new(ChaperoneGateway::new(
         loaded.run,
         loaded.policy,
-        loaded.identity,
-        loaded.audit,
-        loaded.clock,
-        DECISION_BUDGET,
+        Plugins {
+            identity: loaded.identity,
+            audit: loaded.audit,
+            clock: loaded.clock,
+            upstreams,
+            redactor,
+        },
+        Bounds::DEFAULT,
     )));
     let shutdown = CancellationToken::new();
     tokio::spawn(shutdown_on_signal(shutdown.clone()));
