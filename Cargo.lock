@@ -454,6 +454,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "chaperone-run-as"
+version = "0.0.0"
+dependencies = [
+ "chaperone-core",
+ "rustix",
+]
+
+[[package]]
 name = "chaperone-ulid"
 version = "0.0.0"
 dependencies = [

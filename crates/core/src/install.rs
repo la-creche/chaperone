@@ -15,6 +15,10 @@ pub const INSTALL_FILE_CAP: ByteCap = ByteCap::new(256 * 1024);
 
 const INSTALL_VERSION: u32 = 1;
 
+/// The one variable of `chaperone-as`: the whole environment of the
+/// effect plugin, as one JSON object of strings (`docs/design.md` 8).
+pub const CHILD_ENV_VAR: &str = "CHAPERONE_CHILD_ENV";
+
 /// Where a plugin sits in the tree.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum Location {
