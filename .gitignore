@@ -13,3 +13,6 @@
 /install.json
 /policy.json
 /secrets/
+
+# The operator's files for the version 1 run (docs/v1-run.md).
+/deploy/
