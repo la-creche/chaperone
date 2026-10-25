@@ -8,7 +8,6 @@ Rules for `crates/core`. Read the root `AGENTS.md` first.
 
 - The types of `install.toml`, `policy.json` and `plugin.toml`, with `deny_unknown_fields`.
 - The strict reader, for JSON and TOML. It takes bytes. It refuses duplicate keys, a byte order mark, invalid UTF-8, unknown fields and input over the size cap.
-- The JSON Schema generation from those types.
 - The cross-file checks behind `chaperone check`.
 - The decision function in `docs/design.md` section 5.
 - The hook traits, all in `src/hook.rs`: what a decision or adapter plugin implements, and the `Gateway` trait a front door calls. The result types of effect hooks.

@@ -40,19 +40,6 @@ pub struct Name<K> {
     kind: PhantomData<K>,
 }
 
-impl<K: NameKind> schemars::JsonSchema for Name<K> {
-    fn schema_name() -> std::borrow::Cow<'static, str> {
-        std::borrow::Cow::Borrowed(K::KIND)
-    }
-
-    fn json_schema(_: &mut schemars::SchemaGenerator) -> schemars::Schema {
-        schemars::json_schema!({
-            "type": "string",
-            "description": K::RULE,
-        })
-    }
-}
-
 impl<K: NameKind> Name<K> {
     /// Check `text` and wrap a copy of it.
     ///

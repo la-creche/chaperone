@@ -11,7 +11,6 @@ mod ids;
 mod install;
 mod plugin;
 mod policy;
-mod schema;
 mod secret;
 pub mod strict;
 mod time;
@@ -41,7 +40,6 @@ pub use policy::{
     App, Approval, ArgumentFence, DigestError, Limits, POLICY_FILE_CAP, POLICY_SCHEMA_ID, Policy,
     PolicyError, Scalar, TokenDigest, ToolGrant, with_digest,
 };
-pub use schema::{ConfigSchemas, config_schemas};
 pub use secret::{Bearer, REDACTED, Secret, SecretError};
 pub use time::Timestamp;
 pub use value::{ArgValue, Finite};

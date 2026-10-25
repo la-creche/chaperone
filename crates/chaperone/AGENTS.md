@@ -22,11 +22,10 @@ Each CLI command and its admin socket endpoint call the same function. Write the
 
 | CLI | Socket |
 |---|---|
-| `chaperone schema` | `GET /schema` |
 | `chaperone check <file>` | `POST /check` |
 | `chaperone token new <app>` | `POST /token` |
 
-The admin socket is a Unix socket. Only the editor's OS user can open it. Never serve these endpoints on the front-door port.
+The admin socket is a Unix socket with mode 0660. Only its owner and its group can open it. Never serve these endpoints on the front-door port.
 
 ## Never do these
 

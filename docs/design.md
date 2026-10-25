@@ -55,7 +55,6 @@ Limits of the guarantee:
 |---|---|---|
 | core | `crates/core` | Policy types, the strict reader, the decision function, the hook traits. No I/O. |
 | chaperone | `crates/chaperone` | The program. It hosts the adapter plugins and the effect plugins, writes the audit, serves the admin socket and runs the CLI. |
-| editor | `crates/editor` | A separate program. It serves HTML forms that edit the policy file. |
 | plugins | `plugins/` | Every plugin. See section 7. |
 
 ## 5. The decision
@@ -172,24 +171,24 @@ The record keeps the arguments only as the SHA-256 of their canonical form. Clos
 
 ## 6. Configuration
 
-The install file and the plugin manifest are TOML. The policy file stays JSON until its part of step 9 in section 13. The strict reader reads every file. It refuses duplicate keys, a byte order mark, invalid UTF-8, unknown fields and input over the size cap. The Rust types are the source of truth. chaperone generates the JSON Schema from the types.
+The install file and the plugin manifest are TOML. The policy file stays JSON until its part of step 9 in section 13. The strict reader reads every file. It refuses duplicate keys, a byte order mark, invalid UTF-8, unknown fields and input over the size cap. The Rust types are the source of truth.
 
 | File | Who writes it | What it holds |
 |---|---|---|
 | `install.toml` | The operator, by hand | Enabled plugins, the plugin for each slot, launch commands, secret bindings |
-| `policy.json` | The operator, through the editor or by hand | App instances, token digests, grants, argument fences, gates, limits |
+| `policy.json` | The operator, by hand or with an external tool | App instances, token digests, grants, argument fences, gates, limits |
 | `plugin.toml` | The plugin author | One per plugin directory. See section 7.4. |
 | A secret file | The operator | One secret value per file |
 
 Rules:
 
-- The policy file can name its schema in `$schema`. The value is fixed: `urn:chaperone:policy:1`. A file that names another value does not load. The field stays optional, so a file written before step 8 still loads. The install file and the plugin manifest have no `$schema` field. `chaperone schema` prints the schema of each file and of each plugin policy section, from the Rust types.
+- The policy file can name its schema in `$schema`. The value is fixed: `urn:chaperone:policy:1`. A file that names another value does not load. The field stays optional, so a file written before step 8 still loads. The install file and the plugin manifest have no `$schema` field.
 - Grants and install entries take a typed `note` field for the reason. JSON has no comments. A TOML file can also hold comments.
 - An install entry of an effect plugin can hold `args`: arguments that chaperone appends to the command of the manifest at launch. The manifest names the program. The install file adds what differs per deployment, such as an address. An argument is never a secret value (G9).
 - The policy file names a plugin by name only. It cannot launch a binary or bind a secret.
-- The editor's OS user cannot write `install.toml`.
+- An external tool that writes the policy file runs as an OS user that cannot write `install.toml`.
 - chaperone reloads `policy.json` when the file changes. A reload that fails denies every call until a valid file loads (G2).
-- A JSON Schema cannot express a rule across files. `chaperone check` is the only authority on a valid configuration.
+- `chaperone check` is the only authority on a valid configuration. It runs the strict reader and every rule across files.
 
 ## 7. Plugins
 
@@ -247,7 +246,7 @@ Each plugin directory holds a `plugin.toml`. It holds:
 - the kind of its other half, if it has two halves
 - for an effect plugin: the launch command
 
-An effect plugin serves one role: upstream or approval. A compiled plugin's policy-section schema comes from its Rust type, not from `plugin.toml`, so the schema has one source. The secret delivery mode is the operator's choice, so it sits in `install.toml`.
+An effect plugin serves one role: upstream or approval. The shape of a compiled plugin's policy section comes from its Rust type, not from `plugin.toml`, so the shape has one source. The secret delivery mode is the operator's choice, so it sits in `install.toml`.
 
 ### 7.5 Secret delivery to an effect plugin
 
@@ -323,29 +322,26 @@ Each app instance can hold two digests, so a token can rotate with no downtime. 
 
 ## 10. Admin socket and CLI
 
-The admin socket is a Unix socket. Only the editor's OS user can open it. It is never on the front-door port. `chaperone serve` creates it at `--admin-socket` with mode 0660, so the owner and the group open it and nobody else. The operator puts the editor's OS user in that group.
+The admin socket is a Unix socket. It is never on the front-door port. `chaperone serve` creates it at `--admin-socket` with mode 0660, so the owner and the group open it and nobody else. The operator puts the OS user of an external tool in that group.
 
 | CLI command | Socket endpoint | Job |
 |---|---|---|
-| `chaperone schema` | `GET /schema` | Print the JSON Schema of every config file and every plugin policy section |
 | `chaperone check <file>` | `POST /check` | Run the strict reader and every cross-file rule |
 | `chaperone token new <app>` | `POST /token` | Create a token, as in section 9 |
 
 A CLI command and its endpoint call the same function. They cannot drift. The CLI works when the chaperone service is down, so a broken policy can be fixed.
 
-`chaperone check <file>` takes `install.toml` or `policy.json` in its configuration directory, and `--plugins-dir`. `POST /check` takes `{"file": "<name>", "content": "<text>"}` and answers `200 {"ok": true}` or `422 {"ok": false, "error": "<text>"}`. `POST /token` takes `{"app": "<id>"}` and answers `200 {"token": "<text>"}` once, or `422`. `chaperone token new` keeps the previous policy file as `policy.json.prev` and lands the new one by an atomic rename, as the editor does. Each function runs on the service's own files. The socket does not take a path.
+`chaperone check <file>` takes `install.toml` or `policy.json` in its configuration directory, and `--plugins-dir`. `POST /check` takes `{"file": "<name>", "content": "<text>"}` and answers `200 {"ok": true}` or `422 {"ok": false, "error": "<text>"}`. `POST /token` takes `{"app": "<id>"}` and answers `200 {"token": "<text>"}` once, or `422`. `chaperone token new` keeps the previous policy file as `policy.json.prev` and lands the new one by an atomic rename. Each function runs on the service's own files. The socket does not take a path.
 
-## 11. The editor
+## 11. Writing the policy file
 
-The editor is a separate program, so a change to the editor needs no chaperone restart.
+chaperone has no editor. The operator writes the policy file by hand, or with an external tool that is not part of this repository. `chaperone check` validates the file before it goes into use:
 
-- It runs as its own OS user, on its own port, with its own admin token.
-- It renders server-side HTML forms. It uses no JavaScript framework.
-- It builds each form from `chaperone schema`. A new plugin needs no editor code.
-- It saves only after `chaperone check` passes. It then renames the file atomically and keeps the previous version.
-- It shows that a token digest exists. It never shows a token or a secret. A button per app instance asks `POST /token` of the admin socket for a new token and shows it once.
-- `chaperone-editor` takes `--listen`, `--admin-socket`, `--config-dir` and `--token-file`. The token file holds the editor's admin token on one line. The browser sends it as the password of HTTP basic authentication. A posted form must come from the editor's own origin.
-- Each field name carries its kind and a JSON pointer into the file, so a posted form decodes back into the draft without the schema. The editor knows two names of the policy shape: `plugins` under an app instance, whose entries take the section schema of the plugin named by the key, and `token_sha256`, which shows as a count.
+1. Edit a copy of the policy file. Keep the copy in a directory that also holds a copy of `install.toml`, because the check reads the install file next to it.
+2. Run `chaperone check` on the copy.
+3. When the check passes, keep the previous file and move the copy into place. chaperone reloads it (section 6).
+
+An external tool can check a candidate file with `POST /check` and create a token with `POST /token` (section 10). It shows a token once. It never reads a secret.
 
 ## 12. Version 1
 
@@ -397,7 +393,7 @@ One pull request per step:
 7. `ha-call`, both halves.
 8. In two pull requests:
    1. The admin socket and the CLI: `schema`, `check` and `token new`.
-   2. The editor.
+   2. The editor. A pull request before step 9.5 removes the editor and `chaperone schema`, because the operator writes the policy file by hand or with an external tool (section 11).
 9. Configuration in TOML, in five pull requests:
    1. The `toml` crate.
    2. The strict TOML reader.

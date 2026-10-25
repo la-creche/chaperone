@@ -31,9 +31,6 @@ struct Cli {
 enum Command {
     /// Load the configuration and serve the front door and the admin socket.
     Serve(Serve),
-    /// Print the JSON Schema of every configuration file and every plugin
-    /// policy section.
-    Schema,
     /// Run the strict reader and every cross-file rule over one file.
     Check(Check),
     /// Tokens of app instances.
@@ -110,24 +107,10 @@ fn main() -> ExitCode {
     let Cli { command } = Cli::parse();
     match command {
         Command::Serve(args) => serve(args),
-        Command::Schema => schema(),
         Command::Check(args) => check(&args),
         Command::Token(TokenCommand {
             action: TokenAction::New(args),
         }) => token_new(&args),
-    }
-}
-
-fn schema() -> ExitCode {
-    match serde_json::to_string_pretty(&admin::schema()) {
-        Ok(text) => {
-            println!("{text}");
-            ExitCode::SUCCESS
-        }
-        Err(error) => {
-            eprintln!("the schema could not be written as JSON: {error}");
-            ExitCode::FAILURE
-        }
     }
 }
 

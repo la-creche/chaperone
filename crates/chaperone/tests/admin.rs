@@ -21,16 +21,6 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio_util::sync::CancellationToken;
 
 #[test]
-fn the_schema_names_each_file_and_each_fence_section() {
-    let schema = serde_json::to_value(admin::schema()).unwrap();
-    for file in ["install.json", "policy.json", "plugin.json"] {
-        assert_eq!(schema[file]["type"], "object", "{file}");
-    }
-    assert_eq!(schema["sections"]["ha-call"]["type"], "object");
-    assert!(schema["sections"]["ha-call"]["properties"]["entities"].is_object());
-}
-
-#[test]
 fn a_file_name_picks_the_check_and_another_is_refused() {
     assert_eq!("install.toml".parse(), Ok(ConfigFile::Install));
     assert_eq!("policy.json".parse(), Ok(ConfigFile::Policy));
@@ -150,7 +140,7 @@ async fn request(socket: &Path, method: &str, path: &str, body: &str) -> (String
 }
 
 #[tokio::test]
-async fn the_socket_serves_the_three_endpoints() {
+async fn the_socket_serves_check_and_token_only() {
     let root = tempfile::tempdir().unwrap();
     let plugins = plugin_tree(root.path());
     let config = config_dir(root.path(), INSTALL, &policy_text(30));
@@ -171,9 +161,8 @@ async fn the_socket_serves_the_three_endpoints() {
     let mode = std::fs::metadata(&socket).unwrap().permissions().mode() & 0o777;
     assert_eq!(mode, 0o660);
 
-    let (status, body) = request(&socket, "GET", "/schema", "").await;
-    assert!(status.contains("200"), "{status}");
-    assert!(body.contains("\"policy.json\"") && body.contains("\"sections\""));
+    let (status, _) = request(&socket, "GET", "/schema", "").await;
+    assert!(status.contains("404"), "{status}");
 
     let good = serde_json::json!({ "file": "policy.json", "content": policy_text(30) });
     let (status, body) = request(&socket, "POST", "/check", &good.to_string()).await;

@@ -18,7 +18,6 @@ const SOURCES: &[(&str, &str)] = &[
     ("lib", include_str!("../src/lib.rs")),
     ("plugin", include_str!("../src/plugin.rs")),
     ("policy", include_str!("../src/policy.rs")),
-    ("schema", include_str!("../src/schema.rs")),
     ("secret", include_str!("../src/secret.rs")),
     ("strict", include_str!("../src/strict.rs")),
     ("time", include_str!("../src/time.rs")),
