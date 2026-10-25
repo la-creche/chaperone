@@ -4,7 +4,6 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use schemars::JsonSchema;
 use serde::Deserialize;
 
 use crate::ids::{PluginName, SecretName, SecretParam};
@@ -28,7 +27,7 @@ pub enum Location {
 }
 
 /// How chaperone hands a secret to an effect plugin (`docs/design.md` 7.5).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum SecretDelivery {
     /// In the first message on stdin.
@@ -39,7 +38,7 @@ pub enum SecretDelivery {
 }
 
 /// One enabled plugin in `install.toml`.
-#[derive(Debug, Clone, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct InstallEntry {
     /// The operator's reason for enabling the plugin.
@@ -64,7 +63,7 @@ impl InstallEntry {
 }
 
 /// `install.toml`.
-#[derive(Debug, Clone, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct InstallFile {
     /// The version of the file shape. This chaperone reads 1.
@@ -77,11 +76,6 @@ pub struct InstallFile {
     /// The plugin for each slot that the default does not fill.
     #[serde(default)]
     slots: BTreeMap<Slot, PluginName>,
-}
-
-/// The JSON Schema of `install.toml`, from its types.
-pub(crate) fn install_schema() -> schemars::Schema {
-    schemars::schema_for!(InstallFile)
 }
 
 /// Why `install.toml` is not valid on its own.

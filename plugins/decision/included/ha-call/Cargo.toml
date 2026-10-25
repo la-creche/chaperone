@@ -11,7 +11,6 @@ workspace = true
 
 [dependencies]
 chaperone-core = { path = "../../../../crates/core" }
-schemars = { workspace = true }
 serde = { workspace = true }
 
 [dev-dependencies]

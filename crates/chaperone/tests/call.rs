@@ -106,10 +106,6 @@ struct HangFence(PluginName);
 struct PreparedHang;
 
 impl Fence for HangFence {
-    fn section_schema(&self) -> schemars::Schema {
-        schemars::Schema::from(true)
-    }
-
     fn name(&self) -> &PluginName {
         &self.0
     }

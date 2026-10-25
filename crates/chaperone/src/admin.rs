@@ -1,9 +1,8 @@
-//! The admin functions (`docs/design.md` 10): the schema, the check and the
-//! token. The CLI and the admin socket call the same three functions, so
-//! they cannot drift. The socket is a Unix socket for the editor's OS
-//! user. It is never on the front-door port.
+//! The admin functions (`docs/design.md` 10): the check and the token. The
+//! CLI and the admin socket call the same two functions, so they cannot
+//! drift. The socket is a Unix socket for the owner and the group of its
+//! file. It is never on the front-door port.
 
-use std::collections::BTreeMap;
 use std::fmt;
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
@@ -11,11 +10,10 @@ use std::str::FromStr;
 
 use axum::extract::State;
 use axum::http::StatusCode;
-use axum::routing::{get, post};
+use axum::routing::post;
 use axum::{Json, Router};
 use chaperone_core::{
-    AppId, ConfigSchemas, INSTALL_FILE_CAP, NameError, POLICY_FILE_CAP, PolicyError, TokenDigest,
-    config_schemas, with_digest,
+    AppId, INSTALL_FILE_CAP, NameError, POLICY_FILE_CAP, PolicyError, TokenDigest, with_digest,
 };
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -23,7 +21,6 @@ use tokio::net::UnixListener;
 use tokio_util::sync::CancellationToken;
 
 use crate::files::{self, ReadError};
-use crate::registry;
 use crate::startup::{self, StartError};
 
 /// The file name of the install file in a configuration directory.
@@ -76,32 +73,6 @@ impl FromStr for ConfigFile {
             POLICY_FILE => Ok(Self::Policy),
             other => Err(NotConfigFile(other.to_owned())),
         }
-    }
-}
-
-/// The schema of every configuration file and of every plugin policy
-/// section this build knows.
-#[derive(Debug, Clone, Serialize)]
-pub struct SchemaSet {
-    #[serde(flatten)]
-    pub files: ConfigSchemas,
-    /// The section schema of each compiled fence, by plugin name.
-    pub sections: BTreeMap<String, schemars::Schema>,
-}
-
-/// `chaperone schema` and `GET /schema`.
-#[must_use]
-pub fn schema() -> SchemaSet {
-    let sections = registry::FENCES
-        .iter()
-        .filter_map(|entry| {
-            let fence = (entry.build)().ok()?;
-            Some((entry.name.to_owned(), fence.section_schema()))
-        })
-        .collect();
-    SchemaSet {
-        files: config_schemas(),
-        sections,
     }
 }
 
@@ -258,10 +229,6 @@ fn verdict(result: Result<(), String>) -> (StatusCode, Json<Verdict>) {
     }
 }
 
-async fn schema_handler() -> Json<SchemaSet> {
-    Json(schema())
-}
-
 async fn check_handler(
     State(dirs): State<Dirs>,
     Json(request): Json<CheckRequest>,
@@ -319,7 +286,6 @@ pub async fn serve_socket(
     let listener = UnixListener::bind(&path)?;
     std::fs::set_permissions(&path, std::fs::Permissions::from_mode(SOCKET_MODE))?;
     let router = Router::new()
-        .route("/schema", get(schema_handler))
         .route("/check", post(check_handler))
         .route("/token", post(token_handler))
         .layer(axum::extract::DefaultBodyLimit::max(BODY_CAP))

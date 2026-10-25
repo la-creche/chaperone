@@ -54,7 +54,7 @@ Each plugin directory holds a `plugin.toml`. The strict reader reads it. It hold
 - `pairs_with`: the kind of the other half, if any
 - for an effect plugin: `command`
 
-`crates/core/src/plugin.rs` holds the exact shape. A compiled plugin's policy schema comes from its Rust type. The operator sets `secret_delivery` in `install.toml`, not here.
+`crates/core/src/plugin.rs` holds the exact shape. The shape of a compiled plugin's policy section comes from its Rust type. The operator sets `secret_delivery` in `install.toml`, not here.
 
 ## Slots and overrule
 

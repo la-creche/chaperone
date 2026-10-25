@@ -5,7 +5,6 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 
-use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use serde_json::value::RawValue;
 
@@ -31,20 +30,6 @@ pub struct TokenDigest([u8; 32]);
 impl From<TokenDigest> for String {
     fn from(digest: TokenDigest) -> Self {
         hex::encode(digest.0)
-    }
-}
-
-impl JsonSchema for TokenDigest {
-    fn schema_name() -> std::borrow::Cow<'static, str> {
-        std::borrow::Cow::Borrowed("token digest")
-    }
-
-    fn json_schema(_: &mut schemars::SchemaGenerator) -> schemars::Schema {
-        schemars::json_schema!({
-            "type": "string",
-            "description": "The SHA-256 of a token, as 64 lower-case hex characters",
-            "pattern": "^[0-9a-f]{64}$",
-        })
     }
 }
 
@@ -89,7 +74,7 @@ impl TryFrom<String> for TokenDigest {
 }
 
 /// One allowed or denied value of an argument fence.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(untagged)]
 pub enum Scalar {
     Bool(bool),
@@ -98,7 +83,7 @@ pub enum Scalar {
 }
 
 /// A fence on one top-level argument.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase", deny_unknown_fields)]
 pub enum ArgumentFence {
     /// The argument must be present and equal one of these values.
@@ -109,7 +94,7 @@ pub enum ArgumentFence {
 }
 
 /// Whether a call to a tool needs a human approval.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Approval {
     #[default]
@@ -118,7 +103,7 @@ pub enum Approval {
 }
 
 /// The grant of one tool.
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ToolGrant {
     /// The operator's reason for the grant.
@@ -149,7 +134,7 @@ impl ToolGrant {
 }
 
 /// The grant of one upstream.
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct UpstreamGrant {
     /// The operator's reason for the grant.
@@ -160,7 +145,7 @@ struct UpstreamGrant {
 }
 
 /// The limits of one app instance.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Limits {
     /// The most calls the app instance may make in one minute.
@@ -170,7 +155,7 @@ pub struct Limits {
 }
 
 /// One app instance, as `policy.json` holds it.
-#[derive(Debug, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct RawApp {
     /// The operator's reason for the app instance.
@@ -189,7 +174,7 @@ struct RawApp {
 }
 
 /// `policy.json` as written.
-#[derive(Debug, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct RawPolicy {
     /// The schema of this file, `urn:chaperone:policy:1`.
@@ -200,11 +185,6 @@ struct RawPolicy {
     /// The app instances, by app ID.
     #[serde(default)]
     apps: BTreeMap<AppId, RawApp>,
-}
-
-/// The JSON Schema of `policy.json`, from its types.
-pub(crate) fn policy_schema() -> schemars::Schema {
-    schemars::schema_for!(RawPolicy)
 }
 
 /// One active fence with its section for one app instance already read.

@@ -15,7 +15,6 @@ Rules for every contributor and every agent that edits this repository. A direct
 |---|---|---|---|
 | `crates/core` | Library: policy types, strict reader, decision, hook traits | No | `crates/core/AGENTS.md` |
 | `crates/chaperone` | The program: hosts plugins, audit, admin socket, CLI | Yes | `crates/chaperone/AGENTS.md` |
-| `crates/editor` | A separate program: HTML forms for the policy file | Yes | `crates/editor/AGENTS.md` |
 | `plugins/default` | One plugin per required slot | Per plugin kind | `plugins/default/AGENTS.md` |
 | `plugins/decision` | Pure plugins, compiled in | No | `plugins/decision/AGENTS.md` |
 | `plugins/adapter` | I/O plugins, compiled in | Yes | `plugins/adapter/AGENTS.md` |

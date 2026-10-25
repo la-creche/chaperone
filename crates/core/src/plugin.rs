@@ -4,7 +4,6 @@
 use std::collections::BTreeSet;
 use std::fmt;
 
-use schemars::JsonSchema;
 use serde::Deserialize;
 
 use crate::ids::{PluginName, SecretParam};
@@ -14,7 +13,7 @@ use crate::strict::{self, ByteCap, StrictError};
 pub const PLUGIN_FILE_CAP: ByteCap = ByteCap::new(64 * 1024);
 
 /// How a plugin runs. The directory of a plugin names its kind.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum PluginKind {
     /// Compiled in. Pure.
@@ -26,7 +25,7 @@ pub enum PluginKind {
 }
 
 /// A job that exactly one plugin must do.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Slot {
     FrontDoor,
@@ -77,7 +76,7 @@ impl fmt::Display for Slot {
 
 /// A named point where chaperone calls a plugin. `plugins/AGENTS.md` has
 /// the catalog.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Hook {
     Identity,
@@ -105,7 +104,7 @@ impl Hook {
 }
 
 /// `plugin.toml` as written.
-#[derive(Debug, Deserialize, JsonSchema)]
+#[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct RawManifest {
     name: PluginName,
@@ -120,11 +119,6 @@ struct RawManifest {
     pairs_with: Option<PluginKind>,
     #[serde(default)]
     command: Option<Vec<String>>,
-}
-
-/// The JSON Schema of `plugin.toml`, from its types.
-pub(crate) fn manifest_schema() -> schemars::Schema {
-    schemars::schema_for!(RawManifest)
 }
 
 /// How chaperone runs a plugin.
