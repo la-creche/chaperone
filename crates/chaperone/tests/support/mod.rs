@@ -98,6 +98,7 @@ impl chaperone::effect::Effect for FakeApproval {
 
     fn call<'a>(
         &'a self,
+        _app: &'a chaperone_core::AppId,
         _tool: &'a chaperone_core::ToolName,
         arguments: std::collections::BTreeMap<String, chaperone_core::ArgValue>,
     ) -> std::pin::Pin<
@@ -143,6 +144,7 @@ impl chaperone::effect::Effect for HangingApproval {
 
     fn call<'a>(
         &'a self,
+        _app: &'a chaperone_core::AppId,
         _tool: &'a chaperone_core::ToolName,
         _arguments: std::collections::BTreeMap<String, chaperone_core::ArgValue>,
     ) -> std::pin::Pin<

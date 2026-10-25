@@ -183,6 +183,7 @@ impl Effect for FakeUpstream {
 
     fn call<'a>(
         &'a self,
+        _app: &'a AppId,
         tool: &'a ToolName,
         _arguments: BTreeMap<String, ArgValue>,
     ) -> Pin<Box<dyn Future<Output = Result<CallToolResult, EffectFault>> + Send + 'a>> {

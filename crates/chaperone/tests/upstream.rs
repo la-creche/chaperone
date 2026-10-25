@@ -97,6 +97,16 @@ struct Running {
 /// Load a tree where `vikunja` is the fake upstream, launch it and build
 /// the gateway.
 async fn running(args: &[&str], install: &str, bounds: Bounds) -> Result<Running, LaunchError> {
+    running_with(args, install, &policy_text(30), bounds).await
+}
+
+/// As [`running`], with the policy `policy`.
+async fn running_with(
+    args: &[&str],
+    install: &str,
+    policy: &str,
+    bounds: Bounds,
+) -> Result<Running, LaunchError> {
     let root = tempfile::tempdir().unwrap();
     let plugins = plugin_tree(root.path());
     write_manifest(&plugins, "effect/added/vikunja", &vikunja_manifest(args));
@@ -105,7 +115,7 @@ async fn running(args: &[&str], install: &str, bounds: Bounds) -> Result<Running
         "effect/included/fake-approval",
         &approval_manifest(),
     );
-    let config = config_dir(root.path(), install, &policy_text(30));
+    let config = config_dir(root.path(), install, policy);
     let secrets = secrets_dir(root.path());
     write_secret(&secrets, "vikunja_token", "tok-123");
     let audit_path = root.path().join("audit.jsonl");
@@ -211,6 +221,51 @@ async fn the_fake_upstream_takes_its_secret_on_stdin_and_answers_calls() {
         "{audit}"
     );
     assert!(!audit.contains("tok-123"));
+}
+
+#[tokio::test]
+async fn an_upstream_learns_the_app_id_of_the_call_and_never_the_token() {
+    // The policy table of `policy_text` ends with the vikunja tools, so
+    // this line grants one more tool.
+    let policy = format!("{}whoami = {{}}\n", policy_text(30));
+    let running = running_with(
+        &["--fake-upstream"],
+        STDIN_INSTALL,
+        &policy,
+        Bounds::DEFAULT,
+    )
+    .await
+    .unwrap();
+    let bearer = Bearer::new(TOKEN.to_owned());
+    let headers = BTreeMap::new();
+    let credentials = Credentials {
+        bearer: Some(&bearer),
+        headers: &headers,
+    };
+    let arguments = BTreeMap::from([(
+        "note".to_owned(),
+        chaperone_core::ArgValue::String("hello".to_owned()),
+    )]);
+    let outcome = running
+        .gateway
+        .call_tool(&credentials, "vikunja__whoami", arguments)
+        .await;
+    let CallOutcome::Ran(result) = outcome else {
+        panic!("{outcome:?}");
+    };
+    let text = result.content.concat();
+    let seen: serde_json::Value = serde_json::from_str(&text).expect(&text);
+    assert_eq!(seen["meta"]["chaperone.app"], "librechat", "{text}");
+    let ours: Vec<&String> = seen["meta"]
+        .as_object()
+        .unwrap()
+        .keys()
+        .filter(|key| key.starts_with("chaperone"))
+        .collect();
+    assert_eq!(ours, ["chaperone.app"], "{text}");
+    assert_eq!(seen["arguments"], serde_json::json!({"note": "hello"}));
+    assert!(!text.contains(TOKEN), "{text}");
+    assert!(!text.contains(&support::digest(TOKEN)), "{text}");
 }
 
 #[tokio::test]

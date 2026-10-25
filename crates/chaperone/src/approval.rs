@@ -41,14 +41,14 @@ impl ApprovalChannel {
     ) -> Result<GateAnswer, ApprovalFault> {
         let tool = chaperone_core::ToolName::try_new(APPROVE_TOOL)
             .map_err(|_| ApprovalFault::BadAnswer)?;
-        let result =
-            self.plugin
-                .call(&tool, request.arguments())
-                .await
-                .map_err(|fault| match fault {
-                    EffectFault::NotConnected => ApprovalFault::NotConnected,
-                    EffectFault::BadResult => ApprovalFault::BadAnswer,
-                })?;
+        let result = self
+            .plugin
+            .call(request.app, &tool, request.arguments())
+            .await
+            .map_err(|fault| match fault {
+                EffectFault::NotConnected => ApprovalFault::NotConnected,
+                EffectFault::BadResult => ApprovalFault::BadAnswer,
+            })?;
         if result.is_error == Some(true) || result.content.len() != 1 {
             return Err(ApprovalFault::BadAnswer);
         }

@@ -286,9 +286,9 @@ impl Request {
             Action::Release => ("release", None),
             Action::Rollback(target) => ("rollback", Some(target.as_str())),
         };
-        // DESIGN-QUESTION: docs/design.md 7.7 sends an upstream no app ID and
-        // no session. The reading: requested_by is the install argument and
-        // requester_session is null. A change passes the app ID in each call.
+        // DESIGN-QUESTION: docs/design.md 7.7 sends an upstream the app ID
+        // in `_meta` and no session. The reading: requested_by is the install
+        // argument and requester_session is null. A change reads the app ID.
         // DESIGN-QUESTION: AGENTS.md "Time" wants RFC 3339. The executor
         // reads ts as seconds since the Unix epoch, so ts is a number. A
         // change needs the executor to read RFC 3339.

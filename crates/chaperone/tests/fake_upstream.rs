@@ -14,6 +14,7 @@
 //! | `slow` | Text, after two seconds |
 //! | `secret_echo` | The token, for an ungranted tool |
 //! | `delete_task`, `wait_task`, `odd_task` | Text, for the gated calls |
+//! | `whoami` | The `_meta` and the arguments of the call, as JSON text |
 //!
 //! Run with `--fake-approval`, it serves the approval channel instead: one
 //! tool, `approve`, that answers by the `tool` argument. `create_task` is
@@ -38,7 +39,7 @@ use rmcp::service::{RequestContext, RoleServer};
 use rmcp::{ErrorData, ServerHandler, ServiceExt};
 use tokio::io::{AsyncBufReadExt, BufReader};
 
-const TOOLS: [&str; 10] = [
+const TOOLS: [&str; 11] = [
     "list_tasks",
     "create_task",
     "picture",
@@ -49,6 +50,7 @@ const TOOLS: [&str; 10] = [
     "delete_task",
     "wait_task",
     "odd_task",
+    "whoami",
 ];
 
 #[derive(Debug, Clone)]
@@ -87,7 +89,7 @@ impl ServerHandler for Fake {
     async fn call_tool(
         &self,
         request: CallToolRequestParams,
-        _context: RequestContext<RoleServer>,
+        context: RequestContext<RoleServer>,
     ) -> Result<CallToolResponse, ErrorData> {
         let text = |text: String| CallToolResult::success(vec![ContentBlock::text(text)]);
         let result = match request.name.as_ref() {
@@ -107,6 +109,10 @@ impl ServerHandler for Fake {
             "delete_task" => text("deleted".to_owned()),
             "wait_task" => text("waited".to_owned()),
             "odd_task" => text("odd".to_owned()),
+            "whoami" => text(
+                serde_json::json!({"meta": context.meta, "arguments": request.arguments})
+                    .to_string(),
+            ),
             other => {
                 return Err(ErrorData::invalid_params(
                     format!("no tool named {other}"),
