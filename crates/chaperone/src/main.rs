@@ -6,6 +6,7 @@ use std::path::PathBuf;
 use std::process::ExitCode;
 use std::sync::Arc;
 
+use chaperone::approval::ApprovalChannel;
 use chaperone::effect::{self, Redactor};
 use chaperone::gateway::{Bounds, ChaperoneGateway, Plugins, SharedGateway};
 use chaperone::startup;
@@ -106,14 +107,14 @@ async fn run(args: Serve) -> ExitCode {
         tracing::warn!(%warning);
     }
     let redactor = Redactor::new(loaded.secrets);
-    let upstreams = match effect::launch_all(&loaded.setup, &loaded.catalog, &redactor).await {
-        Ok(upstreams) => upstreams,
+    let launched = match effect::launch_all(&loaded.setup, &loaded.catalog, &redactor).await {
+        Ok(launched) => launched,
         Err(error) => {
             tracing::error!(%error, "refusing to start");
             return ExitCode::FAILURE;
         }
     };
-    effect::warn_unlisted(&loaded.policy, &upstreams);
+    effect::warn_unlisted(&loaded.policy, &launched.upstreams);
     let listener = match tokio::net::TcpListener::bind(listen).await {
         Ok(listener) => listener,
         Err(error) => {
@@ -130,7 +131,8 @@ async fn run(args: Serve) -> ExitCode {
             identity: loaded.identity,
             audit: loaded.audit,
             clock: loaded.clock,
-            upstreams,
+            upstreams: launched.upstreams,
+            approval: ApprovalChannel::new(launched.approval),
             redactor,
         },
         Bounds::DEFAULT,

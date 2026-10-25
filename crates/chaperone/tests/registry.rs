@@ -15,7 +15,7 @@ use std::collections::BTreeSet;
 
 use chaperone::catalog;
 use chaperone::registry::{Build, ENTRIES, find};
-use chaperone_core::{PluginName, Slot};
+use chaperone_core::{PluginKind, PluginName, Slot};
 use support::repo_plugins;
 
 #[test]
@@ -25,6 +25,10 @@ fn every_shipped_slot_plugin_has_one_row() {
         let Some(slot) = found.manifest.slot() else {
             continue;
         };
+        // An effect plugin runs as a process. The host needs no row for it.
+        if slot.hook().kind() == PluginKind::Effect {
+            continue;
+        }
         let name = found.manifest.name();
         let rows = ENTRIES
             .iter()
@@ -65,6 +69,9 @@ fn every_slot_has_a_row_and_no_slot_has_two_names_alike() {
         );
     }
     for slot in Slot::ALL {
+        if slot.hook().kind() == PluginKind::Effect {
+            continue;
+        }
         assert!(
             ENTRIES.iter().any(|entry| entry.slot == slot),
             "the slot {slot} has no row"
@@ -80,8 +87,7 @@ fn each_row_builds_what_its_slot_needs() {
             | (Slot::AuditSink, Build::AuditSink(_))
             | (Slot::FrontDoor, Build::FrontDoor)
             | (Slot::Clock, Build::Clock(_))
-            | (Slot::SecretSource, Build::SecretSource(_))
-            | (Slot::ApprovalChannel, Build::Later) => true,
+            | (Slot::SecretSource, Build::SecretSource(_)) => true,
             (
                 Slot::Identity
                 | Slot::AuditSink
@@ -93,8 +99,7 @@ fn each_row_builds_what_its_slot_needs() {
                 | Build::AuditSink(_)
                 | Build::Clock(_)
                 | Build::SecretSource(_)
-                | Build::FrontDoor
-                | Build::Later,
+                | Build::FrontDoor,
             ) => false,
         };
         assert!(

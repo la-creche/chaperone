@@ -43,6 +43,12 @@ pub enum CallFault {
     /// The upstream answered with a result that fails the check of
     /// `docs/design.md` 7.7.
     BadResult,
+    /// The approval channel denied the gate inside the wait window
+    /// (`docs/design.md` 5.3).
+    ApprovalDenied,
+    /// The approval channel answered with something that is not an answer,
+    /// or did not answer in the life of the gate (`docs/design.md` 5.3).
+    ApprovalFault,
 }
 
 impl CallFault {
@@ -58,6 +64,8 @@ impl CallFault {
             Self::Halted => "halted",
             Self::UpstreamTimeout => "upstream_timeout",
             Self::BadResult => "bad_result",
+            Self::ApprovalDenied => "approval_denied",
+            Self::ApprovalFault => "approval_fault",
         }
     }
 }
@@ -110,6 +118,8 @@ mod tests {
             CallFault::Halted,
             CallFault::UpstreamTimeout,
             CallFault::BadResult,
+            CallFault::ApprovalDenied,
+            CallFault::ApprovalFault,
         ];
         let codes: BTreeSet<&str> = faults.iter().map(|fault| fault.code()).collect();
         assert_eq!(codes.len(), faults.len());

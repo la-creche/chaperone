@@ -13,6 +13,12 @@
 //! | `broken` | An error result |
 //! | `slow` | Text, after two seconds |
 //! | `secret_echo` | The token, for an ungranted tool |
+//! | `delete_task`, `wait_task`, `odd_task` | Text, for the gated calls |
+//!
+//! Run with `--fake-approval`, it serves the approval channel instead: one
+//! tool, `approve`, that answers by the `tool` argument. `create_task` is
+//! approved, `delete_task` is denied, `wait_task` is approved after two
+//! seconds, `odd_task` gets text that is no answer.
 
 #![allow(
     clippy::unwrap_used,
@@ -32,7 +38,7 @@ use rmcp::service::{RequestContext, RoleServer};
 use rmcp::{ErrorData, ServerHandler, ServiceExt};
 use tokio::io::{AsyncBufReadExt, BufReader};
 
-const TOOLS: [&str; 7] = [
+const TOOLS: [&str; 10] = [
     "list_tasks",
     "create_task",
     "picture",
@@ -40,6 +46,9 @@ const TOOLS: [&str; 7] = [
     "broken",
     "slow",
     "secret_echo",
+    "delete_task",
+    "wait_task",
+    "odd_task",
 ];
 
 #[derive(Debug, Clone)]
@@ -95,6 +104,9 @@ impl ServerHandler for Fake {
                 text("late".to_owned())
             }
             "secret_echo" => text(self.token.clone()),
+            "delete_task" => text("deleted".to_owned()),
+            "wait_task" => text("waited".to_owned()),
+            "odd_task" => text("odd".to_owned()),
             other => {
                 return Err(ErrorData::invalid_params(
                     format!("no tool named {other}"),
@@ -106,16 +118,78 @@ impl ServerHandler for Fake {
     }
 }
 
+/// The approval channel fake.
+#[derive(Debug, Clone, Copy)]
+struct FakeApproval;
+
+impl ServerHandler for FakeApproval {
+    fn get_info(&self) -> ServerConfig {
+        ServerConfig::new(ServerCapabilities::builder().enable_tools().build())
+    }
+
+    async fn list_tools(
+        &self,
+        _request: Option<PaginatedRequestParams>,
+        _context: RequestContext<RoleServer>,
+    ) -> Result<ListToolsResult, ErrorData> {
+        let mut schema = serde_json::Map::new();
+        schema.insert(
+            "type".to_owned(),
+            serde_json::Value::String("object".into()),
+        );
+        let tool = Tool::new_with_raw(
+            "approve",
+            Some("the fake approval".into()),
+            Arc::new(schema),
+        );
+        Ok(ListToolsResult::with_all_items(vec![tool]))
+    }
+
+    async fn call_tool(
+        &self,
+        request: CallToolRequestParams,
+        _context: RequestContext<RoleServer>,
+    ) -> Result<CallToolResponse, ErrorData> {
+        let tool = request
+            .arguments
+            .as_ref()
+            .and_then(|arguments| arguments.get("tool"))
+            .and_then(|value| value.as_str())
+            .unwrap_or("")
+            .to_owned();
+        let answer =
+            |text: &str| CallToolResult::success(vec![ContentBlock::text(text.to_owned())]);
+        let result = if tool.ends_with("delete_task") {
+            answer(r#"{"answer":"denied","reason":"not today"}"#)
+        } else if tool.ends_with("wait_task") {
+            tokio::time::sleep(Duration::from_secs(2)).await;
+            answer(r#"{"answer":"approved"}"#)
+        } else if tool.ends_with("odd_task") {
+            answer("yes")
+        } else {
+            answer(r#"{"answer":"approved"}"#)
+        };
+        Ok(result.into())
+    }
+}
+
 fn main() {
     let args: Vec<String> = std::env::args().collect();
-    if !args.iter().any(|arg| arg == "--fake-upstream") {
-        return;
-    }
-    let from_env = args.iter().any(|arg| arg == "--env");
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()
         .unwrap();
+    if args.iter().any(|arg| arg == "--fake-approval") {
+        runtime.block_on(async {
+            let service = FakeApproval.serve(rmcp::transport::stdio()).await.unwrap();
+            service.waiting().await.unwrap();
+        });
+        return;
+    }
+    if !args.iter().any(|arg| arg == "--fake-upstream") {
+        return;
+    }
+    let from_env = args.iter().any(|arg| arg == "--env");
     runtime.block_on(serve(from_env));
 }
 

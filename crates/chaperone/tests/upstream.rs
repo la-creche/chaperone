@@ -16,10 +16,13 @@ use std::collections::BTreeMap;
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 
+use chaperone::approval::ApprovalChannel;
 use chaperone::effect::{self, LaunchError, Redactor};
 use chaperone::gateway::{Bounds, ChaperoneGateway, Plugins, SharedGateway};
 use chaperone::startup;
-use chaperone_core::{Bearer, CallOutcome, Credentials, Gateway, SecretDelivery};
+use std::time::Duration;
+
+use chaperone_core::{Bearer, CallFault, CallOutcome, Credentials, Gateway, SecretDelivery};
 use support::{
     TOKEN, config_dir, plugin_tree, policy_text, secrets_dir, write_manifest, write_secret,
 };
@@ -47,14 +50,28 @@ fn fake_binary() -> PathBuf {
     found.pop().expect("cargo built tests/fake_upstream.rs")
 }
 
-/// A `vikunja` manifest whose command runs the fake with `args`.
-fn vikunja_manifest(args: &[&str]) -> String {
+/// The command that runs the fake with `args`, as JSON.
+fn fake_command(args: &[&str]) -> String {
     let mut command = vec![fake_binary().to_str().unwrap().to_owned()];
     command.extend(args.iter().map(|arg| (*arg).to_owned()));
-    let command = serde_json::to_string(&command).unwrap();
+    serde_json::to_string(&command).unwrap()
+}
+
+/// A `vikunja` manifest whose command runs the fake with `args`.
+fn vikunja_manifest(args: &[&str]) -> String {
+    let command = fake_command(args);
     format!(
         r#"{{"name":"vikunja","version":"1","kind":"effect","hooks":["upstream"],
             "secrets":["VIKUNJA_TOKEN"],"command":{command}}}"#
+    )
+}
+
+/// A `fake-approval` manifest for the approval channel slot.
+fn approval_manifest() -> String {
+    let command = fake_command(&["--fake-approval"]);
+    format!(
+        r#"{{"name":"fake-approval","version":"1","kind":"effect","slot":"approval_channel",
+            "hooks":["approval"],"command":{command}}}"#
     )
 }
 
@@ -66,17 +83,22 @@ struct Running {
 
 /// Load a tree where `vikunja` is the fake upstream, launch it and build
 /// the gateway.
-async fn running(args: &[&str], install: &str) -> Result<Running, LaunchError> {
+async fn running(args: &[&str], install: &str, bounds: Bounds) -> Result<Running, LaunchError> {
     let root = tempfile::tempdir().unwrap();
     let plugins = plugin_tree(root.path());
     write_manifest(&plugins, "effect/added/vikunja", &vikunja_manifest(args));
+    write_manifest(
+        &plugins,
+        "effect/included/fake-approval",
+        &approval_manifest(),
+    );
     let config = config_dir(root.path(), install, &policy_text(30));
     let secrets = secrets_dir(root.path());
     write_secret(&secrets, "vikunja_token", "tok-123");
     let audit_path = root.path().join("audit.jsonl");
     let loaded = startup::load(&config, &plugins, &audit_path, &secrets).unwrap();
     let redactor = Redactor::new(loaded.secrets);
-    let upstreams = effect::launch_all(&loaded.setup, &loaded.catalog, &redactor).await?;
+    let launched = effect::launch_all(&loaded.setup, &loaded.catalog, &redactor).await?;
     let gateway = SharedGateway::new(ChaperoneGateway::new(
         loaded.run,
         loaded.policy,
@@ -84,10 +106,11 @@ async fn running(args: &[&str], install: &str) -> Result<Running, LaunchError> {
             identity: loaded.identity,
             audit: loaded.audit,
             clock: loaded.clock,
-            upstreams,
+            upstreams: launched.upstreams,
+            approval: ApprovalChannel::new(launched.approval),
             redactor,
         },
-        Bounds::DEFAULT,
+        bounds,
     ));
     Ok(Running {
         gateway,
@@ -96,10 +119,13 @@ async fn running(args: &[&str], install: &str) -> Result<Running, LaunchError> {
     })
 }
 
-const STDIN_INSTALL: &str =
-    r#"{"version":1,"plugins":{"vikunja":{"secrets":{"VIKUNJA_TOKEN":"vikunja_token"}}}}"#;
-const ENV_INSTALL: &str = r#"{"version":1,"plugins":{"vikunja":{
-    "secrets":{"VIKUNJA_TOKEN":"vikunja_token"},"secret_delivery":"env"}}}"#;
+const STDIN_INSTALL: &str = r#"{"version":1,"plugins":{
+    "vikunja":{"secrets":{"VIKUNJA_TOKEN":"vikunja_token"}},"fake-approval":{}},
+    "slots":{"approval_channel":"fake-approval"}}"#;
+const ENV_INSTALL: &str = r#"{"version":1,"plugins":{
+    "vikunja":{"secrets":{"VIKUNJA_TOKEN":"vikunja_token"},"secret_delivery":"env"},
+    "fake-approval":{}},
+    "slots":{"approval_channel":"fake-approval"}}"#;
 
 async fn list_and_call(running: &Running) {
     let bearer = Bearer::new(TOKEN.to_owned());
@@ -116,16 +142,19 @@ async fn list_and_call(running: &Running) {
             "vikunja__big",
             "vikunja__broken",
             "vikunja__create_task",
+            "vikunja__delete_task",
             "vikunja__list_tasks",
+            "vikunja__odd_task",
             "vikunja__picture",
             "vikunja__slow",
+            "vikunja__wait_task",
         ]
     );
     assert_eq!(
-        tools[3].description.as_deref(),
+        tools[4].description.as_deref(),
         Some("the fake list_tasks tool")
     );
-    assert!(tools[3].input_schema.contains_key("type"));
+    assert!(tools[4].input_schema.contains_key("type"));
 
     let outcome = running
         .gateway
@@ -149,7 +178,9 @@ async fn list_and_call(running: &Running) {
 
 #[tokio::test]
 async fn the_fake_upstream_takes_its_secret_on_stdin_and_answers_calls() {
-    let running = running(&["--fake-upstream"], STDIN_INSTALL).await.unwrap();
+    let running = running(&["--fake-upstream"], STDIN_INSTALL, Bounds::DEFAULT)
+        .await
+        .unwrap();
     list_and_call(&running).await;
     let audit = std::fs::read_to_string(&running.audit_path).unwrap();
     assert!(
@@ -165,7 +196,7 @@ async fn the_fake_upstream_takes_its_secret_on_stdin_and_answers_calls() {
 
 #[tokio::test]
 async fn the_env_exception_hands_the_secret_in_the_environment() {
-    let running = running(&["--fake-upstream", "--env"], ENV_INSTALL)
+    let running = running(&["--fake-upstream", "--env"], ENV_INSTALL, Bounds::DEFAULT)
         .await
         .unwrap();
     list_and_call(&running).await;
@@ -218,4 +249,104 @@ fn the_fake_binary_exists_and_exits_without_the_flag() {
     let status = std::process::Command::new(fake_binary()).status().unwrap();
     assert!(status.success());
     assert!(Path::new(&fake_binary()).is_absolute());
+}
+
+#[tokio::test]
+async fn gates_go_through_the_approval_channel_process() {
+    let running = running(
+        &["--fake-upstream"],
+        STDIN_INSTALL,
+        Bounds {
+            approval_wait: Duration::from_millis(200),
+            ..Bounds::DEFAULT
+        },
+    )
+    .await
+    .unwrap();
+    let bearer = Bearer::new(TOKEN.to_owned());
+    let headers = BTreeMap::new();
+    let credentials = Credentials {
+        bearer: Some(&bearer),
+        headers: &headers,
+    };
+    let call = |name: &'static str| {
+        running
+            .gateway
+            .call_tool(&credentials, name, BTreeMap::new())
+    };
+
+    let approved = call("vikunja__create_task").await;
+    let CallOutcome::Ran(result) = approved else {
+        panic!("{approved:?}");
+    };
+    assert_eq!(result.content, ["created"]);
+
+    let denied = call("vikunja__delete_task").await;
+    assert!(
+        matches!(denied, CallOutcome::Failed(CallFault::ApprovalDenied)),
+        "{denied:?}"
+    );
+
+    let odd = call("vikunja__odd_task").await;
+    assert!(
+        matches!(odd, CallOutcome::Failed(CallFault::ApprovalFault)),
+        "{odd:?}"
+    );
+
+    let waiting = call("vikunja__wait_task").await;
+    assert!(matches!(waiting, CallOutcome::Waiting(_)), "{waiting:?}");
+    tokio::time::sleep(Duration::from_millis(2500)).await;
+    let later = call("vikunja__wait_task").await;
+    let CallOutcome::Ran(result) = later else {
+        panic!("{later:?}");
+    };
+    assert_eq!(result.content, ["waited"]);
+
+    let audit = std::fs::read_to_string(&running.audit_path).unwrap();
+    assert!(audit.contains(r#""detail":"approval_denied""#), "{audit}");
+    assert!(audit.contains(r#""detail":"approval_fault""#), "{audit}");
+    assert!(audit.contains(r#""event":"waiting""#), "{audit}");
+}
+
+#[tokio::test]
+async fn an_approval_channel_without_the_approve_tool_refuses_start() {
+    let root = tempfile::tempdir().unwrap();
+    let plugins = plugin_tree(root.path());
+    write_manifest(
+        &plugins,
+        "effect/added/vikunja",
+        &vikunja_manifest(&["--fake-upstream"]),
+    );
+    // The fake upstream lists tools, and none of them is `approve`.
+    let command = fake_command(&["--fake-upstream"]);
+    write_manifest(
+        &plugins,
+        "effect/included/fake-approval",
+        &format!(
+            r#"{{"name":"fake-approval","version":"1","kind":"effect","slot":"approval_channel",
+            "hooks":["approval"],"secrets":["VIKUNJA_TOKEN"],"command":{command}}}"#
+        ),
+    );
+    let install = r#"{"version":1,"plugins":{
+        "vikunja":{"secrets":{"VIKUNJA_TOKEN":"vikunja_token"}},
+        "fake-approval":{"secrets":{"VIKUNJA_TOKEN":"vikunja_token"}}},
+        "slots":{"approval_channel":"fake-approval"}}"#;
+    let config = config_dir(root.path(), install, &policy_text(30));
+    let secrets = secrets_dir(root.path());
+    write_secret(&secrets, "vikunja_token", "tok-123");
+    let loaded = startup::load(
+        &config,
+        &plugins,
+        &root.path().join("audit.jsonl"),
+        &secrets,
+    )
+    .unwrap();
+    let redactor = Redactor::new(loaded.secrets);
+    let error = effect::launch_all(&loaded.setup, &loaded.catalog, &redactor)
+        .await
+        .unwrap_err();
+    assert!(
+        matches!(error, LaunchError::NoApproveTool { .. }),
+        "{error}"
+    );
 }

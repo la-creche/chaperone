@@ -393,7 +393,32 @@ impl AllowedCall {
     }
 }
 
+/// An approval named another gate than the one the call waits on. The call
+/// fails (G2).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
+#[error("the approval names another gate")]
+pub struct GateMismatch;
+
 impl GatedCall {
+    /// The gate this call waits on.
+    #[must_use]
+    pub fn gate(&self) -> GateId {
+        self.1
+    }
+
+    /// The approval channel approved `gate`. The call is allowed and runs
+    /// next (`docs/design.md` 5.3 and 5.4).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`GateMismatch`] when `gate` is not the gate of this call.
+    pub fn approved(self, gate: GateId) -> Result<AllowedCall, GateMismatch> {
+        if gate != self.1 {
+            return Err(GateMismatch);
+        }
+        Ok(AllowedCall(self.0))
+    }
+
     /// Final: the wait window ended without an answer.
     ///
     /// # Errors

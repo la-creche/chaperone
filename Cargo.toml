@@ -6,6 +6,7 @@ members = [
   "crates/lint",
   "plugins/default/audit-jsonl",
   "plugins/default/bearer",
+  "plugins/default/deny-all",
   "plugins/default/mcp-http",
   "plugins/default/secret-files",
   "plugins/default/system-clock",
