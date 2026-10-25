@@ -343,7 +343,9 @@ The editor is a separate program, so a change to the editor needs no chaperone r
 - It renders server-side HTML forms. It uses no JavaScript framework.
 - It builds each form from `chaperone schema`. A new plugin needs no editor code.
 - It saves only after `chaperone check` passes. It then renames the file atomically and keeps the previous version.
-- It shows that a token digest exists. It never shows a token or a secret.
+- It shows that a token digest exists. It never shows a token or a secret. A button per app instance asks `POST /token` of the admin socket for a new token and shows it once.
+- `chaperone-editor` takes `--listen`, `--admin-socket`, `--config-dir` and `--token-file`. The token file holds the editor's admin token on one line. The browser sends it as the password of HTTP basic authentication. A posted form must come from the editor's own origin.
+- Each field name carries its kind and a JSON pointer into the file, so a posted form decodes back into the draft without the schema. The editor knows two names of the policy shape: `plugins` under an app instance, whose entries take the section schema of the plugin named by the key, and `token_sha256`, which shows as a count.
 
 ## 12. Version 1
 
