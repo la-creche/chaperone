@@ -91,7 +91,7 @@ The rows apply in this order. The first row that matches decides.
    - An `allow` fence needs the argument present and equal to a listed value.
    - A `deny` fence refuses a listed value, and refuses an argument that is not a scalar.
 5. A fence plugin returns deny: `Deny(fence)` with that plugin's reason. The reason is a fixed text of the plugin. A fence plugin faults: `Deny(fence_fault)`. Fences run in plugin name order. The first deny wins.
-6. The policy marks the tool `"approval": "required"`, or a fence plugin returns gate:
+6. The policy marks the tool `approval = "required"`, or a fence plugin returns gate:
    1. The gate is denied and not expired: `Deny(approval_denied)`.
    2. The gate is approved and not expired: `Allow`.
    3. The gate is pending and not expired: `Gate(gate_id)`.
@@ -171,23 +171,23 @@ The record keeps the arguments only as the SHA-256 of their canonical form. Clos
 
 ## 6. Configuration
 
-The install file and the plugin manifest are TOML. The policy file stays JSON until its part of step 9 in section 13. The strict reader reads every file. It refuses duplicate keys, a byte order mark, invalid UTF-8, unknown fields and input over the size cap. The Rust types are the source of truth.
+The install file, the policy file and the plugin manifest are TOML. No file has a `$schema` field. The strict reader reads every file. It refuses duplicate keys, a byte order mark, invalid UTF-8, unknown fields and input over the size cap. The Rust types are the source of truth.
 
 | File | Who writes it | What it holds |
 |---|---|---|
 | `install.toml` | The operator, by hand | Enabled plugins, the plugin for each slot, launch commands, secret bindings |
-| `policy.json` | The operator, by hand or with an external tool | App instances, token digests, grants, argument fences, gates, limits |
+| `policy.toml` | The operator, by hand or with an external tool | App instances, token digests, grants, argument fences, gates, limits |
 | `plugin.toml` | The plugin author | One per plugin directory. See section 7.4. |
 | A secret file | The operator | One secret value per file |
 
 Rules:
 
-- The policy file can name its schema in `$schema`. The value is fixed: `urn:chaperone:policy:1`. A file that names another value does not load. The field stays optional, so a file written before step 8 still loads. The install file and the plugin manifest have no `$schema` field.
-- Grants and install entries take a typed `note` field for the reason. JSON has no comments. A TOML file can also hold comments.
+- Grants and install entries take a typed `note` field for the reason. A TOML file can also hold comments.
+- The policy file holds maps keyed by app ID, plugin name, tool name and argument name, as TOML tables. A tool name or an argument name can hold a `.`, so it needs a quoted key, such as `"tasks.list" = {}`.
 - An install entry of an effect plugin can hold `args`: arguments that chaperone appends to the command of the manifest at launch. The manifest names the program. The install file adds what differs per deployment, such as an address. An argument is never a secret value (G9).
 - The policy file names a plugin by name only. It cannot launch a binary or bind a secret.
 - An external tool that writes the policy file runs as an OS user that cannot write `install.toml`.
-- chaperone reloads `policy.json` when the file changes. A reload that fails denies every call until a valid file loads (G2).
+- chaperone reloads `policy.toml` when the file changes. A reload that fails denies every call until a valid file loads (G2).
 - `chaperone check` is the only authority on a valid configuration. It runs the strict reader and every rule across files.
 
 ## 7. Plugins
@@ -272,7 +272,7 @@ An app sees one MCP server with the tools of every granted upstream. Each tool h
 
 Version 1 configures the LibreChat MCP server name as `chaperone`. This name has nine characters. A 50-character exposed name becomes 64 characters after LibreChat adds its suffix.
 
-`chaperone serve` starts the front door. It takes `--config-dir` (the directory of `install.toml` and `policy.json`), `--plugins-dir`, `--audit-file`, `--secrets-dir` and `--listen`. The front door reads each request body through the strict reader before the MCP library parses it, with a cap of 1 MiB. It accepts only loopback `Host` headers, to stop DNS rebinding. Each `--allowed-host` adds one more, such as `host.docker.internal:8300` for an app in Docker.
+`chaperone serve` starts the front door. It takes `--config-dir` (the directory of `install.toml` and `policy.toml`), `--plugins-dir`, `--audit-file`, `--secrets-dir` and `--listen`. The front door reads each request body through the strict reader before the MCP library parses it, with a cap of 1 MiB. It accepts only loopback `Host` headers, to stop DNS rebinding. Each `--allowed-host` adds one more, such as `host.docker.internal:8300` for an app in Docker.
 
 In version 1, the default front door serves plain HTTP only on a loopback address. chaperone refuses to start when the front door address is not loopback and TLS is not set up. TLS comes before the move to the host.
 
@@ -314,9 +314,9 @@ The manifest an app sees holds a tool when the policy grants it, the caller's re
 
 1. It takes 32 bytes from the OS random source, through `getrandom`.
 2. It writes the bytes as 64 lower-case hex characters. This text is the token. It prints the token once.
-3. It stores only the SHA-256 digest of the token text in `policy.json`, through `sha2`.
+3. It stores only the SHA-256 digest of the token text in `policy.toml`, through `sha2`. The digest goes after the last digest of the app instance. The rest of the file stays as the operator wrote it, comments too.
 
-The `bearer` identity plugin refuses bearer text that is not 64 lower-case hex characters. A digest of any other text in `policy.json` authenticates nothing.
+The `bearer` identity plugin refuses bearer text that is not 64 lower-case hex characters. A digest of any other text in `policy.toml` authenticates nothing.
 
 Each app instance can hold two digests, so a token can rotate with no downtime. chaperone compares digests in constant time, through `subtle`. chaperone uses no cryptography code of its own.
 
@@ -331,7 +331,7 @@ The admin socket is a Unix socket. It is never on the front-door port. `chaperon
 
 A CLI command and its endpoint call the same function. They cannot drift. The CLI works when the chaperone service is down, so a broken policy can be fixed.
 
-`chaperone check <file>` takes `install.toml` or `policy.json` in its configuration directory, and `--plugins-dir`. `POST /check` takes `{"file": "<name>", "content": "<text>"}` and answers `200 {"ok": true}` or `422 {"ok": false, "error": "<text>"}`. `POST /token` takes `{"app": "<id>"}` and answers `200 {"token": "<text>"}` once, or `422`. `chaperone token new` keeps the previous policy file as `policy.json.prev` and lands the new one by an atomic rename. Each function runs on the service's own files. The socket does not take a path.
+`chaperone check <file>` takes `install.toml` or `policy.toml` in its configuration directory, and `--plugins-dir`. `POST /check` takes `{"file": "<name>", "content": "<text>"}` and answers `200 {"ok": true}` or `422 {"ok": false, "error": "<text>"}`. `POST /token` takes `{"app": "<id>"}` and answers `200 {"token": "<text>"}` once, or `422`. `chaperone token new` keeps the previous policy file as `policy.toml.prev` and lands the new one by an atomic rename. Each function runs on the service's own files. The socket does not take a path.
 
 ## 11. Writing the policy file
 
@@ -354,7 +354,7 @@ Version 1 proves the idea with one client app.
 | Decision plugin | `ha-call` decision half: an entity allow-list for Home Assistant calls |
 | Effect plugins | `ha-call` effect half: the Home Assistant call. `ha-approval`: the approval channel, through the operator's existing approval flow. |
 
-`ha-call` is one plugin in two halves, both in `included`. The decision half is a fence. Each app instance lists the entities it may act on in its `ha-call` section of the policy file, as `{"entities": ["light.kitchen"]}`. A call to the `ha-call` upstream passes only when every entity in its `entity_id` is on that list. A call with no `entity_id` is denied, because a service call without a target acts on every entity of its domain. An app instance with no section may act on no entity (G2). A call to any other upstream passes untouched. The effect half serves one tool, `call_service`, with `domain`, `service`, `entity_id` and optional `data`. It sends one `POST /api/services/<domain>/<service>` to Home Assistant with the long-lived token `HA_TOKEN` from the secret line, and returns the answer as text. It takes `--url` through `args` in `install.toml`.
+`ha-call` is one plugin in two halves, both in `included`. The decision half is a fence. Each app instance lists the entities it may act on in its `ha-call` section of the policy file, as `entities = ["light.kitchen"]`. A call to the `ha-call` upstream passes only when every entity in its `entity_id` is on that list. A call with no `entity_id` is denied, because a service call without a target acts on every entity of its domain. An app instance with no section may act on no entity (G2). A call to any other upstream passes untouched. The effect half serves one tool, `call_service`, with `domain`, `service`, `entity_id` and optional `data`. It sends one `POST /api/services/<domain>/<service>` to Home Assistant with the long-lived token `HA_TOKEN` from the secret line, and returns the answer as text. It takes `--url` through `args` in `install.toml`.
 
 `ha-approval` sits in `plugins/effect/included`. The operator's flow is a Node-RED instance in front of Home Assistant with two legs. The plugin speaks the flow's language and changes nothing in the flow:
 
@@ -405,6 +405,5 @@ One pull request per step:
 
 | Item | Settle in |
 |---|---|
-| A `$schema` value that is a URL to a published schema, in place of the URN, and whether the field becomes required | After version 1 |
 | Stage (b): sandbox per app instance, the OpenHands runtime, the model pass-through | After version 1 |
 | Stage (b): the harness subscribes to the results of its gates, and chaperone publishes each kept result when the run ends. The transport, and how a subscription is bound to one app instance, are open. | After version 1 |

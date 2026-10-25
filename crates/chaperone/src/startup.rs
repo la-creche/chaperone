@@ -21,7 +21,7 @@ use crate::files::{self, ReadError};
 use crate::registry::{self, Build, Entry};
 
 const INSTALL_FILE: &str = "install.toml";
-const POLICY_FILE: &str = "policy.json";
+const POLICY_FILE: &str = "policy.toml";
 
 /// Why chaperone refuses to start.
 #[derive(Debug, thiserror::Error)]
@@ -101,7 +101,7 @@ pub struct Loaded {
     pub warnings: Vec<Warning>,
 }
 
-/// Load `install.toml` and `policy.json` from `config_dir` and every plugin
+/// Load `install.toml` and `policy.toml` from `config_dir` and every plugin
 /// under `plugins_dir`. Open `audit_file`. Read every bound secret through
 /// the secret source over `secrets_dir`. Check that this build can run the
 /// setup.

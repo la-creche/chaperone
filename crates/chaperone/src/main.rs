@@ -39,7 +39,7 @@ enum Command {
 
 #[derive(Debug, clap::Args)]
 struct Check {
-    /// The file: install.toml or policy.json, in its configuration
+    /// The file: install.toml or policy.toml, in its configuration
     /// directory.
     file: PathBuf,
     /// The plugin tree: default/, then <kind>/included and <kind>/added.
@@ -56,22 +56,22 @@ struct TokenCommand {
 #[derive(Debug, Subcommand)]
 enum TokenAction {
     /// Create a token for an app instance and store its digest in
-    /// policy.json. The token is printed once.
+    /// policy.toml. The token is printed once.
     New(TokenNew),
 }
 
 #[derive(Debug, clap::Args)]
 struct TokenNew {
-    /// The app ID in policy.json.
+    /// The app ID in policy.toml.
     app: String,
-    /// The directory that holds policy.json.
+    /// The directory that holds policy.toml.
     #[arg(long)]
     config_dir: PathBuf,
 }
 
 #[derive(Debug, clap::Args)]
 struct Serve {
-    /// The directory that holds install.toml and policy.json.
+    /// The directory that holds install.toml and policy.toml.
     #[arg(long)]
     config_dir: PathBuf,
     /// The plugin tree: default/, then <kind>/included and <kind>/added.

@@ -1,4 +1,4 @@
-//! The policy file (`policy.json`): app instances, token digests, limits,
+//! The policy file (`policy.toml`): app instances, token digests, limits,
 //! grants, argument fences, approval rules and plugin sections. A policy
 //! that does not load denies every call (G2). `docs/design.md` 6.
 
@@ -6,21 +6,17 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 
 use serde::{Deserialize, Serialize};
-use serde_json::value::RawValue;
 
 use crate::hook::{Fence, PreparedFence, RawSection, SectionError};
 use crate::ids::{AppId, ArgName, PluginName, ToolName};
 use crate::install::Setup;
 use crate::strict::{self, ByteCap, StrictError};
 
-/// The largest `policy.json` chaperone reads.
+/// The largest `policy.toml` chaperone reads.
 pub const POLICY_FILE_CAP: ByteCap = ByteCap::new(1024 * 1024);
 
 const POLICY_VERSION: u32 = 1;
 const DIGESTS_MAX: usize = 2;
-
-/// The value of `$schema` in `policy.json` (`docs/design.md` 6).
-pub const POLICY_SCHEMA_ID: &str = "urn:chaperone:policy:1";
 
 /// The SHA-256 digest of one bearer token.
 #[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
@@ -154,7 +150,7 @@ pub struct Limits {
     pub max_pending_gates: u32,
 }
 
-/// One app instance, as `policy.json` holds it.
+/// One app instance, as `policy.toml` holds it.
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct RawApp {
@@ -170,16 +166,13 @@ struct RawApp {
     /// The section of each active fence plugin, by plugin name. Each
     /// plugin states the shape of its own section.
     #[serde(default)]
-    plugins: BTreeMap<PluginName, Box<RawValue>>,
+    plugins: BTreeMap<PluginName, toml::Value>,
 }
 
-/// `policy.json` as written.
+/// `policy.toml` as written.
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct RawPolicy {
-    /// The schema of this file, `urn:chaperone:policy:1`.
-    #[serde(rename = "$schema", default, skip_serializing_if = "Option::is_none")]
-    schema: Option<String>,
     /// The version of the file shape. This chaperone reads 1.
     version: u32,
     /// The app instances, by app ID.
@@ -253,21 +246,19 @@ pub struct Policy {
     apps: BTreeMap<AppId, App>,
 }
 
-/// Why `policy.json` does not load. Each one denies every call (G2).
+/// Why `policy.toml` does not load. Each one denies every call (G2).
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum PolicyError {
-    #[error("policy.json is not valid: {0}")]
+    #[error("policy.toml is not valid: {0}")]
     Read(#[from] StrictError),
-    #[error("policy.json has version {found}, this chaperone reads version {POLICY_VERSION}")]
+    #[error("policy.toml has version {found}, this chaperone reads version {POLICY_VERSION}")]
     Version { found: u32 },
-    #[error("policy.json names the schema {found}, this chaperone reads {POLICY_SCHEMA_ID}")]
-    Schema { found: String },
-    #[error("the app {0} is not in policy.json")]
+    #[error("the app {0} is not in policy.toml")]
     UnknownApp(AppId),
     #[error("the app {app} already holds {DIGESTS_MAX} token digests")]
     DigestsFull { app: AppId },
-    #[error("policy.json could not be written back as JSON")]
-    Encode,
+    #[error("the token digests of the app {app} are not one array in policy.toml")]
+    DigestArray { app: AppId },
     #[error("the app {app} needs one or two token digests")]
     DigestCount { app: AppId },
     #[error("the apps {first} and {second} share a token digest")]
@@ -296,45 +287,65 @@ pub enum PolicyError {
     },
 }
 
-/// Read `policy.json` through the strict reader and check its `$schema`.
+/// Read `policy.toml` through the strict reader.
 fn read_raw(bytes: &[u8]) -> Result<RawPolicy, PolicyError> {
-    let raw: RawPolicy = strict::read(bytes, POLICY_FILE_CAP)?;
-    if let Some(found) = &raw.schema
-        && found != POLICY_SCHEMA_ID
-    {
-        return Err(PolicyError::Schema {
-            found: found.clone(),
-        });
-    }
-    Ok(raw)
+    Ok(strict::read_toml(bytes, POLICY_FILE_CAP)?)
 }
 
-/// `policy.json` with `digest` added to the app instance `app`
-/// (`docs/design.md` 9). The file is read through the strict reader and
-/// written back as indented JSON, with `$schema` set.
+/// `policy.toml` with `digest` added to the app instance `app`
+/// (`docs/design.md` 9). The digest goes in after the last digest of the
+/// app. The rest of the text, comments too, stays as the operator wrote it.
 ///
 /// # Errors
 ///
 /// Returns a [`PolicyError`] when the file does not read, the app is not in
 /// it, or the app already holds two digests.
 pub fn with_digest(bytes: &[u8], app: &AppId, digest: TokenDigest) -> Result<Vec<u8>, PolicyError> {
-    let mut raw = read_raw(bytes)?;
+    let raw = read_raw(bytes)?;
     let instance = raw
         .apps
-        .get_mut(app)
+        .get(app)
         .ok_or_else(|| PolicyError::UnknownApp(app.clone()))?;
     if instance.token_sha256.len() >= DIGESTS_MAX {
         return Err(PolicyError::DigestsFull { app: app.clone() });
     }
-    instance.token_sha256.push(digest);
-    raw.schema = Some(POLICY_SCHEMA_ID.to_owned());
-    let mut text = serde_json::to_vec_pretty(&raw).map_err(|_| PolicyError::Encode)?;
-    text.push(b'\n');
-    Ok(text)
+    let not_found = || PolicyError::DigestArray { app: app.clone() };
+    let text = std::str::from_utf8(bytes).map_err(|_| not_found())?;
+    let (at, comma) = digest_slot(text, app).ok_or_else(not_found)?;
+    let (head, tail) = (
+        text.get(..at).ok_or_else(not_found)?,
+        text.get(at..).ok_or_else(not_found)?,
+    );
+    let separator = if comma { ", " } else { "" };
+    let digest = String::from(digest);
+    let after = format!("{head}{separator}\"{digest}\"{tail}").into_bytes();
+    read_raw(&after)?;
+    Ok(after)
+}
+
+/// The byte offset in `text` where a new digest of `app` goes, and whether
+/// a comma must come before it. A new digest follows the last digest of the
+/// array, so a trailing comma or a comment in the array stays valid.
+fn digest_slot(text: &str, app: &AppId) -> Option<(usize, bool)> {
+    let document = toml::de::DeTable::parse(text).ok()?;
+    let digests = document
+        .get_ref()
+        .get("apps")?
+        .get_ref()
+        .get(app.as_str())?
+        .get_ref()
+        .get("token_sha256")?;
+    let toml::de::DeValue::Array(list) = digests.get_ref() else {
+        return None;
+    };
+    match list.last() {
+        Some(last) => Some((last.span().end, true)),
+        None => Some((digests.span().start + 1, false)),
+    }
 }
 
 impl Policy {
-    /// Read `policy.json` and check it against the setup. Each active fence
+    /// Read `policy.toml` and check it against the setup. Each active fence
     /// in `setup` needs its code in `fences`.
     ///
     /// # Errors
@@ -460,7 +471,7 @@ fn load_app(
         let Some(fence) = code.get(name) else {
             return Err(PolicyError::MissingFence(name.clone()));
         };
-        let section = raw.plugins.get(name).map(|raw| RawSection::new(raw));
+        let section = raw.plugins.get(name).map(RawSection::new);
         let prepared = fence
             .prepare(section)
             .map_err(|error| PolicyError::Section {

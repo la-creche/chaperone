@@ -37,8 +37,8 @@ pub use install::{
 };
 pub use plugin::{Hook, Manifest, ManifestError, PLUGIN_FILE_CAP, PluginKind, Runtime, Slot};
 pub use policy::{
-    App, Approval, ArgumentFence, DigestError, Limits, POLICY_FILE_CAP, POLICY_SCHEMA_ID, Policy,
-    PolicyError, Scalar, TokenDigest, ToolGrant, with_digest,
+    App, Approval, ArgumentFence, DigestError, Limits, POLICY_FILE_CAP, Policy, PolicyError,
+    Scalar, TokenDigest, ToolGrant, with_digest,
 };
 pub use secret::{Bearer, REDACTED, Secret, SecretError};
 pub use time::Timestamp;

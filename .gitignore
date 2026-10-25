@@ -12,5 +12,6 @@
 # Local configuration and secrets never enter the repository.
 /install.toml
 /install.json
+/policy.toml
 /policy.json
 /secrets/
