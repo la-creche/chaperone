@@ -31,6 +31,6 @@ The admin socket is a Unix socket. Only the editor's OS user can open it. Never 
 ## Never do these
 
 1. Do not decide in this crate. A rule that changes an outcome belongs in `core`.
-2. Do not pass a secret to a plugin that `install.json` does not bind it to.
-3. Do not put a secret in argv or the environment of a child, except for an effect plugin in `added/` with `"secret_delivery": "env"`. Log the warning each time.
+2. Do not pass a secret to a plugin that `install.toml` does not bind it to.
+3. Do not put a secret in argv or the environment of a child, except for an effect plugin in `added/` with `secret_delivery = "env"` in the install file. Log the warning each time.
 4. Do not retry a denied call on behalf of an app.

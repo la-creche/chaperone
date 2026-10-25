@@ -1,4 +1,4 @@
-//! The install file (`install.json`) and slot resolution. The install file
+//! The install file (`install.toml`) and slot resolution. The install file
 //! alone enables a plugin and fills a slot (G10). `docs/design.md` 7.2 to
 //! 7.5.
 
@@ -11,13 +11,10 @@ use crate::ids::{PluginName, SecretName, SecretParam};
 use crate::plugin::{Hook, Manifest, PluginKind, Slot};
 use crate::strict::{self, ByteCap, StrictError};
 
-/// The largest `install.json` chaperone reads.
+/// The largest `install.toml` chaperone reads.
 pub const INSTALL_FILE_CAP: ByteCap = ByteCap::new(256 * 1024);
 
 const INSTALL_VERSION: u32 = 1;
-
-/// The value of `$schema` in `install.json` (`docs/design.md` 6).
-pub const INSTALL_SCHEMA_ID: &str = "urn:chaperone:install:1";
 
 /// Where a plugin sits in the tree.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
@@ -41,7 +38,7 @@ pub enum SecretDelivery {
     Env,
 }
 
-/// One enabled plugin in `install.json`.
+/// One enabled plugin in `install.toml`.
 #[derive(Debug, Clone, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct InstallEntry {
@@ -66,13 +63,10 @@ impl InstallEntry {
     }
 }
 
-/// `install.json`.
+/// `install.toml`.
 #[derive(Debug, Clone, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct InstallFile {
-    /// The schema of this file, `urn:chaperone:install:1`.
-    #[serde(rename = "$schema", default)]
-    schema: Option<String>,
     /// The version of the file shape. This chaperone reads 1.
     version: u32,
     #[serde(default)]
@@ -85,37 +79,28 @@ pub struct InstallFile {
     slots: BTreeMap<Slot, PluginName>,
 }
 
-/// The JSON Schema of `install.json`, from its types.
+/// The JSON Schema of `install.toml`, from its types.
 pub(crate) fn install_schema() -> schemars::Schema {
     schemars::schema_for!(InstallFile)
 }
 
-/// Why `install.json` is not valid on its own.
+/// Why `install.toml` is not valid on its own.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum InstallError {
-    #[error("install.json is not valid: {0}")]
+    #[error("install.toml is not valid: {0}")]
     Read(#[from] StrictError),
-    #[error("install.json has version {found}, this chaperone reads version {INSTALL_VERSION}")]
+    #[error("install.toml has version {found}, this chaperone reads version {INSTALL_VERSION}")]
     Version { found: u32 },
-    #[error("install.json names the schema {found}, this chaperone reads {INSTALL_SCHEMA_ID}")]
-    Schema { found: String },
 }
 
 impl InstallFile {
-    /// Read and check `install.json`.
+    /// Read and check `install.toml`.
     ///
     /// # Errors
     ///
     /// Returns an [`InstallError`] that names the first rule the file breaks.
     pub fn read(bytes: &[u8]) -> Result<Self, InstallError> {
-        let file: Self = strict::read(bytes, INSTALL_FILE_CAP)?;
-        if let Some(found) = &file.schema
-            && found != INSTALL_SCHEMA_ID
-        {
-            return Err(InstallError::Schema {
-                found: found.clone(),
-            });
-        }
+        let file: Self = strict::read_toml(bytes, INSTALL_FILE_CAP)?;
         if file.version != INSTALL_VERSION {
             return Err(InstallError::Version {
                 found: file.version,
@@ -213,7 +198,7 @@ impl Setup {
 /// Each one refuses start (G2).
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum SetupError {
-    #[error("install.json enables {0}, but no plugin of that name exists")]
+    #[error("install.toml enables {0}, but no plugin of that name exists")]
     UnknownPlugin(PluginName),
     #[error("no default plugin exists for the slot {0}")]
     MissingDefault(Slot),
@@ -222,11 +207,11 @@ pub enum SetupError {
         slot: Slot,
         plugins: Vec<PluginName>,
     },
-    #[error("install.json picks {plugin} for the slot {slot}, but it does not serve that slot")]
+    #[error("install.toml picks {plugin} for the slot {slot}, but it does not serve that slot")]
     WrongSlot { slot: Slot, plugin: PluginName },
-    #[error("install.json picks {plugin} for the slot {slot}, but does not enable it")]
+    #[error("install.toml picks {plugin} for the slot {slot}, but does not enable it")]
     SlotNotEnabled { slot: Slot, plugin: PluginName },
-    #[error("{plugins:?} each claim the slot {slot}. Pick one in install.json \"slots\".")]
+    #[error("{plugins:?} each claim the slot {slot}. Pick one in install.toml \"slots\".")]
     Ambiguous {
         slot: Slot,
         plugins: Vec<PluginName>,
@@ -236,12 +221,12 @@ pub enum SetupError {
         plugin: PluginName,
         kind: PluginKind,
     },
-    #[error("{plugin} needs the secret parameter {param}, and install.json does not bind it")]
+    #[error("{plugin} needs the secret parameter {param}, and install.toml does not bind it")]
     UnboundSecret {
         plugin: PluginName,
         param: SecretParam,
     },
-    #[error("install.json binds {param} for {plugin}, which does not declare it")]
+    #[error("install.toml binds {param} for {plugin}, which does not declare it")]
     UnknownSecret {
         plugin: PluginName,
         param: SecretParam,
@@ -254,9 +239,9 @@ pub enum SetupError {
     ArgsWithoutProcess { plugin: PluginName },
 }
 
-/// Resolve the setup from `install.json` and the plugins found on disk.
+/// Resolve the setup from `install.toml` and the plugins found on disk.
 ///
-/// A plugin on disk takes part only when `install.json` enables it, or when
+/// A plugin on disk takes part only when `install.toml` enables it, or when
 /// it is the default that fills an open slot (G10).
 ///
 /// # Errors
@@ -521,15 +506,25 @@ pub(crate) mod tests {
         catalog
     }
 
-    pub(crate) const V1_INSTALL: &str = r#"{
-        "version": 1,
-        "plugins": {
-            "ha-call": {"secrets": {"token": "ha_token"}},
-            "ha-approval": {"secrets": {"token": "ha_token"}},
-            "vikunja": {"secrets": {"VIKUNJA_TOKEN": "vikunja_token"}, "secret_delivery": "env"}
-        },
-        "slots": {"approval_channel": "ha-approval"}
-    }"#;
+    pub(crate) const V1_INSTALL: &str = r#"
+        version = 1
+
+        [plugins.ha-call]
+        secrets = { token = "ha_token" }
+
+        [plugins.ha-approval]
+        secrets = { token = "ha_token" }
+
+        [plugins.vikunja]
+        secrets = { VIKUNJA_TOKEN = "vikunja_token" }
+        secret_delivery = "env"
+
+        [slots]
+        approval_channel = "ha-approval"
+    "#;
+
+    /// An install file that enables nothing.
+    const EMPTY_INSTALL: &str = "version = 1\n";
 
     fn install(text: &str) -> InstallFile {
         InstallFile::read(text.as_bytes()).unwrap()
@@ -541,7 +536,7 @@ pub(crate) mod tests {
 
     #[test]
     fn defaults_fill_every_slot_of_an_empty_install() {
-        let setup = resolve(&install(r#"{"version":1}"#), &defaults()).unwrap();
+        let setup = resolve(&install(EMPTY_INSTALL), &defaults()).unwrap();
         assert_eq!(setup.slot(Slot::Identity), Some(&name("bearer")));
         assert_eq!(setup.slot(Slot::ApprovalChannel), Some(&name("deny-all")));
         assert!(setup.fences().is_empty());
@@ -588,7 +583,7 @@ pub(crate) mod tests {
 
     #[test]
     fn a_plugin_on_disk_does_nothing_until_enabled() {
-        let setup = resolve(&install(r#"{"version":1}"#), &v1_catalog()).unwrap();
+        let setup = resolve(&install(EMPTY_INSTALL), &v1_catalog()).unwrap();
         assert!(setup.fences().is_empty());
         assert!(setup.upstreams().is_empty());
         assert_eq!(setup.slot(Slot::ApprovalChannel), Some(&name("deny-all")));
@@ -598,8 +593,12 @@ pub(crate) mod tests {
     fn args_reach_the_binding_of_an_effect_plugin_only() {
         let setup = resolve(
             &install(
-                r#"{"version":1,"plugins":{"vikunja":{
-                    "secrets":{"VIKUNJA_TOKEN":"vikunja_token"},"args":["--port","1"]}}}"#,
+                r#"
+                version = 1
+                [plugins.vikunja]
+                secrets = { VIKUNJA_TOKEN = "vikunja_token" }
+                args = ["--port", "1"]
+                "#,
             ),
             &v1_catalog(),
         )
@@ -611,7 +610,7 @@ pub(crate) mod tests {
         assert!(setup.binding(&name("bearer")).unwrap().args.is_empty());
 
         let error = resolve(
-            &install(r#"{"version":1,"plugins":{"bearer":{"args":["x"]}}}"#),
+            &install("version = 1\nplugins.bearer.args = [\"x\"]\n"),
             &v1_catalog(),
         )
         .unwrap_err();
@@ -625,10 +624,7 @@ pub(crate) mod tests {
 
     #[test]
     fn refuses_an_unknown_plugin() {
-        let error = resolve(
-            &install(r#"{"version":1,"plugins":{"nope":{}}}"#),
-            &defaults(),
-        );
+        let error = resolve(&install("version = 1\nplugins.nope = {}\n"), &defaults());
         assert_eq!(error.unwrap_err(), SetupError::UnknownPlugin(name("nope")));
     }
 
@@ -639,7 +635,7 @@ pub(crate) mod tests {
             kind: PluginKind::Decision,
             name: name("bearer"),
         });
-        let error = resolve(&install(r#"{"version":1}"#), &catalog).unwrap_err();
+        let error = resolve(&install(EMPTY_INSTALL), &catalog).unwrap_err();
         assert_eq!(error, SetupError::MissingDefault(Slot::Identity));
     }
 
@@ -651,7 +647,7 @@ pub(crate) mod tests {
             Location::Default,
             r#"{"name":"other-identity","version":"1","kind":"decision","slot":"identity","hooks":["identity"]}"#,
         );
-        let error = resolve(&install(r#"{"version":1}"#), &catalog).unwrap_err();
+        let error = resolve(&install(EMPTY_INSTALL), &catalog).unwrap_err();
         assert_eq!(
             error,
             SetupError::TwoDefaults {
@@ -663,7 +659,7 @@ pub(crate) mod tests {
 
     #[test]
     fn refuses_two_claimants_without_a_choice() {
-        let text = r#"{"version":1,"plugins":{"ha-approval":{"secrets":{"token":"ha_token"}}}}"#;
+        let text = "version = 1\nplugins.ha-approval.secrets.token = \"ha_token\"\n";
         let error = resolve(&install(text), &v1_catalog()).unwrap_err();
         assert!(matches!(
             error,
@@ -676,15 +672,20 @@ pub(crate) mod tests {
 
     #[test]
     fn refuses_a_chosen_plugin_that_is_not_enabled() {
-        let text = r#"{"version":1,"slots":{"approval_channel":"ha-approval"}}"#;
+        let text = "version = 1\nslots.approval_channel = \"ha-approval\"\n";
         let error = resolve(&install(text), &v1_catalog()).unwrap_err();
         assert!(matches!(error, SetupError::SlotNotEnabled { .. }));
     }
 
     #[test]
     fn refuses_a_chosen_plugin_that_does_not_serve_the_slot() {
-        let text = r#"{"version":1,"plugins":{"vikunja":{"secrets":{"VIKUNJA_TOKEN":"v"},"secret_delivery":"env"}},
-                       "slots":{"approval_channel":"vikunja"}}"#;
+        let text = r#"
+            version = 1
+            slots.approval_channel = "vikunja"
+            [plugins.vikunja]
+            secrets.VIKUNJA_TOKEN = "v"
+            secret_delivery = "env"
+        "#;
         let error = resolve(&install(text), &v1_catalog()).unwrap_err();
         assert!(matches!(error, SetupError::WrongSlot { .. }));
     }
@@ -696,20 +697,19 @@ pub(crate) mod tests {
             kind: PluginKind::Effect,
             name: name("ha-call"),
         });
-        let text = r#"{"version":1,"plugins":{"ha-call":{}}}"#;
+        let text = "version = 1\nplugins.ha-call = {}\n";
         let error = resolve(&install(text), &catalog).unwrap_err();
         assert!(matches!(error, SetupError::MissingPair { .. }));
     }
 
     #[test]
     fn refuses_an_unbound_and_an_unknown_secret() {
-        let unbound = r#"{"version":1,"plugins":{"ha-call":{}}}"#;
+        let unbound = "version = 1\nplugins.ha-call = {}\n";
         assert!(matches!(
             resolve(&install(unbound), &v1_catalog()).unwrap_err(),
             SetupError::UnboundSecret { .. }
         ));
-        let unknown =
-            r#"{"version":1,"plugins":{"ha-call":{"secrets":{"token":"t","other":"o"}}}}"#;
+        let unknown = "version = 1\nplugins.ha-call.secrets = { token = \"t\", other = \"o\" }\n";
         assert!(matches!(
             resolve(&install(unknown), &v1_catalog()).unwrap_err(),
             SetupError::UnknownSecret { .. }
@@ -718,7 +718,12 @@ pub(crate) mod tests {
 
     #[test]
     fn refuses_env_delivery_for_an_included_plugin() {
-        let text = r#"{"version":1,"plugins":{"ha-call":{"secrets":{"token":"t"},"secret_delivery":"env"}}}"#;
+        let text = r#"
+            version = 1
+            [plugins.ha-call]
+            secrets.token = "t"
+            secret_delivery = "env"
+        "#;
         let error = resolve(&install(text), &v1_catalog()).unwrap_err();
         assert_eq!(
             error,
@@ -730,7 +735,32 @@ pub(crate) mod tests {
 
     #[test]
     fn refuses_another_install_version() {
-        let error = InstallFile::read(br#"{"version":2}"#).unwrap_err();
+        let error = InstallFile::read(b"version = 2\n").unwrap_err();
         assert_eq!(error, InstallError::Version { found: 2 });
+    }
+
+    #[test]
+    fn refuses_a_json_install_file() {
+        let error = InstallFile::read(br#"{"version":1}"#).unwrap_err();
+        assert!(matches!(
+            error,
+            InstallError::Read(StrictError::Syntax { line: 1, .. })
+        ));
+    }
+
+    #[test]
+    fn refuses_a_schema_field() {
+        let text = "\"$schema\" = \"urn:chaperone:install:1\"\nversion = 1\n";
+        let error = InstallFile::read(text.as_bytes()).unwrap_err();
+        assert!(matches!(
+            error,
+            InstallError::Read(StrictError::Shape { .. })
+        ));
+    }
+
+    #[test]
+    fn reads_comments_in_an_install_file() {
+        let text = "# The plugins the operator enables.\nversion = 1 # The file shape.\n";
+        assert!(InstallFile::read(text.as_bytes()).is_ok());
     }
 }

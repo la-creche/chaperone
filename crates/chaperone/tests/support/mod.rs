@@ -11,7 +11,7 @@ use sha2::{Digest, Sha256};
 pub const TOKEN: &str = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
 
 /// An install file that enables the `vikunja` upstream.
-pub const INSTALL: &str = r#"{"version":1,"plugins":{"vikunja":{}}}"#;
+pub const INSTALL: &str = "version = 1\nplugins.vikunja = {}\n";
 
 const VIKUNJA_MANIFEST: &str = r#"{"name":"vikunja","version":"1","kind":"effect","hooks":["upstream"],"command":["vikunja-mcp"]}"#;
 
@@ -177,7 +177,7 @@ pub fn write_secret(secrets: &Path, name: &str, value: &str) {
 pub fn config_dir(root: &Path, install: &str, policy: &str) -> PathBuf {
     let config = root.join("config");
     std::fs::create_dir_all(&config).unwrap();
-    std::fs::write(config.join("install.json"), install).unwrap();
+    std::fs::write(config.join("install.toml"), install).unwrap();
     std::fs::write(config.join("policy.json"), policy).unwrap();
     config
 }

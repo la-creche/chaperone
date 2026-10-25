@@ -65,7 +65,7 @@ Use each name as it is written here. Do not use a synonym for one.
 | decision | The result of the decision function: allow, deny or gate. |
 | front door | The adapter that receives an app's connection. |
 | policy file | `policy.json`. |
-| install file | `install.json`. |
+| install file | `install.toml`. |
 | audit line | One record of one call, written before the result returns. |
 | secret | A credential that chaperone holds for a plugin. |
 | the operator | The person who runs a deployment. |

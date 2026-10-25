@@ -2,7 +2,7 @@
 
 Rules for the default plugins. Read `plugins/AGENTS.md` first.
 
-This directory holds one plugin for each required slot. chaperone does not start unless each slot has a plugin. A default fills its slot when `install.json` names no other plugin for that slot. Plugins of more than one kind sit here side by side. This is the only directory where that happens.
+This directory holds one plugin for each required slot. chaperone does not start unless each slot has a plugin. A default fills its slot when `install.toml` names no other plugin for that slot. Plugins of more than one kind sit here side by side. This is the only directory where that happens.
 
 ## The default set
 

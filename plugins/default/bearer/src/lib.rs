@@ -103,7 +103,7 @@ mod tests {
             },
         );
 
-        let install = InstallFile::read(br#"{"version":1}"#).unwrap();
+        let install = InstallFile::read(b"version = 1\n").unwrap();
         let setup = chaperone_core::resolve(&install, &catalog).unwrap();
         let list = digests
             .iter()

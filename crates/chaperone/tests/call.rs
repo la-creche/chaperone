@@ -601,7 +601,7 @@ async fn a_decision_that_does_not_return_fails_no_decision() {
     );
     let catalog = chaperone::catalog::discover(&plugins).unwrap();
     let install =
-        InstallFile::read(br#"{"version":1,"plugins":{"hang":{},"vikunja":{}}}"#).unwrap();
+        InstallFile::read(b"version = 1\nplugins = { hang = {}, vikunja = {} }\n").unwrap();
     let setup = chaperone_core::resolve(&install, &catalog).unwrap();
     let hang = HangFence(PluginName::try_new("hang").unwrap());
     let policy = Policy::load(policy_text(30).as_bytes(), &setup, &[&hang]).unwrap();

@@ -29,5 +29,5 @@ Two kinds of effect plugin exist:
 ## Patterns
 
 - `ha-approval` is the reference approval plugin. It sends the request through the operator's existing approval flow and waits for the tap (`docs/design.md` section 12).
-- An effect plugin takes what differs per deployment, such as an address, from `args` in `install.json`. Its `plugin.json` is in git and names no deployment.
-- A third-party MCP server that reads secrets from the environment goes in `added/`, with `"secret_delivery": "env"` in `install.json`. chaperone logs a warning at each start.
+- An effect plugin takes what differs per deployment, such as an address, from `args` in `install.toml`. Its `plugin.json` is in git and names no deployment.
+- A third-party MCP server that reads secrets from the environment goes in `added/`, with `secret_delivery = "env"` in `install.toml`. chaperone logs a warning at each start.

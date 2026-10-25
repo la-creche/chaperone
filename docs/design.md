@@ -53,7 +53,7 @@ Limits of the guarantee:
 
 | Part | Path | Job |
 |---|---|---|
-| core | `crates/core` | Policy types, the strict JSON reader, the decision function, the hook traits. No I/O. |
+| core | `crates/core` | Policy types, the strict reader, the decision function, the hook traits. No I/O. |
 | chaperone | `crates/chaperone` | The program. It hosts the adapter plugins and the effect plugins, writes the audit, serves the admin socket and runs the CLI. |
 | editor | `crates/editor` | A separate program. It serves HTML forms that edit the policy file. |
 | plugins | `plugins/` | Every plugin. See section 7. |
@@ -166,28 +166,28 @@ The record keeps the arguments only as the SHA-256 of their canonical form. Clos
 | Part | Bound | Why |
 |---|---|---|
 | The decision | 5 seconds. A decision that takes longer fails the call with `no_decision` (G2). | A pure function over a policy file takes far less. A larger bound holds a caller longer on a stuck fence. A smaller bound fails a call on a slow host. |
-| The identity hook | None | The hook runs on the caller's thread, because `Credentials` borrows the request. A hook that never returns holds only that one call. A bound would need an owned copy of the bearer token. The hook is compiled code that the operator chooses in `install.json`. |
+| The identity hook | None | The hook runs on the caller's thread, because `Credentials` borrows the request. A hook that never returns holds only that one call. A bound would need an owned copy of the bearer token. The hook is compiled code that the operator chooses in `install.toml`. |
 | A call to an upstream | 30 seconds. A call that takes longer fails with `upstream_timeout` (G2). The audit holds a `failed` record. | A tool of version 1 answers in well under a second. A larger bound holds a caller on a stuck upstream. The upstream may still finish its work after the bound. chaperone does not retry (`crates/chaperone/AGENTS.md`). |
 | The life of a gate | 10 minutes from its creation. The approval hook call ends with it, and so does a kept result. | Long enough for a human away from the phone. Short enough that a forgotten gate does not approve a call hours later. |
 
 ## 6. Configuration
 
-All configuration is JSON. The strict reader reads every file. It refuses duplicate keys, a byte order mark, invalid UTF-8, unknown fields and input over the size cap. The Rust types are the source of truth. chaperone generates the JSON Schema from the types.
+The install file is TOML. The plugin manifest and the policy file stay JSON until their parts of step 9 in section 13. The strict reader reads every file. It refuses duplicate keys, a byte order mark, invalid UTF-8, unknown fields and input over the size cap. The Rust types are the source of truth. chaperone generates the JSON Schema from the types.
 
 | File | Who writes it | What it holds |
 |---|---|---|
-| `install.json` | The operator, by hand | Enabled plugins, the plugin for each slot, launch commands, secret bindings |
+| `install.toml` | The operator, by hand | Enabled plugins, the plugin for each slot, launch commands, secret bindings |
 | `policy.json` | The operator, through the editor or by hand | App instances, token digests, grants, argument fences, gates, limits |
 | `plugin.json` | The plugin author | One per plugin directory. See section 7.4. |
 | A secret file | The operator | One secret value per file |
 
 Rules:
 
-- Each file can name its schema in `$schema`. The value of each file is fixed: `urn:chaperone:install:1`, `urn:chaperone:policy:1` and `urn:chaperone:plugin:1`. A file that names another value does not load. The field stays optional, so a file written before step 8 still loads. `chaperone schema` prints the schema of each file and of each plugin policy section, from the Rust types.
-- Grants and install entries take a typed `note` field for the reason. JSON has no comments.
+- The policy file and the plugin manifest can name their schema in `$schema`. The value of each file is fixed: `urn:chaperone:policy:1` and `urn:chaperone:plugin:1`. A file that names another value does not load. The field stays optional, so a file written before step 8 still loads. The install file has no `$schema` field. `chaperone schema` prints the schema of each file and of each plugin policy section, from the Rust types.
+- Grants and install entries take a typed `note` field for the reason. JSON has no comments. The install file can also hold TOML comments.
 - An install entry of an effect plugin can hold `args`: arguments that chaperone appends to the command of the manifest at launch. The manifest names the program. The install file adds what differs per deployment, such as an address. An argument is never a secret value (G9).
 - The policy file names a plugin by name only. It cannot launch a binary or bind a secret.
-- The editor's OS user cannot write `install.json`.
+- The editor's OS user cannot write `install.toml`.
 - chaperone reloads `policy.json` when the file changes. A reload that fails denies every call until a valid file loads (G2).
 - A JSON Schema cannot express a rule across files. `chaperone check` is the only authority on a valid configuration.
 
@@ -230,11 +230,11 @@ Fences and upstreams are not slots. The install file can enable any number of th
 
 `<kind>` is `adapter`, `decision` or `effect`. The directory names the kind. A plugin with two halves of different kinds is two plugins with the same name, one per kind directory. Each half declares the other in `plugin.json`. chaperone refuses to start when a declared half is missing.
 
-To overrule a default plugin, the operator names a different plugin for that slot in `install.json`. When the install file names no plugin for a slot, the default plugin fills it. chaperone refuses to start when two enabled plugins claim one slot and the install file does not choose.
+To overrule a default plugin, the operator names a different plugin for that slot in `install.toml`. When the install file names no plugin for a slot, the default plugin fills it. chaperone refuses to start when two enabled plugins claim one slot and the install file does not choose.
 
 `crates/core/src/hook.rs` holds every contract between chaperone and a compiled plugin: the trait a decision or adapter plugin implements, and the `Gateway` trait a front door calls. A plugin implements a trait from that module and nothing else of `core`.
 
-A release binary contains the decision and adapter plugins from `default` and `included`. `crates/chaperone/src/registry.rs` is the one table that names each compiled plugin and how the build constructs it, slot plugins and fences alike. A compiled plugin that `install.json` puts in a slot without a row there refuses start (G2). A decision or adapter plugin in `added` needs a row and a build from source. An effect plugin in `added` works with a release binary, because it runs as its own process.
+A release binary contains the decision and adapter plugins from `default` and `included`. `crates/chaperone/src/registry.rs` is the one table that names each compiled plugin and how the build constructs it, slot plugins and fences alike. A compiled plugin that `install.toml` puts in a slot without a row there refuses start (G2). A decision or adapter plugin in `added` needs a row and a build from source. An effect plugin in `added` works with a release binary, because it runs as its own process.
 
 ### 7.4 The plugin manifest
 
@@ -247,7 +247,7 @@ Each plugin directory holds a `plugin.json`. It holds:
 - the kind of its other half, if it has two halves
 - for an effect plugin: the launch command
 
-An effect plugin serves one role: upstream or approval. A compiled plugin's policy-section schema comes from its Rust type, not from `plugin.json`, so the schema has one source. The secret delivery mode is the operator's choice, so it sits in `install.json`.
+An effect plugin serves one role: upstream or approval. A compiled plugin's policy-section schema comes from its Rust type, not from `plugin.json`, so the schema has one source. The secret delivery mode is the operator's choice, so it sits in `install.toml`.
 
 ### 7.5 Secret delivery to an effect plugin
 
@@ -273,7 +273,7 @@ An app sees one MCP server with the tools of every granted upstream. Each tool h
 
 Version 1 configures the LibreChat MCP server name as `chaperone`. This name has nine characters. A 50-character exposed name becomes 64 characters after LibreChat adds its suffix.
 
-`chaperone serve` starts the front door. It takes `--config-dir` (the directory of `install.json` and `policy.json`), `--plugins-dir`, `--audit-file`, `--secrets-dir` and `--listen`. The front door reads each request body through the strict reader before the MCP library parses it, with a cap of 1 MiB. It accepts only loopback `Host` headers, to stop DNS rebinding. Each `--allowed-host` adds one more, such as `host.docker.internal:8300` for an app in Docker.
+`chaperone serve` starts the front door. It takes `--config-dir` (the directory of `install.toml` and `policy.json`), `--plugins-dir`, `--audit-file`, `--secrets-dir` and `--listen`. The front door reads each request body through the strict reader before the MCP library parses it, with a cap of 1 MiB. It accepts only loopback `Host` headers, to stop DNS rebinding. Each `--allowed-host` adds one more, such as `host.docker.internal:8300` for an app in Docker.
 
 In version 1, the default front door serves plain HTTP only on a loopback address. chaperone refuses to start when the front door address is not loopback and TLS is not set up. TLS comes before the move to the host.
 
@@ -333,7 +333,7 @@ The admin socket is a Unix socket. Only the editor's OS user can open it. It is 
 
 A CLI command and its endpoint call the same function. They cannot drift. The CLI works when the chaperone service is down, so a broken policy can be fixed.
 
-`chaperone check <file>` takes `install.json` or `policy.json` in its configuration directory, and `--plugins-dir`. `POST /check` takes `{"file": "<name>", "content": "<text>"}` and answers `200 {"ok": true}` or `422 {"ok": false, "error": "<text>"}`. `POST /token` takes `{"app": "<id>"}` and answers `200 {"token": "<text>"}` once, or `422`. `chaperone token new` keeps the previous policy file as `policy.json.prev` and lands the new one by an atomic rename, as the editor does. Each function runs on the service's own files. The socket does not take a path.
+`chaperone check <file>` takes `install.toml` or `policy.json` in its configuration directory, and `--plugins-dir`. `POST /check` takes `{"file": "<name>", "content": "<text>"}` and answers `200 {"ok": true}` or `422 {"ok": false, "error": "<text>"}`. `POST /token` takes `{"app": "<id>"}` and answers `200 {"token": "<text>"}` once, or `422`. `chaperone token new` keeps the previous policy file as `policy.json.prev` and lands the new one by an atomic rename, as the editor does. Each function runs on the service's own files. The socket does not take a path.
 
 ## 11. The editor
 
@@ -358,14 +358,14 @@ Version 1 proves the idea with one client app.
 | Decision plugin | `ha-call` decision half: an entity allow-list for Home Assistant calls |
 | Effect plugins | `ha-call` effect half: the Home Assistant call. `ha-approval`: the approval channel, through the operator's existing approval flow. |
 
-`ha-call` is one plugin in two halves, both in `included`. The decision half is a fence. Each app instance lists the entities it may act on in its `ha-call` section of the policy file, as `{"entities": ["light.kitchen"]}`. A call to the `ha-call` upstream passes only when every entity in its `entity_id` is on that list. A call with no `entity_id` is denied, because a service call without a target acts on every entity of its domain. An app instance with no section may act on no entity (G2). A call to any other upstream passes untouched. The effect half serves one tool, `call_service`, with `domain`, `service`, `entity_id` and optional `data`. It sends one `POST /api/services/<domain>/<service>` to Home Assistant with the long-lived token `HA_TOKEN` from the secret line, and returns the answer as text. It takes `--url` through `args` in `install.json`.
+`ha-call` is one plugin in two halves, both in `included`. The decision half is a fence. Each app instance lists the entities it may act on in its `ha-call` section of the policy file, as `{"entities": ["light.kitchen"]}`. A call to the `ha-call` upstream passes only when every entity in its `entity_id` is on that list. A call with no `entity_id` is denied, because a service call without a target acts on every entity of its domain. An app instance with no section may act on no entity (G2). A call to any other upstream passes untouched. The effect half serves one tool, `call_service`, with `domain`, `service`, `entity_id` and optional `data`. It sends one `POST /api/services/<domain>/<service>` to Home Assistant with the long-lived token `HA_TOKEN` from the secret line, and returns the answer as text. It takes `--url` through `args` in `install.toml`.
 
 `ha-approval` sits in `plugins/effect/included`. The operator's flow is a Node-RED instance in front of Home Assistant with two legs. The plugin speaks the flow's language and changes nothing in the flow:
 
 1. **Out.** For each gate, the plugin sends `POST` to the flow's hook with the bearer `APPROVAL_TOKEN` and the body `{"job_id", "gate_id", "agent", "summary", "kind": "approval"}`. The flow pushes a card with Approve and Deny to the operator's phone. The gate ID of chaperone is 16 bytes. `job_id` is those bytes as 26 lower-case base32 characters of the ULID alphabet, and `gate_id` is the first 8 bytes as 16 hex characters, because the flow accepts only those shapes. `agent` is the app ID. `summary` is the exposed tool name and the canonical arguments, cut to 400 characters.
 2. **Back.** The plugin serves `POST /resume` on the address of its `--listen` argument. The flow sends the tap there with the bearer `RESUME_TOKEN` and the body `{"job", "gate", "decision"}`, where `decision` is `approve` or `deny`. The plugin decodes `job` to the gate, answers chaperone's `approve` call, and returns `200`. A repeat of the same decision returns `200`. A contradicting decision returns `409` and the first answer stands. An unknown gate returns `404`. A wrong bearer returns `401`.
 
-The plugin takes `--hook-url` and `--listen` through `args` in `install.json`. It refuses an unspecified listen address. It holds the two tokens in memory only, from the secret line of section 7.5. A hook that does not answer `2xx`, or a tap that does not come in the life of the gate, is a denial.
+The plugin takes `--hook-url` and `--listen` through `args` in `install.toml`. It refuses an unspecified listen address. It holds the two tokens in memory only, from the secret line of section 7.5. A hook that does not answer `2xx`, or a tap that does not come in the life of the gate, is a denial.
 
 Version 1 is done when a LibreChat agent makes three calls with this result:
 
@@ -398,6 +398,12 @@ One pull request per step:
 8. In two pull requests:
    1. The admin socket and the CLI: `schema`, `check` and `token new`.
    2. The editor.
+9. Configuration in TOML, in five pull requests:
+   1. The `toml` crate.
+   2. The strict TOML reader.
+   3. The install file.
+   4. The plugin manifest.
+   5. The policy file.
 
 ## 14. Open items
 

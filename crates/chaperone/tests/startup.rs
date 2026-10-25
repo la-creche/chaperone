@@ -132,7 +132,7 @@ fn a_missing_install_file_refuses_start() {
     let root = tempfile::tempdir().unwrap();
     let plugins = plugin_tree(root.path());
     let config = config_dir(root.path(), INSTALL, &policy_text(30));
-    std::fs::remove_file(config.join("install.json")).unwrap();
+    std::fs::remove_file(config.join("install.toml")).unwrap();
     let secrets = secrets_dir(root.path());
     let error = startup::load(
         &config,
@@ -174,8 +174,7 @@ fn tree_with_a_bound_secret(root: &Path) -> (PathBuf, PathBuf) {
         r#"{"name":"vikunja","version":"1","kind":"effect","hooks":["upstream"],
             "secrets":["VIKUNJA_TOKEN"],"command":["vikunja-mcp"]}"#,
     );
-    let install =
-        r#"{"version":1,"plugins":{"vikunja":{"secrets":{"VIKUNJA_TOKEN":"vikunja_token"}}}}"#;
+    let install = "version = 1\nplugins.vikunja.secrets.VIKUNJA_TOKEN = \"vikunja_token\"\n";
     let config = config_dir(root, install, &policy_text(30));
     (plugins, config)
 }
@@ -243,7 +242,7 @@ fn a_setup_without_secrets_never_needs_the_directory() {
 #[test]
 fn env_delivery_without_a_secret_is_a_warning() {
     let root = tempfile::tempdir().unwrap();
-    let install = r#"{"version":1,"plugins":{"vikunja":{"secret_delivery":"env"}}}"#;
+    let install = "version = 1\nplugins.vikunja.secret_delivery = \"env\"\n";
     let loaded = load(root.path(), install, &policy_text(30)).unwrap();
     assert_eq!(
         loaded.warnings,
@@ -262,8 +261,11 @@ fn another_plugin_in_a_slot_refuses_start() {
         "decision/included/other-identity",
         r#"{"name":"other-identity","version":"1","kind":"decision","slot":"identity","hooks":["identity"]}"#,
     );
-    let install = r#"{"version":1,"plugins":{"other-identity":{},"vikunja":{}},
-        "slots":{"identity":"other-identity"}}"#;
+    let install = r#"
+        version = 1
+        plugins = { other-identity = {}, vikunja = {} }
+        slots.identity = "other-identity"
+    "#;
     let config = config_dir(root.path(), install, &policy_text(30));
     let secrets = secrets_dir(root.path());
     let error = startup::load(
