@@ -6,15 +6,20 @@
 //! (G2). An effect slot needs no row: the effect host launches its plugin
 //! as a process.
 //!
+//! A compiled fence has a row in [`FENCES`] the same way.
+//!
 //! A compiled plugin in `plugins/<kind>/added/` needs a row here and a
 //! build from source.
 
 use std::path::Path;
 use std::sync::Arc;
 
-use chaperone_core::{AuditSink, Clock, Identity, PluginName, SecretSource, Slot};
+use chaperone_core::{
+    AuditSink, Clock, Fence, Identity, NameError, PluginName, SecretSource, Slot,
+};
 use chaperone_plugin_audit_jsonl::{JsonlAudit, OpenError};
 use chaperone_plugin_bearer::BearerIdentity;
+use chaperone_plugin_ha_call_fence::EntityFence;
 use chaperone_plugin_secret_files::FileSecrets;
 use chaperone_plugin_system_clock::SystemClock;
 
@@ -73,6 +78,29 @@ pub fn find(slot: Slot, plugin: &PluginName) -> Option<&'static Entry> {
     ENTRIES
         .iter()
         .find(|entry| entry.slot == slot && entry.name == plugin.as_str())
+}
+
+/// One compiled fence: its plugin name and how to build it.
+#[derive(Debug, Clone, Copy)]
+pub struct FenceEntry {
+    pub name: &'static str,
+    pub build: fn() -> Result<Box<dyn Fence>, NameError>,
+}
+
+/// Every fence this build can run.
+pub const FENCES: &[FenceEntry] = &[FenceEntry {
+    name: "ha-call",
+    build: ha_call,
+}];
+
+/// The row of the fence `plugin`, if this build has one.
+#[must_use]
+pub fn find_fence(plugin: &PluginName) -> Option<&'static FenceEntry> {
+    FENCES.iter().find(|entry| entry.name == plugin.as_str())
+}
+
+fn ha_call() -> Result<Box<dyn Fence>, NameError> {
+    Ok(Box::new(EntityFence::new()?))
 }
 
 fn bearer() -> Box<dyn Identity> {

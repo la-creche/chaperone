@@ -10,6 +10,8 @@ members = [
   "plugins/default/mcp-http",
   "plugins/default/secret-files",
   "plugins/default/system-clock",
+  "plugins/decision/included/ha-call",
+  "plugins/effect/included/ha-call",
   "plugins/effect/included/ha-approval",
 ]
 

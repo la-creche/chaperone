@@ -9,9 +9,10 @@ use std::path::Path;
 use std::sync::Arc;
 
 use chaperone_core::{
-    AuditSink, Catalog, Clock, INSTALL_FILE_CAP, Identity, InstallError, InstallFile,
-    POLICY_FILE_CAP, PluginKind, PluginName, Policy, PolicyError, RunId, Secret, SecretDelivery,
-    SecretError, SecretName, SecretParam, SecretSource, Setup, SetupError, Slot, resolve,
+    AuditSink, Catalog, Clock, Fence, INSTALL_FILE_CAP, Identity, InstallError, InstallFile,
+    NameError, POLICY_FILE_CAP, PluginKind, PluginName, Policy, PolicyError, RunId, Secret,
+    SecretDelivery, SecretError, SecretName, SecretParam, SecretSource, Setup, SetupError, Slot,
+    resolve,
 };
 use chaperone_plugin_audit_jsonl::OpenError;
 
@@ -41,6 +42,13 @@ pub enum StartError {
     EmptySlot(Slot),
     #[error("this build has no code for {plugin} in the slot {slot}")]
     NoCode { slot: Slot, plugin: PluginName },
+    #[error("this build has no code for the fence {plugin}")]
+    NoFenceCode { plugin: PluginName },
+    #[error("the fence {plugin} could not be built: {error}")]
+    FenceBuild {
+        plugin: PluginName,
+        error: NameError,
+    },
     #[error("the secret {name} for {plugin} ({param}) cannot be read: {error}")]
     Secret {
         plugin: PluginName,
@@ -146,10 +154,10 @@ pub fn load(
         }
     }
 
-    // No fence plugin has code in build step 3, so an active fence refuses
-    // start through `PolicyError::MissingFence`.
+    let fences = fences_for(&setup)?;
+    let fence_refs: Vec<&dyn Fence> = fences.iter().map(AsRef::as_ref).collect();
     let policy_bytes = files::read_capped(&config_dir.join(POLICY_FILE), POLICY_FILE_CAP)?;
-    let policy = Policy::load(&policy_bytes, &setup, &[])?;
+    let policy = Policy::load(&policy_bytes, &setup, &fence_refs)?;
     let run = run_id()?;
     Ok(Loaded {
         run,
@@ -174,6 +182,23 @@ pub fn check_listen(address: SocketAddr) -> Result<(), StartError> {
         return Ok(());
     }
     Err(StartError::NotLoopback(address))
+}
+
+/// Every active fence of the setup, built from its registry row. A fence
+/// without a row refuses start (G2).
+fn fences_for(setup: &Setup) -> Result<Vec<Box<dyn Fence>>, StartError> {
+    let mut fences = Vec::new();
+    for plugin in setup.fences() {
+        let entry = registry::find_fence(plugin).ok_or_else(|| StartError::NoFenceCode {
+            plugin: plugin.clone(),
+        })?;
+        let fence = (entry.build)().map_err(|error| StartError::FenceBuild {
+            plugin: plugin.clone(),
+            error,
+        })?;
+        fences.push(fence);
+    }
+    Ok(fences)
 }
 
 /// The registry row of the plugin that fills `slot`. A slot without a

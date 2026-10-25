@@ -233,7 +233,7 @@ To overrule a default plugin, the operator names a different plugin for that slo
 
 `crates/core/src/hook.rs` holds every contract between chaperone and a compiled plugin: the trait a decision or adapter plugin implements, and the `Gateway` trait a front door calls. A plugin implements a trait from that module and nothing else of `core`.
 
-A release binary contains the decision and adapter plugins from `default` and `included`. `crates/chaperone/src/registry.rs` is the one table that names each compiled plugin and how the build constructs it. A compiled plugin that `install.json` puts in a slot without a row there refuses start (G2). A decision or adapter plugin in `added` needs a row and a build from source. An effect plugin in `added` works with a release binary, because it runs as its own process.
+A release binary contains the decision and adapter plugins from `default` and `included`. `crates/chaperone/src/registry.rs` is the one table that names each compiled plugin and how the build constructs it, slot plugins and fences alike. A compiled plugin that `install.json` puts in a slot without a row there refuses start (G2). A decision or adapter plugin in `added` needs a row and a build from source. An effect plugin in `added` works with a release binary, because it runs as its own process.
 
 ### 7.4 The plugin manifest
 
@@ -352,6 +352,8 @@ Version 1 proves the idea with one client app.
 | Upstream | An existing Vikunja MCP server, unchanged, with the env exception |
 | Decision plugin | `ha-call` decision half: an entity allow-list for Home Assistant calls |
 | Effect plugins | `ha-call` effect half: the Home Assistant call. `ha-approval`: the approval channel, through the operator's existing approval flow. |
+
+`ha-call` is one plugin in two halves, both in `included`. The decision half is a fence. Each app instance lists the entities it may act on in its `ha-call` section of the policy file, as `{"entities": ["light.kitchen"]}`. A call to the `ha-call` upstream passes only when every entity in its `entity_id` is on that list. A call with no `entity_id` is denied, because a service call without a target acts on every entity of its domain. An app instance with no section may act on no entity (G2). A call to any other upstream passes untouched. The effect half serves one tool, `call_service`, with `domain`, `service`, `entity_id` and optional `data`. It sends one `POST /api/services/<domain>/<service>` to Home Assistant with the long-lived token `HA_TOKEN` from the secret line, and returns the answer as text. It takes `--url` through `args` in `install.json`.
 
 `ha-approval` sits in `plugins/effect/included`. The operator's flow is a Node-RED instance in front of Home Assistant with two legs. The plugin speaks the flow's language and changes nothing in the flow:
 

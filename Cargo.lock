@@ -273,6 +273,7 @@ dependencies = [
  "chaperone-core",
  "chaperone-plugin-audit-jsonl",
  "chaperone-plugin-bearer",
+ "chaperone-plugin-ha-call-fence",
  "chaperone-plugin-mcp-http",
  "chaperone-plugin-secret-files",
  "chaperone-plugin-system-clock",
@@ -353,6 +354,29 @@ dependencies = [
  "serde_json",
  "subtle",
  "tokio",
+]
+
+[[package]]
+name = "chaperone-plugin-ha-call"
+version = "0.0.0"
+dependencies = [
+ "axum",
+ "clap",
+ "reqwest",
+ "rmcp",
+ "serde",
+ "serde_json",
+ "tokio",
+]
+
+[[package]]
+name = "chaperone-plugin-ha-call-fence"
+version = "0.0.0"
+dependencies = [
+ "chaperone-core",
+ "proptest",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]
