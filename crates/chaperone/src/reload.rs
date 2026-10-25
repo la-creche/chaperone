@@ -90,9 +90,8 @@ impl PolicyFile {
                 tracing::info!(file = %self.path.display(), "reloaded the policy file");
                 Some(Arc::new(policy))
             }
-            // DESIGN-QUESTION: section 6. A refused file could keep the old
-            // policy or deny every call. This denies every call, so a bad
-            // write by the operator stops every app until a valid file lands.
+            // A refused file denies every call until a valid file lands
+            // (section 6 of `docs/design.md`).
             Err(error) => {
                 tracing::error!(
                     file = %self.path.display(),
