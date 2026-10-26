@@ -42,6 +42,7 @@ fn the_repository_plugin_tree_holds_the_defaults_and_the_included() {
     assert_eq!(
         names,
         [
+            "attendance",
             "bearer",
             "ha-call",
             "audit-jsonl",

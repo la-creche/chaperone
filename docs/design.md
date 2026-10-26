@@ -377,10 +377,26 @@ Version 1 proves the idea with one client app.
 |---|---|
 | Client app | The agent runtime in the sandbox. The runtime of version 1 is Flue. |
 | Upstream | An existing Vikunja MCP server, unchanged, with the env exception |
-| Decision plugin | `ha-call` decision half: an entity allow-list for Home Assistant calls |
+| Decision plugins | `ha-call` decision half: an entity allow-list for Home Assistant calls. `attendance` decision half: the families each app instance may reach. |
 | Effect plugins | `ha-call` effect half: the Home Assistant call. `ha-approval`: the approval channel, through the operator's existing approval flow. `release`: one request file in the release spool per call. |
 
 `ha-call` is one plugin in two halves, both in `included`. The decision half is a fence. Each app instance lists the entities it may act on in its `ha-call` section of the policy file, as `entities = ["light.kitchen"]`. A call to the `ha-call` upstream passes only when every entity in its `entity_id` is on that list. A call with no `entity_id` is denied, because a service call without a target acts on every entity of its domain. An app instance with no section may act on no entity (G2). A call to any other upstream passes untouched. The effect half serves one tool, `call_service`, with `domain`, `service`, `entity_id` and optional `data`. It sends one `POST /api/services/<domain>/<service>` to Home Assistant with the long-lived token `HA_TOKEN` from the secret line, and returns the answer as text. It takes `--url` through `args` in `install.toml`.
+
+`attendance` is one plugin in two halves. The decision half is a fence in `plugins/decision/included`. Each app instance lists the families it may reach in its `attendance` section of the policy file, such as `delegates = ["research"]`. A family name is `a-z`, then 1 to 30 of `a-z`, `0-9` and `-`.
+
+| Key | Fences the tool | At most |
+|---|---|---|
+| `delegates` | `invoke_agent` | 32 families |
+| `enqueue_targets` | `enqueue` | 64 families |
+
+The fence applies these rules to a call to the `attendance` upstream:
+
+1. A call of `invoke_agent` or `enqueue` passes only when its `family` argument is on the list for its tool.
+2. A call with no section, or with an empty list for its tool, is denied (G2).
+3. A call of `job_status` passes. The effect half limits it to the jobs of the caller.
+4. A call of any other tool is denied.
+
+A call to any other upstream passes untouched. Each deny reason starts with `tool_not_granted`. A section with another key, a bad family name or a list over its cap does not load. The effect half serves the three tools (step 10.3).
 
 `ha-approval` sits in `plugins/effect/included`. The operator's flow is a Node-RED instance in front of Home Assistant with two legs. The plugin speaks the flow's language and changes nothing in the flow:
 
