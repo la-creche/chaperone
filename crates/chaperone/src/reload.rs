@@ -1,7 +1,8 @@
 //! The policy the call path decides with. chaperone reloads the policy file
 //! when the file changes (`docs/design.md` 6). Before each call it compares
 //! the file's device, inode, size and modification time with the loaded
-//! file. A change re-reads the file through the strict reader.
+//! file. A change re-reads the file through the strict reader. While no
+//! valid policy is loaded, each call re-reads the file.
 
 use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
@@ -76,12 +77,13 @@ impl PolicyFile {
     }
 
     /// The policy to decide one call with, reloaded first when the file
-    /// changed. `None` means no valid policy is loaded, and the call is
-    /// denied (G2).
+    /// changed or when no valid policy is loaded. `None` means no valid
+    /// policy is loaded, and the call is denied (G2).
     pub fn current(&self) -> Option<Arc<Policy>> {
         let mut state = self.state.lock().ok()?;
         let stamp = Stamp::of(&self.path).ok();
-        if stamp == state.stamp {
+        // A mode change keeps the stamp, so a refused read is tried again.
+        if stamp == state.stamp && state.policy.is_some() {
             return state.policy.clone();
         }
         state.stamp = stamp;

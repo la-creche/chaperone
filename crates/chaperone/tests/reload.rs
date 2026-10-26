@@ -12,6 +12,8 @@
 mod support;
 
 use std::collections::BTreeMap;
+use std::fs::Permissions;
+use std::os::unix::fs::PermissionsExt;
 use std::path::Path;
 use std::sync::{Arc, Mutex};
 
@@ -208,4 +210,32 @@ async fn a_removed_file_denies_every_call() {
         matches!(outcome, CallOutcome::Denied(DenyReason::PolicyNotLoaded)),
         "{outcome:?}"
     );
+}
+
+#[tokio::test]
+async fn a_file_made_readable_again_loads_without_a_new_stamp() {
+    let Harness {
+        _root,
+        config,
+        gateway,
+        ..
+    } = harness(&policy_granting("list_tasks"));
+    let staged = config.join("policy.toml.new");
+    std::fs::write(&staged, policy_granting("list_tasks")).unwrap();
+    std::fs::set_permissions(&staged, Permissions::from_mode(0o000)).unwrap();
+    std::fs::rename(&staged, config.join("policy.toml")).unwrap();
+    if std::fs::File::open(config.join("policy.toml")).is_ok() {
+        // A superuser reads a file of mode 000, so no read fails here.
+        return;
+    }
+    let unreadable = call(&gateway, "vikunja__list_tasks").await;
+    assert!(
+        matches!(unreadable, CallOutcome::Denied(DenyReason::PolicyNotLoaded)),
+        "{unreadable:?}"
+    );
+
+    // A mode change keeps the device, inode, size and modification time.
+    std::fs::set_permissions(config.join("policy.toml"), Permissions::from_mode(0o600)).unwrap();
+    let readable = call(&gateway, "vikunja__list_tasks").await;
+    assert!(allowed(&readable), "{readable:?}");
 }
