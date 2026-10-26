@@ -282,7 +282,7 @@ An app sees one MCP server with the tools of every granted upstream. Each tool h
 
 Version 1 has no client that adds the LibreChat suffix. The agent runtime of version 1 names its connection to chaperone `ch`, so the model sees `mcp__ch__<upstream>__<tool>`. The 50-character budget can widen (section 14).
 
-`chaperone serve` starts the front door. It takes `--config-dir` (the directory of `install.toml` and `policy.toml`), `--plugins-dir`, `--audit-file`, `--secrets-dir` and `--listen`. The front door reads each request body through the strict reader before the MCP library parses it, with a cap of 1 MiB. It accepts only loopback `Host` headers, to stop DNS rebinding. Each `--allowed-host` adds one more, such as `host.docker.internal:8300` for an app in Docker.
+`chaperone serve` starts the front door. It takes `--config-dir` (the directory of `install.toml` and `policy.toml`), `--plugins-dir`, `--audit-file`, `--secrets-dir` and `--listen`. Section 8 gives the defaults of `--config-dir` and `--plugins-dir`. The front door reads each request body through the strict reader before the MCP library parses it, with a cap of 1 MiB. It accepts only loopback `Host` headers, to stop DNS rebinding. Each `--allowed-host` adds one more, such as `host.docker.internal:8300` for an app in Docker.
 
 The front door answers `GET /healthz` with no bearer. The answer is `200` with the body `{"ok":true}` while a valid policy is loaded. It is `503` with the body `{"ok":false}` while no valid policy is loaded (section 6). The body is fixed. It shows no policy content, no secret and no version.
 
@@ -369,6 +369,15 @@ A step that fails writes one line to stderr and exits with 125, before the exec.
 
 The host starts the helper with the one variable and no other. It holds `CAP_SETUID` while it starts, and an ambient capability does not make the dynamic loader ignore `LD_PRELOAD`. A switch between two users that are not root keeps every capability, so step 5 is necessary. The calls of step 4 change the calling thread only, so the helper runs on one thread.
 
+The production layout gives the default of two flags:
+
+| Path | Contents | Default of |
+|---|---|---|
+| `/etc/chaperone` | `install.toml` and `policy.toml` | `--config-dir` |
+| `/etc/chaperone/plugins` | The plugin tree of section 7.3 | `--plugins-dir` |
+
+`chaperone serve`, `chaperone verify`, `chaperone check` and `chaperone token new` take the same defaults. One layout thus applies to the service and to each check of it. A flag overrules its default. The plugin tree is not in the install tree of the release tool (section 12). The release archive holds only the two programs, and the release tool replaces that tree at each install.
+
 ## 9. Tokens
 
 `chaperone token new <app>` creates a bearer token for an app instance:
@@ -395,7 +404,7 @@ A CLI command and its endpoint call the same function. They cannot drift. The CL
 
 `chaperone check <file>` takes `install.toml` or `policy.toml` in its configuration directory, and `--plugins-dir`. `POST /check` takes `{"file": "<name>", "content": "<text>"}` and answers `200 {"ok": true}` or `422 {"ok": false, "error": "<text>"}`. `POST /token` takes `{"app": "<id>"}` and answers `200 {"token": "<text>"}` once, or `422`. `chaperone token new` keeps the previous policy file as `policy.toml.prev` and lands the new one by an atomic rename. Each function runs on the service's own files. The socket does not take a path.
 
-`chaperone verify` takes `--config-dir`, `--plugins-dir`, `--listen`, `--env-file`, `--listen-key` and `--json`. The front door address comes from `--listen`, or from one key of an env file:
+`chaperone verify` takes `--config-dir`, `--plugins-dir`, `--listen`, `--env-file`, `--listen-key` and `--json`. Without `--config-dir` and `--plugins-dir`, it reads the production layout (section 8). A release tool can thus run it with no directory flag. A configuration directory that does not exist fails the checks of `install.toml` and `policy.toml`. It is not an error of usage. The front door address comes from `--listen`, or from one key of an env file:
 
 - `--env-file <path>` names an env file of the service, such as the `EnvironmentFile=` of its unit. `--listen-key <NAME>` names the key that holds the address. Without it, the key is `CHAPERONE_LISTEN`.
 - `--listen` and `--env-file` cannot be used together. `--listen-key` needs `--env-file`.
@@ -579,6 +588,10 @@ One pull request per step:
     8. The in-flight limit of an upstream grant (section 5.2).
     9. The `check_sections` fence hook, and the one-hop check of `attendance` through it (sections 7.8 and 12).
     10. `chaperone verify` reads the front door address from an env file (section 10).
+11. The first install by the external release tool, one pull request each:
+    1. The defaults of the production layout (section 8).
+    2. The component manifest and the service unit (sections 8 and 12).
+    3. The version `0.2.0` (section 12).
 
 ## 14. Open items
 

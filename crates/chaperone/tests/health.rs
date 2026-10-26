@@ -292,3 +292,65 @@ fn the_cli_takes_the_named_key_and_reports_a_bad_file_without_its_values() {
         assert_eq!(checks[3]["detail"], "no address to probe", "{report}");
     }
 }
+
+#[test]
+fn the_cli_runs_the_release_tool_command_with_no_dirs() {
+    let dir = tempfile::tempdir().unwrap();
+    let env_file = dir.path().join("site.env");
+    std::fs::write(
+        &env_file,
+        format!("CHAPERONE_LISTEN={}\n", unused_address()),
+    )
+    .unwrap();
+    let output = Command::new(env!("CARGO_BIN_EXE_chaperone"))
+        .arg("verify")
+        .arg("--json")
+        .arg("--env-file")
+        .arg(&env_file)
+        .arg("--listen-key")
+        .arg("CHAPERONE_LISTEN")
+        .output()
+        .unwrap();
+    // A usage error exits with 2 and prints no report.
+    assert_eq!(output.status.code(), Some(1), "{output:?}");
+    let report: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    let checks = report["checks"].as_array().unwrap();
+    let names: Vec<&str> = checks
+        .iter()
+        .map(|check| check["name"].as_str().unwrap())
+        .collect();
+    assert_eq!(
+        names,
+        ["install.toml", "policy.toml", "env-file", "healthz"]
+    );
+    assert_eq!(checks[2]["ok"], true, "{report}");
+    assert_eq!(checks[3]["ok"], false, "{report}");
+}
+
+#[test]
+fn the_cli_reports_a_missing_config_dir_as_a_failed_check() {
+    let root = tempfile::tempdir().unwrap();
+    let plugins = plugin_tree(root.path());
+    let missing = root.path().join("no-such-dir");
+    let output = Command::new(env!("CARGO_BIN_EXE_chaperone"))
+        .arg("verify")
+        .arg("--json")
+        .arg("--config-dir")
+        .arg(&missing)
+        .arg("--plugins-dir")
+        .arg(&plugins)
+        .arg("--listen")
+        .arg(unused_address().to_string())
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(1), "{output:?}");
+    let report: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    let checks = report["checks"].as_array().unwrap();
+    for check in &checks[..2] {
+        assert_eq!(check["ok"], false, "{report}");
+        assert!(
+            check["detail"].as_str().unwrap().starts_with("cannot read"),
+            "{report}"
+        );
+    }
+}
