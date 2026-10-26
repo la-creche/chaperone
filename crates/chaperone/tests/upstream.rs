@@ -18,6 +18,7 @@ use std::path::{Path, PathBuf};
 use chaperone::approval::ApprovalChannel;
 use chaperone::effect::{self, LaunchError, Redactor};
 use chaperone::gateway::{Bounds, ChaperoneGateway, Plugins, SharedGateway};
+use chaperone::registry::AuditMode;
 use chaperone::startup;
 use std::time::Duration;
 
@@ -101,7 +102,14 @@ async fn running_with(
     let secrets = secrets_dir(root.path());
     write_secret(&secrets, "vikunja_token", "tok-123");
     let audit_path = root.path().join("audit.jsonl");
-    let loaded = startup::load(&config, &plugins, &audit_path, &secrets).unwrap();
+    let loaded = startup::load(
+        &config,
+        &plugins,
+        &audit_path,
+        AuditMode::OwnerOnly,
+        &secrets,
+    )
+    .unwrap();
     let redactor = Redactor::new(loaded.secrets);
     let fake = fake_binary();
     let launched =
@@ -331,6 +339,7 @@ async fn a_command_that_does_not_exist_refuses_start() {
         &config,
         &plugins,
         &root.path().join("audit.jsonl"),
+        AuditMode::OwnerOnly,
         &secrets,
     )
     .unwrap();
@@ -466,6 +475,7 @@ async fn an_approval_channel_without_the_approve_tool_refuses_start() {
         &config,
         &plugins,
         &root.path().join("audit.jsonl"),
+        AuditMode::OwnerOnly,
         &secrets,
     )
     .unwrap();
@@ -519,6 +529,7 @@ async fn install_args_are_appended_to_the_command() {
         &config,
         &plugins,
         &root.path().join("audit.jsonl"),
+        AuditMode::OwnerOnly,
         &secrets,
     )
     .unwrap();

@@ -282,7 +282,14 @@ An app sees one MCP server with the tools of every granted upstream. Each tool h
 
 Version 1 has no client that adds the LibreChat suffix. The agent runtime of version 1 names its connection to chaperone `ch`, so the model sees `mcp__ch__<upstream>__<tool>`. The 50-character budget can widen (section 14).
 
-`chaperone serve` starts the front door. It takes `--config-dir` (the directory of `install.toml` and `policy.toml`), `--plugins-dir`, `--audit-file`, `--secrets-dir` and `--listen`. Section 8 gives the defaults of `--config-dir` and `--plugins-dir`. The front door reads each request body through the strict reader before the MCP library parses it, with a cap of 1 MiB. It accepts only loopback `Host` headers, to stop DNS rebinding. Each `--allowed-host` adds one more, such as `host.docker.internal:8300` for an app in Docker.
+`chaperone serve` starts the front door. It takes `--config-dir` (the directory of `install.toml` and `policy.toml`), `--plugins-dir`, `--audit-file`, `--audit-mode`, `--secrets-dir` and `--listen`. Section 8 gives the defaults of `--config-dir` and `--plugins-dir`. `--audit-mode` sets the mode of the audit file. It takes `0600` or `0640`, and no other value:
+
+| `--audit-mode` | Who reads the audit file | Mode of its directory |
+|---|---|---|
+| `0600`, the default | Only the user that runs chaperone | 0700 |
+| `0640` | That user and the group of the file. Only that user writes it. | 0750 |
+
+The audit sink creates a missing file with the mode. It refuses to open a file with another mode, and chaperone then refuses to start. One exception: with `0640`, the sink sets a file of mode 0600 to 0640. A file of the 0600 default thus stays in use when an operator changes to `0640`. The sink does not set the mode of the directory. The service unit sets it (section 8). The front door reads each request body through the strict reader before the MCP library parses it, with a cap of 1 MiB. It accepts only loopback `Host` headers, to stop DNS rebinding. Each `--allowed-host` adds one more, such as `host.docker.internal:8300` for an app in Docker.
 
 The front door answers `GET /healthz` with no bearer. The answer is `200` with the body `{"ok":true}` while a valid policy is loaded. It is `503` with the body `{"ok":false}` while no valid policy is loaded (section 6). The body is fixed. It shows no policy content, no secret and no version.
 
@@ -384,13 +391,13 @@ The service unit gives the other paths of the layout:
 |---|---|---|
 | `/opt/components/chaperone/bin` | `chaperone`, `chaperone-as` and the program of each effect plugin of this repository | The release tool, from the release archive |
 | `/etc/chaperone/secrets` | One file per secret, as above | The operator. The `chaperone` user owns the directory, mode 0700. |
-| `/var/lib/chaperone/audit.jsonl` | The audit file | systemd makes the directory, mode 0700. chaperone makes the file. |
+| `/var/lib/chaperone/audit.jsonl` | The audit file, mode 0640 (`--audit-mode 0640`) | systemd makes the directory, mode 0750, and sets that mode at each start. chaperone makes the file. The group `chaperone` reads the file. |
 | `/run/chaperone/admin.sock` | The admin socket (section 10) | systemd makes the directory, mode 0750. chaperone makes the socket. |
 | `/etc/creche/site.env` | `CHAPERONE_LISTEN`, the front door address | The operator |
 
 The unit reads `CHAPERONE_LISTEN` from the site file. It passes the value to `--listen` and to `--allowed-host`. Before the first start, the operator does these steps:
 
-1. Make the OS user and the group `chaperone`.
+1. Make the OS user and the group `chaperone`. Put the OS user of each reader of the audit file in the group.
 2. Write `install.toml` and `policy.toml` in `/etc/chaperone`.
 3. Copy the plugin tree of this repository into `/etc/chaperone/plugins`. The program of each effect plugin of this repository is next to `chaperone`. Put the program of each other effect plugin on the `PATH` of the unit.
 4. Write each bound secret in `/etc/chaperone/secrets`.

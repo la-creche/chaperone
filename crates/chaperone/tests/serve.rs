@@ -17,6 +17,7 @@ use std::sync::Arc;
 
 use chaperone::effect::{Redactor, Upstreams};
 use chaperone::gateway::{Bounds, ChaperoneGateway, Plugins, SharedGateway};
+use chaperone::registry::AuditMode;
 use chaperone::startup;
 use chaperone_plugin_mcp_http::BODY_CAP;
 use rmcp::ServiceExt;
@@ -46,7 +47,14 @@ async fn serve() -> Served {
     let config = config_dir(root.path(), INSTALL, &policy_text(30));
     let audit_path = root.path().join("audit.jsonl");
     let secrets = secrets_dir(root.path());
-    let loaded = startup::load(&config, &plugins, &audit_path, &secrets).unwrap();
+    let loaded = startup::load(
+        &config,
+        &plugins,
+        &audit_path,
+        AuditMode::OwnerOnly,
+        &secrets,
+    )
+    .unwrap();
     let gateway = Arc::new(SharedGateway::new(ChaperoneGateway::new(
         loaded.run,
         loaded.policy,
