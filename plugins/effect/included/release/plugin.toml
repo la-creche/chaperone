@@ -1,0 +1,5 @@
+name = "release"
+version = "1.0.0"
+kind = "effect"
+hooks = ["upstream"]
+command = ["chaperone-release"]

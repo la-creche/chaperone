@@ -376,7 +376,7 @@ Version 1 proves the idea with one client app.
 | Client app | The agent runtime in the sandbox. The runtime of version 1 is Flue. |
 | Upstream | An existing Vikunja MCP server, unchanged, with the env exception |
 | Decision plugin | `ha-call` decision half: an entity allow-list for Home Assistant calls |
-| Effect plugins | `ha-call` effect half: the Home Assistant call. `ha-approval`: the approval channel, through the operator's existing approval flow. |
+| Effect plugins | `ha-call` effect half: the Home Assistant call. `ha-approval`: the approval channel, through the operator's existing approval flow. `release`: one request file in the release spool per call. |
 
 `ha-call` is one plugin in two halves, both in `included`. The decision half is a fence. Each app instance lists the entities it may act on in its `ha-call` section of the policy file, as `entities = ["light.kitchen"]`. A call to the `ha-call` upstream passes only when every entity in its `entity_id` is on that list. A call with no `entity_id` is denied, because a service call without a target acts on every entity of its domain. An app instance with no section may act on no entity (G2). A call to any other upstream passes untouched. The effect half serves one tool, `call_service`, with `domain`, `service`, `entity_id` and optional `data`. It sends one `POST /api/services/<domain>/<service>` to Home Assistant with the long-lived token `HA_TOKEN` from the secret line, and returns the answer as text. It takes `--url` through `args` in `install.toml`.
 
@@ -386,6 +386,26 @@ Version 1 proves the idea with one client app.
 2. **Back.** The plugin serves `POST /resume` on the address of its `--listen` argument. The flow sends the tap there with the bearer `RESUME_TOKEN` and the body `{"job", "gate", "decision"}`, where `decision` is `approve` or `deny`. The plugin decodes `job` to the gate, answers chaperone's `approve` call, and returns `200`. A repeat of the same decision returns `200`. A contradicting decision returns `409` and the first answer stands. An unknown gate returns `404`. A wrong bearer returns `401`.
 
 The plugin takes `--hook-url` and `--listen` through `args` in `install.toml`. It refuses an unspecified listen address. It holds the two tokens in memory only, from the secret line of section 7.5. A hook that does not answer `2xx`, or a tap that does not come in the life of the gate, is a denial.
+
+`release` is an upstream in `plugins/effect/included`. It serves one tool, `request`, so the model sees `release__request` when the policy grants it. Each call writes one request file into the `requests/` directory of the release spool. An external release executor reads the file, resolves the components and asks the operator. The plugin approves nothing. It takes no secret. It takes `--requests-dir` and `--requested-by` through `args` in `install.toml`. The policy grants `release__request` to one app instance only, and `--requested-by` names that instance. An upstream does not learn the app ID of a call (section 7.7), so a second instance with the grant would file requests under the same name.
+
+The arguments are `components`, `kind` and `rollback_of`:
+
+| Argument | Value |
+|---|---|
+| `components` | 1 to 8 component names, each with a version `x.y.z` or `latest`. A name is `a-z`, then 1 to 30 of `a-z`, `0-9` and `-`. |
+| `kind` | `release`, the default, or `rollback` |
+| `rollback_of` | Only for `rollback`: the request ID to reverse |
+
+The file is `<ID>.json`, mode 0600. The ID is a ULID: 26 characters of upper-case Crockford base32, from the time in milliseconds and 80 random bits. The file holds one JSON object with these fields, in this order: `id`, `kind`, `components`, `rollback_of`, `requested_by`, `requester_session` and `ts`. `requested_by` is the `--requested-by` argument. `requester_session` is `null`. `ts` is the time in seconds since the Unix epoch, as a number, because the executor reads that shape.
+
+The plugin writes the body to `.<ID>.json.tmp`, then gives it its name with a hard link and removes the temporary name. A link never replaces a file that exists. The plugin refuses a call in these cases, and writes no file:
+
+1. An argument breaks its rule. The error names the rule and shows no value (G9).
+2. The directory is missing, or is not a directory.
+3. The directory holds 8 or more `.json` files.
+4. A file of that name exists.
+5. The body is larger than 4096 bytes.
 
 Version 1 is done when the agent runtime in the sandbox makes three calls with this result:
 
@@ -428,7 +448,7 @@ One pull request per step:
     1. Policy reload when the policy file changes (section 6).
     2. `GET /healthz` on the front door and `chaperone verify`.
     3. The `attendance` effect plugin, with three tools: `invoke_agent`, `enqueue` and `job_status`.
-    4. The `release` effect plugin. Each call writes one request file.
+    4. The `release` effect plugin. Each call writes one request file (section 12).
     5. A front door bound to a LAN address, under the guard `host-firewall` (section 7.6).
     6. The effect host launches each upstream as its own OS user.
 

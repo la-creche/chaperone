@@ -13,6 +13,7 @@ members = [
   "plugins/decision/included/ha-call",
   "plugins/effect/included/ha-call",
   "plugins/effect/included/ha-approval",
+  "plugins/effect/included/release",
 ]
 
 [workspace.package]
