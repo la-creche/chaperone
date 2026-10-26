@@ -71,6 +71,15 @@ pub struct Gates<'a> {
     pub denied: &'a BTreeMap<GateId, Timestamp>,
 }
 
+impl Gates<'_> {
+    /// Whether `id` is pending, approved or denied, and not expired at `now`.
+    fn holds(self, id: GateId, now: Timestamp) -> bool {
+        [self.pending, self.approved, self.denied]
+            .into_iter()
+            .any(|entries| entries.get(&id).is_some_and(|end| *end > now))
+    }
+}
+
 /// One request to decide.
 #[derive(Debug)]
 pub struct Request<'a> {
@@ -81,6 +90,9 @@ pub struct Request<'a> {
     pub arguments: &'a BTreeMap<String, ArgValue>,
     /// The calls this app instance made in the current minute, before this one.
     pub calls_this_minute: u32,
+    /// The calls of this app instance to this upstream that run now,
+    /// before this one.
+    pub calls_in_flight: u32,
     pub gates: Gates<'a>,
     pub now: Timestamp,
 }
@@ -178,7 +190,18 @@ pub fn decide(policy: Option<&Policy>, request: &Request<'_>) -> Decision {
         Err(reason) => return Decision::Deny(reason),
     };
 
-    if grant.approval() == Approval::Required || fenced == FenceOutcome::Gate {
+    let gated = grant.approval() == Approval::Required || fenced == FenceOutcome::Gate;
+    // An identical call of a live gate starts no run, so the limit does not
+    // apply to it (`docs/design.md` 5.2, row 6).
+    let known = gated && request.gates.holds(GateId::from_call(&call), request.now);
+    let full = app
+        .inflight_limit(request.upstream)
+        .is_some_and(|limit| request.calls_in_flight >= limit.get());
+    if full && !known {
+        return Decision::Deny(DenyReason::RateLimited);
+    }
+
+    if gated {
         return decide_gate(app, &call, request.gates, request.now);
     }
     Decision::Allow

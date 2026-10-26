@@ -24,6 +24,7 @@ use tokio::sync::watch;
 use crate::approval::ApprovalChannel;
 use crate::effect::{self, EffectFault, Redactor, Upstreams};
 use crate::gates::{GATE_LIFE, GateBook, GateMaps, GateStatus, Opened};
+use crate::inflight::{Inflight, Slot};
 use crate::reload::PolicySource;
 
 /// The longest the program waits for one decision (`docs/design.md` 5.5).
@@ -127,6 +128,7 @@ pub struct ChaperoneGateway {
     redactor: Redactor,
     bounds: Bounds,
     counters: Mutex<Counters>,
+    inflight: Inflight,
 }
 
 /// The plugins one gateway runs with: the slot plugins the call path uses,
@@ -149,6 +151,8 @@ struct Staged {
     tool: ToolName,
     arguments: BTreeMap<String, ArgValue>,
     bound: Duration,
+    /// The in-flight slot of the call, held until its final record.
+    slot: Slot,
 }
 
 /// A gated call between its decision record and the approval answer.
@@ -165,6 +169,7 @@ struct Facts {
     policy: Option<Arc<Policy>>,
     caller: Option<Caller>,
     calls_this_minute: u32,
+    calls_in_flight: u32,
     gates: GateMaps,
     now: Timestamp,
 }
@@ -211,6 +216,7 @@ impl ChaperoneGateway {
                 next_call: Some(CallNumber::FIRST),
                 gates: GateBook::default(),
             }),
+            inflight: Inflight::default(),
         }
     }
 
@@ -291,6 +297,19 @@ impl ChaperoneGateway {
             return AfterRecord::Done(self.fail_before_decision(audit, CallFault::UnknownTool));
         };
         let app_id = caller.as_ref().map(|caller| caller.app.clone());
+        // A call takes its in-flight slot before its decision. A call that
+        // does not run gives the slot back when this function returns.
+        let taken = app_id
+            .as_ref()
+            .map(|app| self.inflight.take(app, exposed.upstream()));
+        let (slot, calls_in_flight) = match taken {
+            Some(Ok((slot, before))) => (Some(slot), before),
+            None => (None, 0),
+            Some(Err(_)) => {
+                tracing::error!("the in-flight count is poisoned, so every call fails");
+                return AfterRecord::Done(self.fail_before_decision(audit, CallFault::Halted));
+            }
+        };
         let gates = match app_id.as_ref().map(|app| self.gate_maps(app, started_at)) {
             Some(Ok(maps)) => maps,
             None => GateMaps::default(),
@@ -302,6 +321,7 @@ impl ChaperoneGateway {
             policy,
             caller,
             calls_this_minute,
+            calls_in_flight,
             gates,
             now: started_at,
         };
@@ -321,7 +341,7 @@ impl ChaperoneGateway {
             AfterDecision::Denied(reason) => AfterRecord::Done(CallOutcome::Denied(reason)),
             AfterDecision::Allowed(call) => {
                 // The decision allows only a call of a known app instance.
-                let Some(app) = app_id else {
+                let (Some(app), Some(slot)) = (app_id, slot) else {
                     let fault = CallFault::NoDecision;
                     return AfterRecord::Done(outcome(
                         call.failed(fault, self.clock.now(), sink),
@@ -348,6 +368,7 @@ impl ChaperoneGateway {
                     tool: exposed.tool().clone(),
                     arguments,
                     bound,
+                    slot,
                 })
             }
             AfterDecision::Gated(call) => match app_id {
@@ -492,15 +513,27 @@ impl ChaperoneGateway {
             let fault = match asked {
                 Ok(Ok(GateAnswer::Approved)) => {
                     sender.send_replace(GateStatus::Running);
-                    let result = gateway
-                        .run_upstream(
-                            &app,
-                            exposed.upstream(),
-                            exposed.tool(),
-                            arguments.clone(),
-                            bound,
-                        )
-                        .await;
+                    // The run holds an in-flight slot until its final
+                    // record. Its decision came before, so the count does
+                    // not stop it.
+                    let slot = gateway.inflight.take(&app, exposed.upstream());
+                    let result = match slot {
+                        Ok(_) => {
+                            gateway
+                                .run_upstream(
+                                    &app,
+                                    exposed.upstream(),
+                                    exposed.tool(),
+                                    arguments.clone(),
+                                    bound,
+                                )
+                                .await
+                        }
+                        Err(_) => {
+                            tracing::error!("the in-flight count is poisoned, so every call fails");
+                            Err(CallFault::Halted)
+                        }
+                    };
                     let finishing = Arc::clone(&gateway);
                     let moving = sender.clone();
                     let finished = tokio::task::spawn_blocking(move || {
@@ -511,6 +544,7 @@ impl ChaperoneGateway {
                         tracing::error!(%error, "the final record did not return");
                         sender.send_replace(GateStatus::Faulted);
                     }
+                    drop(slot);
                     return;
                 }
                 Ok(Ok(GateAnswer::Denied(reason))) => {
@@ -609,6 +643,7 @@ impl ChaperoneGateway {
             policy,
             caller,
             calls_this_minute,
+            calls_in_flight,
             gates,
             now,
         } = facts;
@@ -626,6 +661,7 @@ impl ChaperoneGateway {
                         tool: name.tool(),
                         arguments: &arguments,
                         calls_this_minute,
+                        calls_in_flight,
                         gates: Gates {
                             pending: &gates.pending,
                             approved: &gates.approved,
@@ -715,6 +751,7 @@ impl SharedGateway {
 
     /// Run an allowed call through its upstream and write its final record.
     async fn run_and_finish(&self, staged: Staged) -> CallOutcome {
+        let slot = staged.slot;
         let result = self
             .0
             .run_upstream(
@@ -728,6 +765,7 @@ impl SharedGateway {
         let gateway = Arc::clone(&self.0);
         let finished =
             tokio::task::spawn_blocking(move || gateway.finish(staged.call, result)).await;
+        drop(slot);
         match finished {
             Ok(outcome) => outcome,
             // The final record may not be written, so no result returns (G6).

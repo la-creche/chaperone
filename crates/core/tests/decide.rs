@@ -344,6 +344,7 @@ struct Case {
     tool: ToolName,
     arguments: BTreeMap<String, ArgValue>,
     calls: u32,
+    in_flight: u32,
     gates: GateBook,
 }
 
@@ -355,6 +356,7 @@ impl Case {
             tool: tool(tool_name),
             arguments: args(arguments),
             calls: 0,
+            in_flight: 0,
             gates: GateBook::default(),
         }
     }
@@ -378,6 +380,7 @@ impl Case {
                 tool: &self.tool,
                 arguments: &self.arguments,
                 calls_this_minute: self.calls,
+                calls_in_flight: self.in_flight,
                 gates: self.gates.view(),
                 now: NOW,
             },
@@ -528,7 +531,89 @@ fn row_5_a_fence_plugin_fault_is_a_deny() {
 }
 
 #[test]
-fn row_6_a_gated_call_waits_then_runs_after_approval() {
+fn row_6_a_full_in_flight_limit_denies() {
+    let policy = limited(&inflight_policy("2"));
+    let mut case = Case::new("vikunja", "list_tasks", "{}");
+    case.in_flight = 1;
+    assert_eq!(case.decide(Some(&policy)), Decision::Allow);
+    case.in_flight = 2;
+    assert_eq!(case.decide(Some(&policy)), deny(DenyReason::RateLimited));
+
+    // The limit comes before the gate, so a full limit opens no gate.
+    let gated = Case {
+        in_flight: 2,
+        ..Case::new("vikunja", "create_task", "{}")
+    };
+    assert_eq!(gated.decide(Some(&policy)), deny(DenyReason::RateLimited));
+
+    // A call that an earlier row denies keeps the reason of that row.
+    let ungranted = Case {
+        in_flight: 2,
+        ..Case::new("vikunja", "drop_database", "{}")
+    };
+    assert_eq!(
+        ungranted.decide(Some(&policy)),
+        deny(DenyReason::ToolNotGranted)
+    );
+}
+
+#[test]
+fn row_6_the_limit_counts_only_its_own_upstream() {
+    let policy = limited(&inflight_policy("1"));
+    let mut case = Case::new("ha-call", "ha_call", r#"{"entity_id": "light.kitchen"}"#);
+    case.in_flight = 5;
+    assert_eq!(case.decide(Some(&policy)), Decision::Allow);
+
+    let mut unlimited = Case::new("vikunja", "list_tasks", "{}");
+    unlimited.in_flight = 100;
+    assert_eq!(unlimited.decide(Some(&base_policy())), Decision::Allow);
+}
+
+#[test]
+fn row_6_an_identical_call_of_a_live_gate_skips_the_limit() {
+    let policy = limited(&inflight_policy("1"));
+    let mut case = Case::new("vikunja", "create_task", r#"{"title": "milk"}"#);
+    case.in_flight = 1;
+    let id = case.gate_id();
+
+    // The run of an approved gate holds the only slot. An identical call
+    // reads its gate: it waits, collects the result or is denied.
+    case.gates.pending.insert(id, LATER);
+    assert_eq!(case.decide(Some(&policy)), Decision::Gate(id));
+    case.gates.pending.clear();
+    case.gates.approved.insert(id, LATER);
+    assert_eq!(case.decide(Some(&policy)), Decision::Allow);
+    case.gates.approved.clear();
+    case.gates.denied.insert(id, LATER);
+    assert_eq!(case.decide(Some(&policy)), deny(DenyReason::ApprovalDenied));
+
+    // An expired gate does not count, so the limit denies.
+    case.gates.denied.insert(id, NOW);
+    assert_eq!(case.decide(Some(&policy)), deny(DenyReason::RateLimited));
+}
+
+#[test]
+fn row_6_only_a_gated_call_of_its_own_gate_skips_the_limit() {
+    let policy = limited(&inflight_policy("1"));
+
+    // The live gate of another call does not lift the limit.
+    let mut other = Case::new("vikunja", "create_task", r#"{"title": "milk"}"#);
+    other.in_flight = 1;
+    let bread = Case::new("vikunja", "create_task", r#"{"title": "bread"}"#).gate_id();
+    other.gates.pending.insert(bread, LATER);
+    assert_eq!(other.decide(Some(&policy)), deny(DenyReason::RateLimited));
+
+    // A call that no row gates runs, so a gate with its ID does not lift
+    // the limit.
+    let mut ungated = Case::new("vikunja", "list_tasks", "{}");
+    ungated.in_flight = 1;
+    let id = ungated.gate_id();
+    ungated.gates.approved.insert(id, LATER);
+    assert_eq!(ungated.decide(Some(&policy)), deny(DenyReason::RateLimited));
+}
+
+#[test]
+fn row_7_a_gated_call_waits_then_runs_after_approval() {
     let policy = base_policy();
     let mut case = Case::new("vikunja", "create_task", r#"{"title": "milk"}"#);
     let id = case.gate_id();
@@ -543,14 +628,14 @@ fn row_6_a_gated_call_waits_then_runs_after_approval() {
 }
 
 #[test]
-fn row_6_a_fence_can_ask_for_a_gate() {
+fn row_7_a_fence_can_ask_for_a_gate() {
     let policy = base_policy();
     let case = Case::new("ha-call", "ha_call", r#"{"entity_id": "lock.front"}"#);
     assert_eq!(case.decide(Some(&policy)), Decision::Gate(case.gate_id()));
 }
 
 #[test]
-fn row_6_an_expired_approval_does_not_count() {
+fn row_7_an_expired_approval_does_not_count() {
     let policy = base_policy();
     let mut case = Case::new("vikunja", "create_task", r#"{"title": "milk"}"#);
     let id = case.gate_id();
@@ -559,7 +644,7 @@ fn row_6_an_expired_approval_does_not_count() {
 }
 
 #[test]
-fn row_6_a_denied_gate_denies_until_it_expires() {
+fn row_7_a_denied_gate_denies_until_it_expires() {
     let policy = base_policy();
     let mut case = Case::new("vikunja", "create_task", r#"{"title": "milk"}"#);
     let id = case.gate_id();
@@ -569,7 +654,7 @@ fn row_6_a_denied_gate_denies_until_it_expires() {
 }
 
 #[test]
-fn row_6_the_pending_cap_denies_a_new_gate() {
+fn row_7_the_pending_cap_denies_a_new_gate() {
     let policy = base_policy();
     let mut case = Case::new("vikunja", "create_task", r#"{"title": "milk"}"#);
     let other_a = Case::new("vikunja", "create_task", r#"{"title": "a"}"#).gate_id();
@@ -581,7 +666,7 @@ fn row_6_the_pending_cap_denies_a_new_gate() {
 }
 
 #[test]
-fn row_6_an_expired_pending_gate_does_not_count() {
+fn row_7_an_expired_pending_gate_does_not_count() {
     let policy = base_policy();
     let mut case = Case::new("vikunja", "create_task", r#"{"title": "milk"}"#);
     let id = case.gate_id();
@@ -751,6 +836,63 @@ fn a_bound_that_is_not_an_integer_does_not_load() {
     for value in ["1.5", r#""30""#, "true"] {
         assert!(matches!(
             load_error(&bounded_policy(value)),
+            PolicyError::Read(strict::StrictError::Shape { .. })
+        ));
+    }
+}
+
+/// The fixture policy with `max_inflight = <value>` on the `vikunja` grant.
+fn inflight_policy(value: &str) -> String {
+    policy_text("").replace(
+        "[apps.librechat.grants.vikunja.tools]",
+        &format!("[apps.librechat.grants.vikunja]\nmax_inflight = {value}\n\n[apps.librechat.grants.vikunja.tools]"),
+    )
+}
+
+/// Load `policy` with the `ha-call` fence.
+fn limited(policy: &str) -> Policy {
+    let entities = EntityFence(name("ha-call"));
+    load(INSTALL, policy, &[&entities]).unwrap()
+}
+
+#[test]
+fn an_upstream_grant_without_max_inflight_has_no_limit() {
+    let policy = base_policy();
+    let app = policy.app(&app_id("librechat")).unwrap();
+    assert_eq!(app.inflight_limit(&name("vikunja")), None);
+}
+
+#[test]
+fn an_upstream_grant_sets_its_own_in_flight_limit() {
+    for count in [1, 8] {
+        let policy = limited(&inflight_policy(&count.to_string()));
+        let app = policy.app(&app_id("librechat")).unwrap();
+        let limit = app.inflight_limit(&name("vikunja")).unwrap();
+        assert_eq!(limit.get(), count);
+        assert_eq!(app.inflight_limit(&name("ha-call")), None);
+    }
+}
+
+#[test]
+fn an_in_flight_limit_outside_1_to_8_does_not_load() {
+    for value in ["0", "9", "-1"] {
+        let error = load_error(&inflight_policy(value));
+        assert_eq!(
+            error,
+            PolicyError::InflightLimit {
+                app: app_id("librechat"),
+                upstream: name("vikunja"),
+            }
+        );
+        assert!(error.to_string().contains("1 to 8"), "{error}");
+    }
+}
+
+#[test]
+fn an_in_flight_limit_that_is_not_an_integer_does_not_load() {
+    for value in ["1.5", r#""2""#, "true"] {
+        assert!(matches!(
+            load_error(&inflight_policy(value)),
             PolicyError::Read(strict::StrictError::Shape { .. })
         ));
     }

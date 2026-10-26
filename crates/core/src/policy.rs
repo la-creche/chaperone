@@ -19,6 +19,8 @@ const POLICY_VERSION: u32 = 1;
 const DIGESTS_MAX: usize = 2;
 const BOUND_MIN_SECONDS: u64 = 1;
 const BOUND_MAX_SECONDS: u64 = 120;
+const INFLIGHT_MIN: u32 = 1;
+const INFLIGHT_MAX: u32 = 8;
 
 /// The longest chaperone waits for one call to one upstream, in whole
 /// seconds from 1 to 120 (`docs/design.md` 5.5).
@@ -40,6 +42,27 @@ impl UpstreamBound {
 
     #[must_use]
     pub const fn seconds(self) -> u64 {
+        self.0
+    }
+}
+
+/// The most calls of one app instance to one upstream that may run at one
+/// time, from 1 to 8 (`docs/design.md` 5.2 and 6).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct InflightLimit(u32);
+
+impl InflightLimit {
+    /// The limit of `count`, or `None` outside 1 to 8.
+    #[must_use]
+    pub fn from_count(count: i64) -> Option<Self> {
+        let count = u32::try_from(count).ok()?;
+        (INFLIGHT_MIN..=INFLIGHT_MAX)
+            .contains(&count)
+            .then_some(Self(count))
+    }
+
+    #[must_use]
+    pub const fn get(self) -> u32 {
         self.0
     }
 }
@@ -165,6 +188,10 @@ struct UpstreamGrant {
     /// The bound of one call, in seconds. See [`UpstreamBound`].
     #[serde(default, skip_serializing_if = "Option::is_none")]
     timeout_s: Option<i64>,
+    /// The most calls to the upstream in flight at one time. See
+    /// [`InflightLimit`]. Without it, the policy sets no limit.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    max_inflight: Option<i64>,
     /// The granted tools of the upstream, by tool name.
     tools: BTreeMap<ToolName, ToolGrant>,
 }
@@ -224,6 +251,7 @@ pub struct App {
     limits: Limits,
     grants: BTreeMap<PluginName, UpstreamGrant>,
     bounds: BTreeMap<PluginName, UpstreamBound>,
+    inflight: BTreeMap<PluginName, InflightLimit>,
     fences: Vec<ActiveFence>,
 }
 
@@ -245,6 +273,13 @@ impl App {
     #[must_use]
     pub fn upstream_bound(&self, upstream: &PluginName) -> Option<UpstreamBound> {
         self.bounds.get(upstream).copied()
+    }
+
+    /// The in-flight limit of calls to `upstream`, or `None` when the grant
+    /// sets none or the policy grants no tool of it.
+    #[must_use]
+    pub fn inflight_limit(&self, upstream: &PluginName) -> Option<InflightLimit> {
+        self.inflight.get(upstream).copied()
     }
 
     /// The token digests of this app instance: one or two.
@@ -306,6 +341,8 @@ pub enum PolicyError {
     EmptyGrant { app: AppId, upstream: PluginName },
     #[error("the app {app} sets timeout_s of {upstream} outside 1 to 120 seconds")]
     UpstreamBound { app: AppId, upstream: PluginName },
+    #[error("the app {app} sets max_inflight of {upstream} outside 1 to 8")]
+    InflightLimit { app: AppId, upstream: PluginName },
     #[error("the app {app} fences {argument} of {tool} with an empty list")]
     EmptyFence {
         app: AppId,
@@ -468,6 +505,7 @@ fn load_app(
     }
 
     let mut bounds = BTreeMap::new();
+    let mut inflight = BTreeMap::new();
     for (upstream, grant) in &raw.grants {
         if !setup.upstreams().contains(upstream) {
             return Err(PolicyError::UnknownUpstream {
@@ -490,6 +528,14 @@ fn load_app(
             upstream: upstream.clone(),
         })?;
         bounds.insert(upstream.clone(), bound);
+        if let Some(count) = grant.max_inflight {
+            let limit =
+                InflightLimit::from_count(count).ok_or_else(|| PolicyError::InflightLimit {
+                    app: id.clone(),
+                    upstream: upstream.clone(),
+                })?;
+            inflight.insert(upstream.clone(), limit);
+        }
         for (tool, tool_grant) in &grant.tools {
             for (argument, fence) in &tool_grant.arguments {
                 let empty = match fence {
@@ -540,6 +586,7 @@ fn load_app(
         limits: raw.limits,
         grants: raw.grants,
         bounds,
+        inflight,
         fences,
     })
 }

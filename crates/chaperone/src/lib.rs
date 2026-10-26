@@ -13,6 +13,7 @@ pub mod effect;
 mod files;
 pub mod gates;
 pub mod gateway;
+mod inflight;
 pub mod registry;
 pub mod reload;
 pub mod startup;
