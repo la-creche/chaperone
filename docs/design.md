@@ -353,7 +353,7 @@ A fence implements the trait `Fence` of `crates/core/src/hook.rs`. chaperone cal
 - In production, a dedicated `chaperone` OS user owns the secrets directory. Agents that edit code run as a different user and cannot read it.
 - In code, a secret is a `Secret` value. It has no `Display` and no `Serialize`. Its `Debug` prints only the name. One named method exposes the value. The memory is wiped when the value is dropped.
 - chaperone replaces each exact secret value in a tool result with `[redacted]`. It does this before it returns the result and before it writes the final audit record.
-- In production, the service unit runs chaperone as the `chaperone` user. Its `CapabilityBoundingSet` and its `AmbientCapabilities` are exactly `CAP_SETUID CAP_SETGID`. It sets `NoNewPrivileges=yes`.
+- In production, the service unit `systemd/creche-chaperone.service` runs chaperone as the `chaperone` user. Its `CapabilityBoundingSet` and its `AmbientCapabilities` are exactly `CAP_SETUID CAP_SETGID`. It sets `NoNewPrivileges=yes`.
 - In production, every upstream runs as its own OS user, through `user` in the install file (section 6). An upstream user owns no secret file and cannot read the files of chaperone. A plugin that cannot run as its user does not run.
 
 `chaperone-as` is the only code that uses the two capabilities. It takes these steps:
@@ -377,6 +377,28 @@ The production layout gives the default of two flags:
 | `/etc/chaperone/plugins` | The plugin tree of section 7.3 | `--plugins-dir` |
 
 `chaperone serve`, `chaperone verify`, `chaperone check` and `chaperone token new` take the same defaults. One layout thus applies to the service and to each check of it. A flag overrules its default. The plugin tree is not in the install tree of the release tool (section 12). The release archive holds only the two programs, and the release tool replaces that tree at each install.
+
+The service unit gives the other paths of the layout:
+
+| Path | Contents | Who provides it |
+|---|---|---|
+| `/opt/components/chaperone/bin` | `chaperone` and `chaperone-as` | The release tool, from the release archive |
+| `/etc/chaperone/secrets` | One file per secret, as above | The operator. The `chaperone` user owns the directory, mode 0700. |
+| `/var/lib/chaperone/audit.jsonl` | The audit file | systemd makes the directory, mode 0700. chaperone makes the file. |
+| `/run/chaperone/admin.sock` | The admin socket (section 10) | systemd makes the directory, mode 0750. chaperone makes the socket. |
+| `/etc/creche/site.env` | `CHAPERONE_LISTEN`, the front door address | The operator |
+
+The unit reads `CHAPERONE_LISTEN` from the site file. It passes the value to `--listen` and to `--allowed-host`. Before the first start, the operator does these steps:
+
+1. Make the OS user and the group `chaperone`.
+2. Write `install.toml` and `policy.toml` in `/etc/chaperone`.
+3. Copy the plugin tree into `/etc/chaperone/plugins`. Put each program of an effect plugin on the `PATH` of the unit.
+4. Write each bound secret in `/etc/chaperone/secrets`.
+5. Set `CHAPERONE_LISTEN` in the site file.
+6. Install the unit file once. The release tool refreshes an installed unit. It does not install a unit that is not installed.
+7. Add a drop-in for each path that an upstream writes, such as a spool directory or the directory of a Unix socket. `ProtectSystem=strict` makes every other path read-only. A drop-in stays when the release tool refreshes the unit.
+
+The unit gives chaperone no write access to `/etc/chaperone`. `POST /token` therefore fails on the service. The operator runs `chaperone token new` as root, with the service up or down.
 
 ## 9. Tokens
 
@@ -540,6 +562,15 @@ Version 1 is done when the agent runtime in the sandbox makes three calls with t
 The audit file shows all three calls.
 
 The project publishes tagged versions with built binaries. An external release tool installs a version on the host and runs `chaperone verify` after the install (step 10.2). The release tool is not part of this repository.
+
+The release tool reads `component.toml` at the root of this repository, at the commit of the tag. The file holds the text that the release tool expects, field for field. `crates/chaperone/tests/release.rs` holds each field, so a change fails `cargo test`. For each install, the release tool does these steps:
+
+1. It checks the signature of the archive, then unpacks it to `/opt/components/chaperone`. It keeps the previous tree as `/opt/components/chaperone.prev`.
+2. It copies `systemd/creche-chaperone.service` over the installed unit of that name, and keeps the previous unit. It restarts the unit.
+3. It runs `chaperone verify --json --env-file /etc/creche/site.env --listen-key CHAPERONE_LISTEN` as root, with a bound of 60 seconds. It reads the exit code and stdout only.
+4. When the check fails, it puts back the previous tree and the previous unit, and restarts the unit.
+
+The release tool refuses a version that is not higher than the installed version. The first version that it installs is thus higher than each version of an earlier program under the same unit.
 
 Releases come from `.github/workflows/release.yml`. To release, a pull request changes `version` in `crates/chaperone/Cargo.toml`. The workflow runs on each push to `main`. A version with a tag, or no version, releases nothing. Else the workflow does these steps:
 
