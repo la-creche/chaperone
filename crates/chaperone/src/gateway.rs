@@ -315,6 +315,20 @@ impl ChaperoneGateway {
             None => GateMaps::default(),
             Some(Err(fault)) => return AfterRecord::Done(self.fail_before_decision(audit, fault)),
         };
+        // A call whose gate is done when the decision reads it collects the
+        // kept result and never runs (`docs/design.md` 5.3).
+        let done_gate = app_id
+            .as_ref()
+            .map(|app| {
+                GateId::from_call(&ToolCall {
+                    app,
+                    upstream: exposed.upstream(),
+                    tool: exposed.tool(),
+                    arguments: &arguments,
+                    now: started_at,
+                })
+            })
+            .filter(|gate| gates.approved.contains_key(gate));
         // The policy that decides the call also bounds its upstream call.
         let bound = upstream_bound(policy.as_deref(), app_id.as_ref(), exposed.upstream());
         let facts = Facts {
@@ -348,17 +362,16 @@ impl ChaperoneGateway {
                         fault,
                     ));
                 };
-                // A done gate allowed this call: it collects the kept result
-                // instead of running (`docs/design.md` 5.3).
-                if let Some((gate, result)) =
-                    self.take_result(&app, &exposed, &arguments, started_at)
-                {
-                    return AfterRecord::Done(match call.delivered(gate, self.clock.now(), sink) {
-                        Ok(()) => CallOutcome::Ran(result),
-                        Err(error) => {
-                            tracing::error!(%error, "the delivered record is not durable");
-                            CallOutcome::Failed(CallFault::AuditFailed)
-                        }
+                if let Some(gate) = done_gate {
+                    return AfterRecord::Done(match self.take_result(&app, gate) {
+                        Ok(result) => match call.delivered(gate, self.clock.now(), sink) {
+                            Ok(()) => CallOutcome::Ran(result),
+                            Err(error) => {
+                                tracing::error!(%error, "the delivered record is not durable");
+                                CallOutcome::Failed(CallFault::AuditFailed)
+                            }
+                        },
+                        Err(fault) => outcome(call.failed(fault, self.clock.now(), sink), fault),
                     });
                 }
                 AfterRecord::Allowed(Staged {
@@ -394,25 +407,15 @@ impl ChaperoneGateway {
         Ok(counters.gates.snapshot(app, now))
     }
 
-    /// The kept result of the done gate of this call, if there is one. The
-    /// gate is removed with it.
-    fn take_result(
-        &self,
-        app: &AppId,
-        exposed: &ExposedName,
-        arguments: &BTreeMap<String, ArgValue>,
-        now: Timestamp,
-    ) -> Option<(GateId, UpstreamResult)> {
-        let gate = GateId::from_call(&ToolCall {
-            app,
-            upstream: exposed.upstream(),
-            tool: exposed.tool(),
-            arguments,
-            now,
-        });
-        let mut counters = self.counters.lock().ok()?;
-        let result = counters.gates.take_result(app, gate)?;
-        Some((gate, result))
+    /// The kept result of `gate`. The gate is removed with it. The fault is
+    /// `ApprovalSpent` when an identical call collected the result first,
+    /// so the approval runs one call (G2).
+    fn take_result(&self, app: &AppId, gate: GateId) -> Result<UpstreamResult, CallFault> {
+        let mut counters = self.counters.lock().map_err(|_| CallFault::Halted)?;
+        counters
+            .gates
+            .take_result(app, gate)
+            .ok_or(CallFault::ApprovalSpent)
     }
 
     /// Write the `waiting` record of a gated call. It blocks on the audit

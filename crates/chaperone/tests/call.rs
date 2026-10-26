@@ -45,6 +45,9 @@ struct MemorySink {
     /// How long a write of a `ran` record takes after the record is
     /// visible, as a slow disk sync takes.
     ran_delay: Duration,
+    /// How long a write of an allow decision takes after the record is
+    /// visible.
+    allow_delay: Duration,
 }
 
 impl MemorySink {
@@ -65,6 +68,9 @@ impl AuditSink for MemorySink {
         self.records.lock().unwrap().push(record.clone());
         if matches!(record.event(), AuditEvent::Ran { .. }) {
             std::thread::sleep(self.ran_delay);
+        }
+        if matches!(record.event(), AuditEvent::Decided(AuditDecision::Allow)) {
+            std::thread::sleep(self.allow_delay);
         }
         Ok(())
     }
@@ -413,6 +419,52 @@ async fn a_gated_call_waits_and_an_identical_call_collects_the_result() {
     // The result is collected once. The next identical call gates again.
     let again = call(&gateway, Some(TOKEN), "vikunja__create_task").await;
     assert!(matches!(again, CallOutcome::Waiting(_)), "{again:?}");
+}
+
+#[tokio::test]
+async fn two_identical_calls_after_the_run_get_one_result() {
+    let Harness { gateway, sink, .. } = harness_with(
+        30,
+        MemorySink {
+            allow_delay: Duration::from_millis(300),
+            ..MemorySink::default()
+        },
+    );
+    let outcome = call(&gateway, Some(TOKEN), "vikunja__create_task").await;
+    assert!(matches!(outcome, CallOutcome::Waiting(_)), "{outcome:?}");
+    until_records(&sink, 3).await;
+
+    // Both calls read the done gate, and both are allowed, before either
+    // collects. The approval runs one call and gives one result.
+    let identical = |gateway: SharedGateway| {
+        tokio::spawn(async move { call(&gateway, Some(TOKEN), "vikunja__create_task").await })
+    };
+    let first = identical(gateway.clone());
+    let second = identical(gateway.clone());
+    let outcomes = [first.await.unwrap(), second.await.unwrap()];
+    let collected = outcomes
+        .iter()
+        .filter(
+            |outcome| matches!(outcome, CallOutcome::Ran(result) if result.content == ["created"]),
+        )
+        .count();
+    let spent = outcomes
+        .iter()
+        .filter(|outcome| matches!(outcome, CallOutcome::Failed(CallFault::ApprovalSpent)))
+        .count();
+    assert_eq!((collected, spent), (1, 1), "{outcomes:?}");
+    let events = sink.events();
+    let count = |event: fn(&AuditEvent) -> bool| events.iter().filter(|e| event(e)).count();
+    assert_eq!(
+        count(|e| matches!(e, AuditEvent::Ran { .. })),
+        1,
+        "{events:?}"
+    );
+    assert_eq!(
+        count(|e| matches!(e, AuditEvent::Delivered(_))),
+        1,
+        "{events:?}"
+    );
 }
 
 #[tokio::test]
