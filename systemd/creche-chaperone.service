@@ -1,0 +1,89 @@
+# The service unit of chaperone (docs/design.md sections 8 and 12).
+#
+# The release tool installs the release archive at
+# /opt/components/chaperone. It then copies this file over the installed
+# unit of the same name and restarts the unit. The release tool does not
+# install a unit that is not installed. The operator installs it once.
+#
+# The operator provides each path of the production layout before the
+# first start: /etc/chaperone with install.toml, policy.toml, plugins/ and
+# secrets/, and CHAPERONE_LISTEN in the site file. chaperone refuses to
+# start when a slot, a plugin or a bound secret is missing (G2).
+#
+# The operator adds a drop-in for each path that an upstream writes, such
+# as a spool directory or the directory of a Unix socket. A drop-in stays
+# when the release tool copies this file.
+[Unit]
+Description=chaperone, the policy layer between agent apps and their tools
+After=network-online.target
+Wants=network-online.target
+# No start limit. A unit that stops at a start limit stays down until a
+# human starts it, and chaperone is the one path from an app to a tool.
+StartLimitIntervalSec=0
+
+[Service]
+User=chaperone
+Group=chaperone
+# The site file gives CHAPERONE_LISTEN, the front door address. The verify
+# hook of component.toml reads the same key of the same file.
+EnvironmentFile=/etc/creche/site.env
+# --config-dir and --plugins-dir take their defaults: /etc/chaperone and
+# /etc/chaperone/plugins. --allowed-host lets an app send the front door
+# address as its Host header.
+ExecStart=/opt/components/chaperone/bin/chaperone serve --listen ${CHAPERONE_LISTEN} --allowed-host ${CHAPERONE_LISTEN} --secrets-dir /etc/chaperone/secrets --audit-file /var/lib/chaperone/audit.jsonl --admin-socket /run/chaperone/admin.sock
+# systemd calls an exit on SIGTERM clean, so on-failure would leave
+# chaperone down after a stray signal. The delay grows from 5 s to 120 s.
+Restart=always
+RestartSec=5s
+RestartSteps=5
+RestartMaxDelaySec=120s
+# A plugin command with no directory is found next to chaperone first,
+# then on this PATH (docs/design.md 7.7).
+Environment=PATH=/usr/local/bin:/usr/bin:/bin
+
+# /var/lib/chaperone holds the audit file. Only chaperone reads it.
+StateDirectory=chaperone
+StateDirectoryMode=0700
+# /run/chaperone holds the admin socket, mode 0660. The operator puts the
+# user of an external tool in the group chaperone to open it.
+RuntimeDirectory=chaperone
+RuntimeDirectoryMode=0750
+
+# The service cannot write /etc/chaperone. POST /token therefore fails on
+# this unit, and the operator runs chaperone token new as root.
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+ProtectProc=invisible
+ProcSubset=pid
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+RemoveIPC=yes
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+UMask=0027
+# chaperone-as switches each upstream to its own OS user (docs/design.md
+# 8). CAP_SETGID serves setgroups and setresgid. CAP_SETUID serves
+# setresuid. The capabilities are ambient, because the unit runs as
+# chaperone and not as root. NoNewPrivileges=yes still holds, because it
+# refuses a privilege that an exec adds, and these are kept. chaperone-as
+# empties every capability set before the exec of an upstream.
+CapabilityBoundingSet=CAP_SETUID CAP_SETGID
+AmbientCapabilities=CAP_SETUID CAP_SETGID
+# MemoryDenyWriteExecute stays off. An upstream is a third-party program,
+# and a runtime with a JIT compiler needs a page that is writable and
+# executable.
+
+[Install]
+WantedBy=multi-user.target
