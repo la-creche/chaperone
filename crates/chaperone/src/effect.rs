@@ -13,11 +13,11 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use chaperone_core::{
-    APPROVE_TOOL, ArgValue, Catalog, PluginKind, PluginName, Policy, Runtime, SecretDelivery,
-    Setup, Slot, ToolName, UpstreamResult,
+    APPROVE_TOOL, AppId, ArgValue, Catalog, PluginKind, PluginName, Policy, Runtime,
+    SecretDelivery, Setup, Slot, ToolName, UpstreamResult,
 };
 use rmcp::ServiceExt;
-use rmcp::model::{CallToolRequestParams, CallToolResult, Tool};
+use rmcp::model::{CallToolRequestParams, CallToolResult, MetaObject, RequestMetaObject, Tool};
 use rmcp::service::{RoleClient, RunningService, ServiceError};
 use tokio::io::AsyncWriteExt;
 use tokio::process::{Child, ChildStderr, Command};
@@ -38,6 +38,10 @@ const STDERR_LINE_CAP: usize = 8 * 1024;
 
 /// The key of the secret line on stdin (`docs/design.md` 7.5).
 const SECRETS_KEY: &str = "secrets";
+
+/// The `_meta` key of a `tools/call` that holds the app ID of the call
+/// (`docs/design.md` 7.7).
+const APP_META_KEY: &str = "chaperone.app";
 
 /// One tool that an upstream lists.
 #[derive(Debug, Clone, PartialEq)]
@@ -62,10 +66,11 @@ pub trait Effect: Send + Sync + fmt::Debug {
     /// The tools the upstream listed at start.
     fn tools(&self) -> &[EffectTool];
 
-    /// Send one `tools/call` and return the raw result. The call path
-    /// bounds the wait and checks the result.
+    /// Send one `tools/call` for the app instance `app` and return the raw
+    /// result. The call path bounds the wait and checks the result.
     fn call<'a>(
         &'a self,
+        app: &'a AppId,
         tool: &'a ToolName,
         arguments: BTreeMap<String, ArgValue>,
     ) -> Pin<Box<dyn Future<Output = Result<CallToolResult, EffectFault>> + Send + 'a>>;
@@ -181,6 +186,7 @@ impl Effect for EffectProcess {
 
     fn call<'a>(
         &'a self,
+        app: &'a AppId,
         tool: &'a ToolName,
         arguments: BTreeMap<String, ArgValue>,
     ) -> Pin<Box<dyn Future<Output = Result<CallToolResult, EffectFault>> + Send + 'a>> {
@@ -189,8 +195,9 @@ impl Effect for EffectProcess {
                 .iter()
                 .map(|(key, value)| (key.clone(), value.to_json()))
                 .collect();
-            let request =
+            let mut request =
                 CallToolRequestParams::new(tool.as_str().to_owned()).with_arguments(members);
+            request.meta = Some(app_meta(app));
             match self.service.call_tool(request).await {
                 Ok(result) => Ok(result),
                 // An MCP error is the upstream's answer to this call.
@@ -376,6 +383,17 @@ pub async fn launch(
         service,
         _child: child,
     })
+}
+
+/// The `_meta` of a `tools/call`: the app ID and nothing else of chaperone
+/// (`docs/design.md` 7.7). It holds no token and no secret (G9).
+fn app_meta(app: &AppId) -> RequestMetaObject {
+    let mut members = serde_json::Map::new();
+    members.insert(
+        APP_META_KEY.to_owned(),
+        serde_json::Value::String(app.as_str().to_owned()),
+    );
+    RequestMetaObject(MetaObject::from(members))
 }
 
 fn no_pipe() -> std::io::Error {

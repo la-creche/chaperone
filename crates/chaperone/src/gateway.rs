@@ -145,6 +145,7 @@ pub struct Plugins {
 /// An allowed call between its decision record and its upstream call.
 struct Staged {
     call: AllowedCall,
+    app: AppId,
     upstream: PluginName,
     tool: ToolName,
     arguments: BTreeMap<String, ArgValue>,
@@ -316,11 +317,18 @@ impl ChaperoneGateway {
         match next {
             AfterDecision::Denied(reason) => AfterRecord::Done(CallOutcome::Denied(reason)),
             AfterDecision::Allowed(call) => {
+                // The decision allows only a call of a known app instance.
+                let Some(app) = app_id else {
+                    let fault = CallFault::NoDecision;
+                    return AfterRecord::Done(outcome(
+                        call.failed(fault, self.clock.now(), sink),
+                        fault,
+                    ));
+                };
                 // A done gate allowed this call: it collects the kept result
                 // instead of running (`docs/design.md` 5.3).
-                if let Some(app) = &app_id
-                    && let Some((gate, result)) =
-                        self.take_result(app, &exposed, &arguments, started_at)
+                if let Some((gate, result)) =
+                    self.take_result(&app, &exposed, &arguments, started_at)
                 {
                     return AfterRecord::Done(match call.delivered(gate, self.clock.now(), sink) {
                         Ok(()) => CallOutcome::Ran(result),
@@ -332,6 +340,7 @@ impl ChaperoneGateway {
                 }
                 AfterRecord::Allowed(Staged {
                     call,
+                    app,
                     upstream: exposed.upstream().clone(),
                     tool: exposed.tool().clone(),
                     arguments,
@@ -457,7 +466,7 @@ impl ChaperoneGateway {
                 Ok(Ok(GateAnswer::Approved)) => {
                     sender.send_replace(GateStatus::Running);
                     let result = gateway
-                        .run_upstream(exposed.upstream(), exposed.tool(), arguments.clone())
+                        .run_upstream(&app, exposed.upstream(), exposed.tool(), arguments.clone())
                         .await;
                     let finishing = Arc::clone(&gateway);
                     let kept = tokio::task::spawn_blocking(move || {
@@ -504,6 +513,7 @@ impl ChaperoneGateway {
     /// (`docs/design.md` 7.7). The wait is bounded (`docs/design.md` 5.5).
     async fn run_upstream(
         &self,
+        app: &AppId,
         upstream: &PluginName,
         tool: &ToolName,
         arguments: BTreeMap<String, ArgValue>,
@@ -511,7 +521,7 @@ impl ChaperoneGateway {
         let Some(running) = self.upstreams.get(upstream) else {
             return Err(CallFault::NotConnected);
         };
-        let raw = tokio::time::timeout(self.bounds.upstream, running.call(tool, arguments))
+        let raw = tokio::time::timeout(self.bounds.upstream, running.call(app, tool, arguments))
             .await
             .map_err(|_| CallFault::UpstreamTimeout)?;
         let raw = raw.map_err(|fault| match fault {
@@ -664,7 +674,12 @@ impl SharedGateway {
     async fn run_and_finish(&self, staged: Staged) -> CallOutcome {
         let result = self
             .0
-            .run_upstream(&staged.upstream, &staged.tool, staged.arguments)
+            .run_upstream(
+                &staged.app,
+                &staged.upstream,
+                &staged.tool,
+                staged.arguments,
+            )
             .await;
         let gateway = Arc::clone(&self.0);
         let finished =

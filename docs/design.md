@@ -310,6 +310,8 @@ A call:
 4. The host blanks each exact secret value in each text block (section 8).
 5. chaperone writes the `ran` record with the upstream's `is_error` flag, then returns the result.
 
+The `_meta` of each `tools/call` holds the key `chaperone.app`. Its value is the app ID of the call, as a string. The approval channel gets the same key. The app ID is not a secret. The `_meta` holds no token, no secret and no session of chaperone. An effect plugin can use the app ID as the identity of the caller, because chaperone resolved it from the bearer token (G4). The app cannot set this key. A decision plugin does not get it.
+
 An upstream that is not running, or whose connection is closed, fails a call with `not_connected`. Version 1 does not restart an upstream. The operator restarts chaperone.
 
 The manifest an app sees holds a tool when the policy grants it, the caller's reach holds it, the upstream lists it and its exposed name is valid. chaperone logs a warning at start for each granted tool that its upstream does not list.
@@ -387,7 +389,7 @@ Version 1 proves the idea with one client app.
 
 The plugin takes `--hook-url` and `--listen` through `args` in `install.toml`. It refuses an unspecified listen address. It holds the two tokens in memory only, from the secret line of section 7.5. A hook that does not answer `2xx`, or a tap that does not come in the life of the gate, is a denial.
 
-`release` is an upstream in `plugins/effect/included`. It serves one tool, `request`, so the model sees `release__request` when the policy grants it. Each call writes one request file into the `requests/` directory of the release spool. An external release executor reads the file, resolves the components and asks the operator. The plugin approves nothing. It takes no secret. It takes `--requests-dir` and `--requested-by` through `args` in `install.toml`. The policy grants `release__request` to one app instance only, and `--requested-by` names that instance. An upstream does not learn the app ID of a call (section 7.7), so a second instance with the grant would file requests under the same name.
+`release` is an upstream in `plugins/effect/included`. It serves one tool, `request`, so the model sees `release__request` when the policy grants it. Each call writes one request file into the `requests/` directory of the release spool. An external release executor reads the file, resolves the components and asks the operator. The plugin approves nothing. It takes no secret. It takes `--requests-dir` and `--requested-by` through `args` in `install.toml`. The policy grants `release__request` to one app instance only, and `--requested-by` names that instance. The plugin does not read the app ID of a call (section 7.7), so a second instance with the grant would file requests under the same name.
 
 The arguments are `components`, `kind` and `rollback_of`:
 
