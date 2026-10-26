@@ -181,7 +181,7 @@ Rules:
 - An install entry of an effect plugin can hold `args`: arguments that chaperone appends to the command of the manifest at launch. The manifest names the program. The install file adds what differs per deployment, such as an address. An argument is never a secret value (G9).
 - The policy file names a plugin by name only. It cannot launch a binary or bind a secret.
 - An external tool that writes the policy file runs as an OS user that cannot write `install.toml`.
-- chaperone reloads `policy.toml` when the file changes. A reload that fails denies every call until a valid file loads (G2).
+- chaperone reloads `policy.toml` when the file changes. Before each call, it compares the device, inode, size and modification time of the file with the file it loaded. One policy decides the whole call. A reload that fails denies every call until a valid file loads (G2). A bad write by the operator therefore stops every app until a valid file lands.
 - `chaperone check` is the only authority on a valid configuration. It runs the strict reader and every rule across files.
 
 ## 7. Plugins

@@ -24,6 +24,7 @@ use tokio::sync::watch;
 use crate::approval::ApprovalChannel;
 use crate::effect::{self, EffectFault, Redactor, UPSTREAM_BUDGET, Upstreams};
 use crate::gates::{GATE_LIFE, GateBook, GateMaps, GateStatus, Opened};
+use crate::reload::PolicySource;
 
 /// The longest the program waits for one decision (`docs/design.md` 5.5).
 /// A decision that takes longer fails the call with `no_decision` (G2).
@@ -118,7 +119,7 @@ fn begin(
 #[derive(Debug)]
 pub struct ChaperoneGateway {
     run: RunId,
-    policy: Arc<Policy>,
+    policy: PolicySource,
     identity: Box<dyn Identity>,
     audit: Arc<dyn AuditSink>,
     clock: Box<dyn Clock>,
@@ -157,6 +158,15 @@ struct StagedGate {
     arguments: BTreeMap<String, ArgValue>,
 }
 
+/// The state one decision reads besides the call itself.
+struct Facts {
+    policy: Option<Arc<Policy>>,
+    caller: Option<Caller>,
+    calls_this_minute: u32,
+    gates: GateMaps,
+    now: Timestamp,
+}
+
 /// Where a call stands after the decision record.
 enum AfterRecord {
     /// The call is answered. No upstream runs.
@@ -168,9 +178,14 @@ enum AfterRecord {
 }
 
 impl ChaperoneGateway {
-    /// A gateway over a loaded policy and the running upstreams.
+    /// A gateway over a policy and the running upstreams.
     #[must_use]
-    pub fn new(run: RunId, policy: Policy, plugins: Plugins, bounds: Bounds) -> Self {
+    pub fn new(
+        run: RunId,
+        policy: impl Into<PolicySource>,
+        plugins: Plugins,
+        bounds: Bounds,
+    ) -> Self {
         let Plugins {
             identity,
             audit,
@@ -181,7 +196,7 @@ impl ChaperoneGateway {
         } = plugins;
         Self {
             run,
-            policy: Arc::new(policy),
+            policy: policy.into(),
             identity,
             audit,
             clock,
@@ -203,14 +218,15 @@ impl ChaperoneGateway {
     ///
     /// # Errors
     ///
-    /// Returns [`ListError::UnknownCredential`] when the credentials resolve
-    /// to no app instance.
+    /// Returns [`ListError::PolicyNotLoaded`] when no valid policy is
+    /// loaded, and [`ListError::UnknownCredential`] when the credentials
+    /// resolve to no app instance.
     pub fn list_tools(&self, credentials: &Credentials<'_>) -> Result<Vec<ListedTool>, ListError> {
+        let policy = self.policy.current().ok_or(ListError::PolicyNotLoaded)?;
         let caller = self
-            .resolve(credentials)
+            .resolve(credentials, Some(&policy))
             .ok_or(ListError::UnknownCredential)?;
-        let app = self
-            .policy
+        let app = policy
             .app(&caller.app)
             .ok_or(ListError::UnknownCredential)?;
         let mut listed = Vec::new();
@@ -242,6 +258,7 @@ impl ChaperoneGateway {
     /// it on a blocking thread.
     fn stage(
         &self,
+        policy: Option<Arc<Policy>>,
         caller: Option<Caller>,
         name: &str,
         arguments: BTreeMap<String, ArgValue>,
@@ -263,8 +280,8 @@ impl ChaperoneGateway {
             self.run,
             call,
             started_at,
-            AuditApp::lookup(app, Some(&self.policy)),
-            AuditTool::lookup(name, Some(&self.policy)),
+            AuditApp::lookup(app, policy.as_deref()),
+            AuditTool::lookup(name, policy.as_deref()),
             ArgumentsDigest::of(&arguments),
         );
 
@@ -277,14 +294,14 @@ impl ChaperoneGateway {
             None => GateMaps::default(),
             Some(Err(fault)) => return AfterRecord::Done(self.fail_before_decision(audit, fault)),
         };
-        let Some(decision) = self.decide(
+        let facts = Facts {
+            policy,
             caller,
-            &exposed,
-            &arguments,
             calls_this_minute,
-            &gates,
-            started_at,
-        ) else {
+            gates,
+            now: started_at,
+        };
+        let Some(decision) = self.decide(facts, &exposed, &arguments) else {
             return AfterRecord::Done(self.fail_before_decision(audit, CallFault::NoDecision));
         };
 
@@ -525,10 +542,14 @@ impl ChaperoneGateway {
 
     /// Run the identity hook. A hook that panics resolves to nothing, as a
     /// fence that panics denies (G2). The payload is dropped unread, because
-    /// it can hold a token (G9).
-    pub(crate) fn resolve(&self, credentials: &Credentials<'_>) -> Option<Caller> {
+    /// it can hold a token (G9). With no policy, nothing resolves.
+    pub(crate) fn resolve(
+        &self,
+        credentials: &Credentials<'_>,
+        policy: Option<&Policy>,
+    ) -> Option<Caller> {
+        let policy = policy?;
         // The identity hook has no time bound (`docs/design.md` 5.5).
-        let policy = &self.policy;
         panic::catch_unwind(AssertUnwindSafe(|| {
             self.identity.resolve(credentials, policy)
         }))
@@ -539,23 +560,25 @@ impl ChaperoneGateway {
     /// decision did not return in time, or did not return at all.
     fn decide(
         &self,
-        caller: Option<Caller>,
+        facts: Facts,
         name: &ExposedName,
         arguments: &BTreeMap<String, ArgValue>,
-        calls_this_minute: u32,
-        gates: &GateMaps,
-        now: Timestamp,
     ) -> Option<Decision> {
-        let policy = Arc::clone(&self.policy);
+        let Facts {
+            policy,
+            caller,
+            calls_this_minute,
+            gates,
+            now,
+        } = facts;
         let name = name.clone();
         let arguments = arguments.clone();
-        let gates = gates.clone();
         let (sender, receiver) = mpsc::sync_channel(1);
         let spawned = thread::Builder::new()
             .name("decide".to_owned())
             .spawn(move || {
                 let decision = chaperone_core::decide(
-                    Some(&policy),
+                    policy.as_deref(),
                     &Request {
                         caller: caller.as_ref(),
                         upstream: name.upstream(),
@@ -616,12 +639,14 @@ impl SharedGateway {
     /// The call path after the identity hook.
     async fn call_resolved(
         &self,
+        policy: Option<Arc<Policy>>,
         caller: Option<Caller>,
         name: String,
         arguments: BTreeMap<String, ArgValue>,
     ) -> CallOutcome {
         let gateway = Arc::clone(&self.0);
-        let staged = tokio::task::spawn_blocking(move || gateway.stage(caller, &name, arguments));
+        let staged =
+            tokio::task::spawn_blocking(move || gateway.stage(policy, caller, &name, arguments));
         let staged = match staged.await {
             Ok(AfterRecord::Done(outcome)) => return outcome,
             Ok(AfterRecord::Allowed(staged)) => staged,
@@ -734,8 +759,12 @@ impl Gateway for SharedGateway {
         name: &str,
         arguments: BTreeMap<String, ArgValue>,
     ) -> CallOutcome {
-        let caller = self.0.resolve(credentials);
-        self.call_resolved(caller, name.to_owned(), arguments).await
+        // One policy decides the whole call, even when the file changes
+        // during it (`docs/design.md` 6).
+        let policy = self.0.policy.current();
+        let caller = self.0.resolve(credentials, policy.as_deref());
+        self.call_resolved(policy, caller, name.to_owned(), arguments)
+            .await
     }
 }
 

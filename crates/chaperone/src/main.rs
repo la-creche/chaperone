@@ -12,6 +12,7 @@ use chaperone::admin::{self, ConfigFile};
 use chaperone::approval::ApprovalChannel;
 use chaperone::effect::{self, Redactor};
 use chaperone::gateway::{Bounds, ChaperoneGateway, Plugins, SharedGateway};
+use chaperone::reload::PolicyFile;
 use chaperone::startup;
 use clap::{Parser, Subcommand};
 use tokio_util::sync::CancellationToken;
@@ -219,7 +220,12 @@ async fn run(args: Serve) -> ExitCode {
     allowed_hosts.extend(LOOPBACK_HOSTS.map(str::to_owned));
     let gateway = Arc::new(SharedGateway::new(ChaperoneGateway::new(
         loaded.run,
-        loaded.policy,
+        PolicyFile::new(
+            &config_dir,
+            loaded.setup,
+            loaded.policy,
+            loaded.policy_stamp,
+        ),
         Plugins {
             identity: loaded.identity,
             audit: loaded.audit,

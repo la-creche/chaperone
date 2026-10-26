@@ -14,6 +14,7 @@ mod files;
 pub mod gates;
 pub mod gateway;
 pub mod registry;
+pub mod reload;
 pub mod startup;
 
 pub use files::ReadError;
