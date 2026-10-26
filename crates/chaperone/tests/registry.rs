@@ -133,6 +133,6 @@ fn every_shipped_fence_has_one_row_and_every_row_a_fence() {
     for entry in FENCES {
         let name = PluginName::try_new(entry.name).unwrap();
         assert!(find_fence(&name).is_some());
-        assert_eq!((entry.build)().unwrap().name(), &name);
+        assert_eq!((entry.build)().unwrap().plugin(), &name);
     }
 }

@@ -162,8 +162,25 @@ impl<'a> RawSection<'a> {
 #[error("{0}")]
 pub struct SectionError(pub String);
 
+/// Why a fence refuses the sections of two app instances together. The
+/// rule is a fixed text of the fence (G9). A policy with such a pair does
+/// not load (G2).
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+#[error(
+    "the caller app {caller} and the target app {target} break a rule: {}",
+    .rule.as_str()
+)]
+pub struct CrossAppError {
+    pub caller: AppId,
+    pub target: AppId,
+    pub rule: FenceReason,
+}
+
 /// The fence hook. Any number of fences can be active.
 pub trait Fence: Send + Sync + fmt::Debug {
+    /// The section of one app instance, as [`Fence::prepare`] reads it.
+    type Prepared: PreparedFence + 'static;
+
     /// The plugin name. It equals the name in `plugin.toml`.
     fn name(&self) -> &PluginName;
 
@@ -173,10 +190,22 @@ pub trait Fence: Send + Sync + fmt::Debug {
     /// # Errors
     ///
     /// Returns a [`SectionError`] when the section is not valid.
-    fn prepare(
+    fn prepare(&self, section: Option<RawSection<'_>>) -> Result<Self::Prepared, SectionError>;
+
+    /// Check the prepared sections of every app instance together, by app
+    /// ID. The policy load calls it once, after every [`Fence::prepare`].
+    /// It can only refuse the policy. The default refuses nothing.
+    ///
+    /// # Errors
+    ///
+    /// Returns a [`CrossAppError`] when two app instances break a rule
+    /// together.
+    fn check_sections(
         &self,
-        section: Option<RawSection<'_>>,
-    ) -> Result<Box<dyn PreparedFence>, SectionError>;
+        _sections: &BTreeMap<&AppId, &Self::Prepared>,
+    ) -> Result<(), CrossAppError> {
+        Ok(())
+    }
 }
 
 /// The secret-source hook. It fills the secret source slot

@@ -114,12 +114,14 @@ struct HangFence(PluginName);
 struct PreparedHang;
 
 impl Fence for HangFence {
+    type Prepared = PreparedHang;
+
     fn name(&self) -> &PluginName {
         &self.0
     }
 
-    fn prepare(&self, _: Option<RawSection<'_>>) -> Result<Box<dyn PreparedFence>, SectionError> {
-        Ok(Box::new(PreparedHang))
+    fn prepare(&self, _: Option<RawSection<'_>>) -> Result<Self::Prepared, SectionError> {
+        Ok(PreparedHang)
     }
 }
 

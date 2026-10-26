@@ -25,8 +25,8 @@ pub use exposed::{ExposedError, ExposedName, SEPARATOR};
 pub use gateway::{CallFault, CallOutcome, Health, ListError, ListedTool, UpstreamResult};
 pub use hook::{
     ANSWER_CAP, APPROVE_TOOL, AnswerError, ApprovalRequest, AuditSink, Caller, Clock, Credentials,
-    DenialReason, Fence, FenceReason, FenceVerdict, GateAnswer, Gateway, Identity, PreparedFence,
-    RawSection, Reach, SecretSource, SectionError, ToolCall,
+    CrossAppError, DenialReason, Fence, FenceReason, FenceVerdict, GateAnswer, Gateway, Identity,
+    PreparedFence, RawSection, Reach, SecretSource, SectionError, ToolCall,
 };
 pub use ids::{
     AppId, ArgName, Name, NameError, NameKind, PluginName, PluginUser, SecretName, SecretParam,
@@ -38,8 +38,8 @@ pub use install::{
 };
 pub use plugin::{Hook, Manifest, ManifestError, PLUGIN_FILE_CAP, PluginKind, Runtime, Slot};
 pub use policy::{
-    App, Approval, ArgumentFence, DigestError, InflightLimit, Limits, POLICY_FILE_CAP, Policy,
-    PolicyError, Scalar, TokenDigest, ToolGrant, UpstreamBound, with_digest,
+    App, Approval, ArgumentFence, DigestError, FenceCode, InflightLimit, Limits, POLICY_FILE_CAP,
+    Policy, PolicyError, Scalar, TokenDigest, ToolGrant, UpstreamBound, with_digest,
 };
 pub use secret::{Bearer, REDACTED, Secret, SecretError};
 pub use time::Timestamp;

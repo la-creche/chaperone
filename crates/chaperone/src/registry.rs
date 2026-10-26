@@ -15,7 +15,7 @@ use std::path::Path;
 use std::sync::Arc;
 
 use chaperone_core::{
-    AuditSink, Clock, Fence, Identity, NameError, PluginName, SecretSource, Slot,
+    AuditSink, Clock, FenceCode, Identity, NameError, PluginName, SecretSource, Slot,
 };
 use chaperone_plugin_attendance_fence::FamilyFence;
 use chaperone_plugin_audit_jsonl::{JsonlAudit, OpenError};
@@ -85,7 +85,7 @@ pub fn find(slot: Slot, plugin: &PluginName) -> Option<&'static Entry> {
 #[derive(Debug, Clone, Copy)]
 pub struct FenceEntry {
     pub name: &'static str,
-    pub build: fn() -> Result<Box<dyn Fence>, NameError>,
+    pub build: fn() -> Result<Box<dyn FenceCode>, NameError>,
 }
 
 /// Every fence this build can run.
@@ -106,11 +106,11 @@ pub fn find_fence(plugin: &PluginName) -> Option<&'static FenceEntry> {
     FENCES.iter().find(|entry| entry.name == plugin.as_str())
 }
 
-fn attendance() -> Result<Box<dyn Fence>, NameError> {
+fn attendance() -> Result<Box<dyn FenceCode>, NameError> {
     Ok(Box::new(FamilyFence::new()?))
 }
 
-fn ha_call() -> Result<Box<dyn Fence>, NameError> {
+fn ha_call() -> Result<Box<dyn FenceCode>, NameError> {
     Ok(Box::new(EntityFence::new()?))
 }
 

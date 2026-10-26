@@ -12,6 +12,7 @@ A decision plugin is a Rust crate that implements `Identity` or `Fence` from `cr
 4. A fence returns pass, `Deny(reason)` or `Gate`. An identity plugin returns an app instance or nothing, and can only narrow that instance's reach. No decision plugin has an "allow" result (G7).
 5. Always end. Do not loop on input size without a bound.
 6. Read only your own section of the policy. Your Rust type fixes its shape.
+7. A fence can check the sections of every app instance together in `check_sections`. It gets the prepared sections only. It can refuse the policy, and it can do nothing else. `docs/design.md` section 7.8 has the rules.
 
 ## Never do these
 

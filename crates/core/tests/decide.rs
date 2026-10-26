@@ -10,7 +10,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use chaperone_core::{
-    AppId, ArgValue, AuditApp, AuditTool, Caller, Catalog, Decision, DenyReason, Fence,
+    AppId, ArgValue, AuditApp, AuditTool, Caller, Catalog, Decision, DenyReason, Fence, FenceCode,
     FenceReason, FenceVerdict, Found, GateId, Gates, InstallFile, Location, Manifest, PluginKey,
     PluginName, Policy, PolicyError, PreparedFence, RawSection, Reach, Request, SectionError,
     Timestamp, TokenDigest, ToolCall, ToolName, UpstreamBound, strict, with_digest,
@@ -173,18 +173,17 @@ struct EntitySection {
 struct PreparedEntities(Option<EntitySection>);
 
 impl Fence for EntityFence {
+    type Prepared = PreparedEntities;
+
     fn name(&self) -> &PluginName {
         &self.0
     }
 
-    fn prepare(
-        &self,
-        section: Option<RawSection<'_>>,
-    ) -> Result<Box<dyn PreparedFence>, SectionError> {
+    fn prepare(&self, section: Option<RawSection<'_>>) -> Result<Self::Prepared, SectionError> {
         let section = section
             .map(|raw| raw.parse::<EntitySection>())
             .transpose()?;
-        Ok(Box::new(PreparedEntities(section)))
+        Ok(PreparedEntities(section))
     }
 }
 
@@ -229,15 +228,14 @@ struct ExtraFence(PluginName, Behavior);
 struct PreparedExtra(Behavior);
 
 impl Fence for ExtraFence {
+    type Prepared = PreparedExtra;
+
     fn name(&self) -> &PluginName {
         &self.0
     }
 
-    fn prepare(
-        &self,
-        _section: Option<RawSection<'_>>,
-    ) -> Result<Box<dyn PreparedFence>, SectionError> {
-        Ok(Box::new(PreparedExtra(self.1)))
+    fn prepare(&self, _section: Option<RawSection<'_>>) -> Result<Self::Prepared, SectionError> {
+        Ok(PreparedExtra(self.1))
     }
 }
 
@@ -258,7 +256,7 @@ impl PreparedFence for PreparedExtra {
     }
 }
 
-fn load(install: &str, policy: &str, fences: &[&dyn Fence]) -> Result<Policy, PolicyError> {
+fn load(install: &str, policy: &str, fences: &[&dyn FenceCode]) -> Result<Policy, PolicyError> {
     let install = InstallFile::read(install.as_bytes()).unwrap();
     let setup = chaperone_core::resolve(&install, &catalog()).unwrap();
     Policy::load(policy.as_bytes(), &setup, fences)

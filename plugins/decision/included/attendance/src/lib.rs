@@ -7,12 +7,17 @@
 //!
 //! An app instance with no section, or with an empty list for the tool,
 //! reaches no family (G2). Each deny reason starts with `tool_not_granted`.
+//!
+//! The family of an app instance is its app ID. Delegation stays one hop
+//! deep. An app instance on any `delegates` list delegates to no family,
+//! and no app instance delegates to itself. A policy that breaks either
+//! rule does not load.
 
 use std::collections::{BTreeMap, BTreeSet};
 
 use chaperone_core::{
-    ArgValue, Fence, FenceReason, FenceVerdict, PluginName, PreparedFence, RawSection,
-    SectionError, ToolCall,
+    AppId, ArgValue, CrossAppError, Fence, FenceReason, FenceVerdict, PluginName, PreparedFence,
+    RawSection, SectionError, ToolCall,
 };
 use serde::Deserialize;
 
@@ -28,6 +33,10 @@ pub const MAX_ENQUEUE_TARGETS: usize = 64;
 const INVOKE_AGENT: &str = "invoke_agent";
 const ENQUEUE: &str = "enqueue";
 const JOB_STATUS: &str = "job_status";
+
+const NO_SECOND_HOP: &str =
+    "one_hop: an app instance that another app instance delegates to must not delegate";
+const NO_SELF_HOP: &str = "one_hop: an app instance must not delegate to itself";
 
 /// A family name: `a-z`, then 1 to 30 of `a-z`, `0-9` and `-`.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Deserialize)]
@@ -99,20 +108,19 @@ impl FamilyFence {
 /// The fence of one app instance. An app instance with no section has two
 /// empty lists.
 #[derive(Debug)]
-struct PreparedFamilyFence {
+pub struct PreparedFamilyFence {
     upstream: PluginName,
     section: Section,
 }
 
 impl Fence for FamilyFence {
+    type Prepared = PreparedFamilyFence;
+
     fn name(&self) -> &PluginName {
         &self.name
     }
 
-    fn prepare(
-        &self,
-        section: Option<RawSection<'_>>,
-    ) -> Result<Box<dyn PreparedFence>, SectionError> {
+    fn prepare(&self, section: Option<RawSection<'_>>) -> Result<Self::Prepared, SectionError> {
         let section = match section {
             None => Section {
                 delegates: BTreeSet::new(),
@@ -136,10 +144,40 @@ impl Fence for FamilyFence {
                 "enqueue_targets lists more than {MAX_ENQUEUE_TARGETS} families"
             )));
         }
-        Ok(Box::new(PreparedFamilyFence {
+        Ok(PreparedFamilyFence {
             upstream: self.name.clone(),
             section,
-        }))
+        })
+    }
+
+    fn check_sections(
+        &self,
+        sections: &BTreeMap<&AppId, &Self::Prepared>,
+    ) -> Result<(), CrossAppError> {
+        let by_family: BTreeMap<&str, (&AppId, &Self::Prepared)> = sections
+            .iter()
+            .map(|(id, prepared)| (id.as_str(), (*id, *prepared)))
+            .collect();
+        for (caller, prepared) in sections {
+            for family in &prepared.section.delegates {
+                let Some((target, reached)) = by_family.get(family.0.as_str()) else {
+                    continue;
+                };
+                let rule = if target == caller {
+                    NO_SELF_HOP
+                } else if !reached.section.delegates.is_empty() {
+                    NO_SECOND_HOP
+                } else {
+                    continue;
+                };
+                return Err(CrossAppError {
+                    caller: (*caller).clone(),
+                    target: (*target).clone(),
+                    rule: FenceReason::new(rule),
+                });
+            }
+        }
+        Ok(())
     }
 }
 

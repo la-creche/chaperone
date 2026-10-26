@@ -65,21 +65,20 @@ impl EntityFence {
 
 /// The fence of one app instance.
 #[derive(Debug)]
-struct PreparedEntityFence {
+pub struct PreparedEntityFence {
     upstream: PluginName,
     /// The allow-list, or `None` for an app instance with no section.
     entities: Option<BTreeSet<String>>,
 }
 
 impl Fence for EntityFence {
+    type Prepared = PreparedEntityFence;
+
     fn name(&self) -> &PluginName {
         &self.name
     }
 
-    fn prepare(
-        &self,
-        section: Option<RawSection<'_>>,
-    ) -> Result<Box<dyn PreparedFence>, SectionError> {
+    fn prepare(&self, section: Option<RawSection<'_>>) -> Result<Self::Prepared, SectionError> {
         let entities = match section {
             None => None,
             Some(section) => {
@@ -92,10 +91,10 @@ impl Fence for EntityFence {
                 Some(parsed.entities)
             }
         };
-        Ok(Box::new(PreparedEntityFence {
+        Ok(PreparedEntityFence {
             upstream: self.name.clone(),
             entities,
-        }))
+        })
     }
 }
 

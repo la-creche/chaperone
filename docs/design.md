@@ -333,6 +333,18 @@ An upstream that is not running, or whose connection is closed, fails a call wit
 
 The manifest an app sees holds a tool when the policy grants it, the caller's reach holds it, the upstream lists it and its exposed name is valid. chaperone logs a warning at start for each granted tool that its upstream does not list.
 
+### 7.8 The fence hooks
+
+A fence implements the trait `Fence` of `crates/core/src/hook.rs`. chaperone calls its three hooks at fixed points:
+
+| Hook | When it runs | What it returns |
+|---|---|---|
+| `prepare` | At each policy load, once per app instance | The section of the app instance in the type of the fence, or a refusal of the section |
+| `check_sections` | At each policy load, once, after every `prepare` of the fence | Nothing, or a refusal that names a caller app ID, a target app ID and the rule |
+| `check` | At each call, in the decision (section 5.2) | Pass, `Deny(reason)` or `Gate` |
+
+`check_sections` gets the prepared sections of every app instance, by app ID, and nothing else (G3). It can only refuse. A refusal stops the policy load (G2). `chaperone check` then refuses the file, and after a reload chaperone denies every call until a valid file loads. The rule of a refusal is a fixed text of the fence (G9). The default `check_sections` refuses nothing.
+
 ## 8. Secrets
 
 - A secret is one file in the secrets directory, named after the secret, mode 0600. chaperone opens the file without following a symbolic link. It then checks the opened file: a regular file, mode 0600, owned by the user that runs chaperone. A file that fails a check refuses start.
@@ -430,6 +442,13 @@ The fence applies these rules to a call to the `attendance` upstream:
 
 A call to any other upstream passes untouched. Each deny reason starts with `tool_not_granted`. A section with another key, a bad family name or a list over its cap does not load.
 
+The family of an app instance is its app ID. The `check_sections` hook of the fence (section 7.8) keeps delegation to one hop. A policy does not load in these cases:
+
+1. An app instance lists its own app ID in `delegates`.
+2. An app instance lists the app ID of another app instance in `delegates`, and that other app instance has a `delegates` list that is not empty.
+
+The refusal names the caller app ID, the target app ID and the rule. The rule starts with `one_hop`. A family on a `delegates` list that is not an app ID of the policy has no check.
+
 The effect half of `attendance` is an upstream in `plugins/effect/included`. It sends each call to a door of the session service, over HTTP on a Unix socket. It takes `--socket` through `args` in `install.toml`. It takes two secrets, `DELEGATE_TOKEN` and `DISPATCH_TOKEN`, each at least 32 bytes. A shorter or missing token refuses start. Each door call sends `Authorization: Bearer <token>` to the base URL `http://sessiond`.
 
 The caller family of a call is the app ID in `_meta` (section 7.7). A call whose app ID is missing, or is not a family name, is refused before any request. The plugin mints a delegation ID per call: a ULID of 26 upper-case Crockford base32 characters.
@@ -526,12 +545,13 @@ One pull request per step:
 10. The rest of version 1, one pull request each:
     1. Policy reload when the policy file changes (section 6).
     2. `GET /healthz` on the front door and `chaperone verify`.
-    3. The `attendance` plugin, both halves, with three tools: `invoke_agent`, `enqueue` and `job_status` (section 12). The one-hop bound comes later (section 14). Step 10.8 adds the in-flight limit.
+    3. The `attendance` plugin, both halves, with three tools: `invoke_agent`, `enqueue` and `job_status` (section 12). Step 10.8 adds the in-flight limit. Step 10.9 adds the one-hop check.
     4. The `release` effect plugin. Each call writes one request file (section 12).
     5. A front door bound to a LAN address, under the guard `host-firewall` (section 7.6).
     6. The effect host launches each upstream as its own OS user, through `chaperone-as` (section 8).
     7. The bound of an upstream call, per upstream grant (section 5.5).
     8. The in-flight limit of an upstream grant (section 5.2).
+    9. The `check_sections` fence hook, and the one-hop check of `attendance` through it (sections 7.8 and 12).
 
 ## 14. Open items
 
@@ -540,4 +560,3 @@ One pull request per step:
 | The agent runtime subscribes to the results of its gates, and chaperone publishes each kept result when the run ends. The transport, and how a subscription is bound to one app instance, are open. | After version 1 |
 | The 50-character budget of an exposed name (section 7.6) exists for LibreChat, a client that version 1 does not use. The budget can widen. | After version 1 |
 | TLS on the front door. It can come as a third value of `guard` (section 7.6). | After version 1 |
-| The one-hop bound of `attendance`: a family that a delegate call reached cannot delegate again. It needs the delegation ID of the calling session. | After version 1 |

@@ -9,10 +9,10 @@ use std::path::Path;
 use std::sync::Arc;
 
 use chaperone_core::{
-    AuditSink, Catalog, Clock, Fence, Guard, INSTALL_FILE_CAP, Identity, InstallError, InstallFile,
-    NameError, POLICY_FILE_CAP, PluginKind, PluginName, Policy, PolicyError, RunId, Secret,
-    SecretDelivery, SecretError, SecretName, SecretParam, SecretSource, Setup, SetupError, Slot,
-    resolve,
+    AuditSink, Catalog, Clock, FenceCode, Guard, INSTALL_FILE_CAP, Identity, InstallError,
+    InstallFile, NameError, POLICY_FILE_CAP, PluginKind, PluginName, Policy, PolicyError, RunId,
+    Secret, SecretDelivery, SecretError, SecretName, SecretParam, SecretSource, Setup, SetupError,
+    Slot, resolve,
 };
 use chaperone_plugin_audit_jsonl::OpenError;
 
@@ -214,7 +214,7 @@ pub fn setup_from(
 /// Returns the first [`StartError`] found.
 pub fn policy_from(policy_bytes: &[u8], setup: &Setup) -> Result<Policy, StartError> {
     let fences = fences_for(setup)?;
-    let fence_refs: Vec<&dyn Fence> = fences.iter().map(AsRef::as_ref).collect();
+    let fence_refs: Vec<&dyn FenceCode> = fences.iter().map(AsRef::as_ref).collect();
     Ok(Policy::load(policy_bytes, setup, &fence_refs)?)
 }
 
@@ -250,7 +250,7 @@ pub fn check_listen(address: SocketAddr, guard: Guard) -> Result<Option<Warning>
 
 /// Every active fence of the setup, built from its registry row. A fence
 /// without a row refuses start (G2).
-fn fences_for(setup: &Setup) -> Result<Vec<Box<dyn Fence>>, StartError> {
+fn fences_for(setup: &Setup) -> Result<Vec<Box<dyn FenceCode>>, StartError> {
     let mut fences = Vec::new();
     for plugin in setup.fences() {
         let entry = registry::find_fence(plugin).ok_or_else(|| StartError::NoFenceCode {
