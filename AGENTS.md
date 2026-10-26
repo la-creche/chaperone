@@ -35,7 +35,7 @@ Each line cites the guarantee it protects. A pull request that does one of these
 8. Do not load, enable or order plugins by directory listing. Only `install.toml` enables a plugin or fills a slot. (G10)
 9. Do not write cryptography code. Use the crates named in `docs/design.md` section 9. Ask before you add another one.
 10. Do not bind `0.0.0.0`. Bind a LAN address, `127.0.0.1` or a Unix socket.
-11. Do not merge a pull request. Do not push to `main`. Do not publish a release or a tag. A maintainer does each of these.
+11. Do not merge a pull request. Do not push to `main`. Do not publish a release or a tag. A maintainer merges. The release workflow then publishes the tag and the release of the merge (`docs/design.md` section 12).
 
 ## Patterns to follow
 
