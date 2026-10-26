@@ -97,7 +97,7 @@ impl ServerHandler for Plugin {
                 "rollback_of": {
                     "type": ["string", "null"],
                     "description": "The request ID to reverse, only for kind rollback",
-                    "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$"
+                    "pattern": "^[0-7][0-9A-HJKMNP-TV-Z]{25}$"
                 }
             }
         });

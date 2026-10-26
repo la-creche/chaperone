@@ -11,6 +11,9 @@ const ALPHABET: &[u8; 32] = b"0123456789ABCDEFGHJKMNPQRSTVWXYZ";
 const CHARS: usize = 26;
 const TIME_BITS: u32 = 48;
 const RANDOM_BITS: u32 = 80;
+/// 26 characters hold 130 bits and a ULID has 128, so the first character
+/// carries 3 bits: `0` to `7`.
+const HIGHEST_FIRST: u8 = b'7';
 
 /// One ULID, as its 26 characters.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
@@ -58,10 +61,15 @@ impl Ulid {
     }
 
     /// `text` as an ID, or nothing when it is not 26 characters of the
-    /// alphabet.
+    /// alphabet that start with `0` to `7`.
     #[must_use]
     pub fn parse(text: &str) -> Option<Self> {
-        let valid = text.len() == CHARS && text.bytes().all(|byte| ALPHABET.contains(&byte));
+        let fits = text
+            .as_bytes()
+            .first()
+            .is_some_and(|first| *first <= HIGHEST_FIRST);
+        let valid =
+            text.len() == CHARS && fits && text.bytes().all(|byte| ALPHABET.contains(&byte));
         valid.then(|| Self(text.to_owned()))
     }
 

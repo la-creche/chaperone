@@ -57,3 +57,12 @@ fn text_that_is_not_an_id_does_not_parse() {
     }
     assert!(Ulid::parse("01K8DSY3ZM041061050R3GG28A").is_some());
 }
+
+#[test]
+fn only_a_first_character_of_0_to_7_fits_128_bits() {
+    let highest = "7ZZZZZZZZZZZZZZZZZZZZZZZZZ";
+    assert_eq!(Ulid::parse(highest).unwrap().as_str(), highest);
+    for above in ["80000000000000000000000000", "Z0000000000000000000000000"] {
+        assert_eq!(Ulid::parse(above), None, "{above}");
+    }
+}

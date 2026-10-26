@@ -131,7 +131,7 @@ pub enum ArgumentError {
     Version,
     #[error("kind is not release or rollback")]
     Kind,
-    #[error("rollback_of is not a request ID of 26 base32 characters")]
+    #[error("rollback_of is not a request ID: 26 base32 characters, the first from 0 to 7")]
     RollbackOf,
     #[error("kind release takes no rollback_of")]
     ReleaseWithTarget,
