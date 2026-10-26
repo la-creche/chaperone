@@ -155,6 +155,7 @@ fn decision(
             tool: &ToolName::try_new(tool).unwrap(),
             arguments,
             calls_this_minute: 0,
+            calls_in_flight: 0,
             gates: Gates {
                 pending: &none,
                 approved: &none,

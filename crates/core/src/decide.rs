@@ -81,6 +81,9 @@ pub struct Request<'a> {
     pub arguments: &'a BTreeMap<String, ArgValue>,
     /// The calls this app instance made in the current minute, before this one.
     pub calls_this_minute: u32,
+    /// The calls of this app instance to this upstream that run now,
+    /// before this one.
+    pub calls_in_flight: u32,
     pub gates: Gates<'a>,
     pub now: Timestamp,
 }
@@ -177,6 +180,13 @@ pub fn decide(policy: Option<&Policy>, request: &Request<'_>) -> Decision {
         Ok(fenced) => fenced,
         Err(reason) => return Decision::Deny(reason),
     };
+
+    let full = app
+        .inflight_limit(request.upstream)
+        .is_some_and(|limit| request.calls_in_flight >= limit.get());
+    if full {
+        return Decision::Deny(DenyReason::RateLimited);
+    }
 
     if grant.approval() == Approval::Required || fenced == FenceOutcome::Gate {
         return decide_gate(app, &call, request.gates, request.now);

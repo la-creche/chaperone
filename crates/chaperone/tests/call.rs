@@ -855,14 +855,20 @@ async fn an_error_result_runs_with_the_error_flag() {
 /// A gateway over the fixture policy with `timeout_s` on the `vikunja`
 /// grant, and its memory sink.
 fn bounded(root: &std::path::Path, seconds: u64) -> (SharedGateway, Arc<MemorySink>) {
-    let plugins = plugin_tree(root);
     let policy = policy_text(30).replace(
         "[apps.librechat.grants.vikunja.tools]",
         &format!(
             "[apps.librechat.grants.vikunja]\ntimeout_s = {seconds}\n\n[apps.librechat.grants.vikunja.tools]"
         ),
     );
-    let config = config_dir(root, INSTALL, &policy);
+    gateway_over(root, &policy)
+}
+
+/// A gateway over `policy`, the fake upstream and an approval channel
+/// that answers at once, and its memory sink.
+fn gateway_over(root: &std::path::Path, policy: &str) -> (SharedGateway, Arc<MemorySink>) {
+    let plugins = plugin_tree(root);
+    let config = config_dir(root, INSTALL, policy);
     let secret_files = secrets_dir(root);
     let audit_file = root.join("audit.jsonl");
     let loaded = startup::load(&config, &plugins, &audit_file, &secret_files).unwrap();
@@ -918,4 +924,83 @@ async fn the_bound_of_the_upstream_grant_ends_a_slow_call() {
     };
     assert_eq!(result.content, ["late"]);
     assert_eq!(long_sink.events()[1], AuditEvent::Ran { is_error: false });
+}
+
+/// A gateway over the fixture policy with `max_inflight` on the `vikunja`
+/// grant, and its memory sink. `gated` lists the tools that need an
+/// approval besides those of the fixture.
+fn limited(
+    root: &std::path::Path,
+    max_inflight: u32,
+    gated: &[&str],
+) -> (SharedGateway, Arc<MemorySink>) {
+    let mut policy = policy_text(30).replace(
+        "[apps.librechat.grants.vikunja.tools]",
+        &format!(
+            "[apps.librechat.grants.vikunja]\nmax_inflight = {max_inflight}\n\n[apps.librechat.grants.vikunja.tools]"
+        ),
+    );
+    for tool in gated {
+        policy = policy.replace(
+            &format!("{tool} = {{}}"),
+            &format!("{tool} = {{ approval = \"required\" }}"),
+        );
+    }
+    gateway_over(root, &policy)
+}
+
+#[tokio::test]
+async fn a_third_call_in_flight_under_a_limit_of_two_is_denied() {
+    let root = tempfile::tempdir().unwrap();
+    let (gateway, sink) = limited(root.path(), 2, &[]);
+    let slow = |gateway: SharedGateway| {
+        tokio::spawn(async move { call(&gateway, Some(TOKEN), "vikunja__slow").await })
+    };
+    let first = slow(gateway.clone());
+    let second = slow(gateway.clone());
+    until_records(&sink, 2).await;
+
+    // Two slow calls run. A third call to the upstream is denied, the slow
+    // tool and a fast one alike.
+    for tool in ["vikunja__slow", "vikunja__list_tasks"] {
+        let third = call(&gateway, Some(TOKEN), tool).await;
+        assert!(
+            matches!(third, CallOutcome::Denied(DenyReason::RateLimited)),
+            "{tool}: {third:?}"
+        );
+    }
+
+    let first = first.await.unwrap();
+    let CallOutcome::Ran(result) = first else {
+        panic!("{first:?}");
+    };
+    assert_eq!(result.content, ["late"]);
+
+    // One call ended, so the next call runs.
+    let next = call(&gateway, Some(TOKEN), "vikunja__list_tasks").await;
+    assert!(matches!(next, CallOutcome::Ran(_)), "{next:?}");
+    let second = second.await.unwrap();
+    assert!(matches!(second, CallOutcome::Ran(_)), "{second:?}");
+}
+
+#[tokio::test]
+async fn an_approved_gated_call_counts_while_it_runs() {
+    let root = tempfile::tempdir().unwrap();
+    let (gateway, sink) = limited(root.path(), 1, &["slow"]);
+    let waiting = call(&gateway, Some(TOKEN), "vikunja__slow").await;
+    assert!(matches!(waiting, CallOutcome::Waiting(_)), "{waiting:?}");
+    // The approval channel answers at once. The slow tool then runs for
+    // longer than this wait.
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    assert_eq!(sink.records().len(), 2);
+
+    let blocked = call(&gateway, Some(TOKEN), "vikunja__list_tasks").await;
+    assert!(
+        matches!(blocked, CallOutcome::Denied(DenyReason::RateLimited)),
+        "{blocked:?}"
+    );
+
+    until_records(&sink, 4).await;
+    let after = call(&gateway, Some(TOKEN), "vikunja__list_tasks").await;
+    assert!(matches!(after, CallOutcome::Ran(_)), "{after:?}");
 }

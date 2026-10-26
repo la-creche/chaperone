@@ -62,6 +62,7 @@ The decision function takes:
 - the resolved app instance, or nothing
 - the tool name and its arguments
 - the rate counter of the app instance
+- the count of the calls of the app instance to the upstream that are in flight
 - the pending gates and the approved gates of the app instance
 - the results of every enabled fence plugin
 - the current time, as an argument
@@ -86,13 +87,14 @@ The rows apply in this order. The first row that matches decides.
    - An `allow` fence needs the argument present and equal to a listed value.
    - A `deny` fence refuses a listed value, and refuses an argument that is not a scalar.
 5. A fence plugin returns deny: `Deny(fence)` with that plugin's reason. The reason is a fixed text of the plugin. A fence plugin faults: `Deny(fence_fault)`. Fences run in plugin name order. The first deny wins.
-6. The policy marks the tool `approval = "required"`, or a fence plugin returns gate:
+6. The upstream grant sets `max_inflight`, and that many calls of the app instance to the upstream are in flight: `Deny(rate_limited)`. Rows 2 and 6 give one reason, because each one limits the load of an app instance.
+7. The policy marks the tool `approval = "required"`, or a fence plugin returns gate:
    1. The gate is denied and not expired: `Deny(approval_denied)`.
    2. The gate is approved and not expired: `Allow`.
    3. The gate is pending and not expired: `Gate(gate_id)`.
    4. The count of pending gates that are not expired is at `max_pending_gates`: `Deny(gate_cap)`.
    5. Otherwise: `Gate(gate_id)`.
-7. Otherwise: `Allow`.
+8. Otherwise: `Allow`.
 
 The core pull request may refine the reason names. It may not change the order without a change to this section.
 
@@ -164,6 +166,8 @@ The record keeps the arguments only as the SHA-256 of their canonical form. Clos
 | A call to an upstream | The `timeout_s` of the upstream grant of the app instance: 1 to 120 seconds, and 30 seconds when the grant does not set it (section 6). A call that takes longer fails with `upstream_timeout` (G2). The audit holds a `failed` record. | Most tools answer in well under a second. A delegate call of `attendance` can take up to 120 seconds (section 12). A larger bound holds a caller on a stuck upstream. The upstream may still finish its work after the bound. chaperone does not retry (`crates/chaperone/AGENTS.md`). |
 | The life of a gate | 10 minutes from its creation. The approval hook call ends with it, and so does a kept result. | Long enough for a human away from the phone. Short enough that a forgotten gate does not approve a call hours later. |
 
+A call is in flight from the start of its decision until its final record (row 6 of section 5.2). Each call counts the calls in flight before it, so two calls never read the same count. A call that the decision denies or gates is in flight only until it returns. The run of an approved gate is in flight until its `ran` or `failed` record. The limit does not stop that run, because its decision came before.
+
 ## 6. Configuration
 
 The install file, the policy file and the plugin manifest are TOML. No file has a `$schema` field. The strict reader reads every file. It refuses duplicate keys, a byte order mark, invalid UTF-8, unknown fields and input over the size cap. The Rust types are the source of truth.
@@ -183,10 +187,12 @@ Rules:
 - An install entry of an effect plugin can hold `user`: the OS user that the plugin runs as (section 8). The value is `mcp-`, then `a-z`, then 1 to 30 of `a-z`, `0-9` and `-`. An entry of a plugin with no effect half that holds `user` refuses start. Any other value refuses start.
 - The install entry of the front door plugin can hold `guard`: `loopback` or `host-firewall` (section 7.6). An entry without `guard` takes `loopback`. An entry of another plugin that holds `guard` refuses start. Any other value refuses start.
 - An upstream grant can hold `timeout_s`: the bound of one call to that upstream, in whole seconds (section 5.5). The value is an integer from 1 to 120. A grant without it takes 30. Any other value does not load, and the error names the rule.
+- An upstream grant can hold `max_inflight`: the most calls of the app instance to that upstream that can be in flight at one time (section 5.2). The value is an integer from 1 to 8. A grant without it sets no limit. Any other value does not load, and the error names the rule.
 
   ```toml
   [apps.research.grants.attendance]
   timeout_s = 120
+  max_inflight = 2
   ```
 
 - The policy file names a plugin by name only. It cannot launch a binary or bind a secret.
@@ -451,7 +457,7 @@ An error result holds `{"ok": false, "reason": "<reason>", "detail": "<text>"}`.
 
 The detail is the door's `message`, or its code. A detail is at most 65536 characters. The plugin blanks each copy of either token in a detail and in the content (G9). An argument that breaks its rule gives `arg_validation`, and no request goes out.
 
-An app instance that delegates sets `timeout_s = 120` on its `attendance` grant (section 6). With a lower bound, chaperone ends a longer delegate call with `upstream_timeout` (section 5.5).
+An app instance that delegates sets `timeout_s = 120` on its `attendance` grant (section 6). With a lower bound, chaperone ends a longer delegate call with `upstream_timeout` (section 5.5). It can also set `max_inflight` on that grant to limit its delegate calls at one time. The limit counts each call to the `attendance` upstream, `enqueue` and `job_status` too.
 
 `ha-approval` sits in `plugins/effect/included`. The operator's flow is a Node-RED instance in front of Home Assistant with two legs. The plugin speaks the flow's language and changes nothing in the flow:
 
@@ -520,11 +526,12 @@ One pull request per step:
 10. The rest of version 1, one pull request each:
     1. Policy reload when the policy file changes (section 6).
     2. `GET /healthz` on the front door and `chaperone verify`.
-    3. The `attendance` plugin, both halves, with three tools: `invoke_agent`, `enqueue` and `job_status` (section 12). The one-hop bound and the in-flight delegation limit come later (section 14).
+    3. The `attendance` plugin, both halves, with three tools: `invoke_agent`, `enqueue` and `job_status` (section 12). The one-hop bound comes later (section 14). Step 10.8 adds the in-flight limit.
     4. The `release` effect plugin. Each call writes one request file (section 12).
     5. A front door bound to a LAN address, under the guard `host-firewall` (section 7.6).
     6. The effect host launches each upstream as its own OS user, through `chaperone-as` (section 8).
     7. The bound of an upstream call, per upstream grant (section 5.5).
+    8. The in-flight limit of an upstream grant (section 5.2).
 
 ## 14. Open items
 
@@ -534,4 +541,3 @@ One pull request per step:
 | The 50-character budget of an exposed name (section 7.6) exists for LibreChat, a client that version 1 does not use. The budget can widen. | After version 1 |
 | TLS on the front door. It can come as a third value of `guard` (section 7.6). | After version 1 |
 | The one-hop bound of `attendance`: a family that a delegate call reached cannot delegate again. It needs the delegation ID of the calling session. | After version 1 |
-| The in-flight delegation limit of `attendance`: a cap on the delegate calls of one family at one time. | After version 1 |
