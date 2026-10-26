@@ -4,7 +4,9 @@ This document states what chaperone is, what it guarantees and how its parts fit
 
 ## 1. Purpose
 
-chaperone is a policy layer between an agent app and the tools that app uses. Examples of an agent app are LibreChat, Open WebUI and OpenHands. The app sends each tool call to chaperone. chaperone decides the call with a pure function over a policy file. It then runs the call, holds it for a human approval, or denies it.
+chaperone is a policy layer between an agent app and the tools that app uses. The app is an agent runtime that runs inside an sbx microVM, the sandbox. The app sends each tool call to chaperone. chaperone decides the call with a pure function over a policy file. It then runs the call, holds it for a human approval, or denies it.
+
+chaperone sees tool calls only. The sandbox reaches the model gateway directly, outside chaperone.
 
 The decision is deterministic. The same policy, request, counters and gate state give the same decision. No model takes part in a decision.
 
@@ -15,17 +17,9 @@ chaperone assumes two untrusted parties:
 1. **The model.** A model can be confused or prompt-injected. It must not reach a tool, an argument or a host outside its grant.
 2. **The app.** An app process can be compromised. It must not reach more than its grant, and it must never hold an upstream credential.
 
-The work comes in two stages:
+The sandbox is the trust boundary. chaperone trusts nothing that comes out of the sandbox. The sandbox network lets the app reach a tool only through chaperone. chaperone is the MCP server of the app and decides every tool call. Version 1 is this design.
 
-| Stage | The app | What bounds the app |
-|---|---|---|
-| (a) | Trusted. It runs outside any sandbox. chaperone is its MCP server. | chaperone decides every tool call. |
-| (b) | Untrusted. It runs inside an sbx microVM. | The sandbox network allows only chaperone. chaperone decides every call. |
-
-Version 1 is stage (a). Stage (b) is designed after version 1 works. Version 1 keeps two constraints so that stage (b) needs no policy change:
-
-1. A front door is a plugin. Stage (b) adds a second front door: an OpenAI-compatible model pass-through.
-2. The security boundary is the app instance. One app instance becomes one sandbox in stage (b).
+The security boundary inside chaperone is the app instance. One app instance is one sandbox.
 
 ## 3. The guarantee
 
@@ -130,7 +124,7 @@ The answer is one text block that holds one strict JSON object: `{"answer":"appr
 
 A gate lives 10 minutes from its creation (section 5.5). A denial, or a fault, holds for that life: an identical call finds the gate denied. An approval runs one call, and its result is collected once. chaperone removes the gate when the result is collected, so the next identical call needs a new approval. A result that nobody collects goes with the gate when it expires.
 
-In version 1 the app collects a kept result by asking again. Nothing tells the app that the result is there, because the chat apps of version 1 start a model turn only on a user message and take no inbound call. Stage (b) changes this: the harness in the sandbox subscribes to chaperone for the results of its gates, and chaperone publishes each kept result to it when the run ends. The kept result and the `delivered` record stay as they are, so that step adds a transport and changes no record (section 14).
+In version 1 the app collects a kept result by asking again. Nothing tells the app that the result is there. A later step can change this: the agent runtime in the sandbox subscribes to chaperone for the results of its gates, and chaperone publishes each kept result to it when the run ends. The kept result and the `delivered` record stay as they are, so that step adds a transport and changes no record (section 14).
 
 ### 5.4 Audit records
 
@@ -270,11 +264,11 @@ An app sees one MCP server with the tools of every granted upstream. Each tool h
 - An exposed name holds only `A-Z`, `a-z`, `0-9`, `_` and `-`, up to 50 characters. LibreChat passes each tool to the model as `<tool>_mcp_<server>`, and model APIs allow 64 such characters.
 - The manifest leaves out a tool whose exposed name breaks these rules. chaperone logs a warning that names the tool.
 
-Version 1 configures the LibreChat MCP server name as `chaperone`. This name has nine characters. A 50-character exposed name becomes 64 characters after LibreChat adds its suffix.
+Version 1 has no client that adds the LibreChat suffix. The agent runtime of version 1 names its connection to chaperone `ch`, so the model sees `mcp__ch__<upstream>__<tool>`. The 50-character budget can widen (section 14).
 
 `chaperone serve` starts the front door. It takes `--config-dir` (the directory of `install.toml` and `policy.toml`), `--plugins-dir`, `--audit-file`, `--secrets-dir` and `--listen`. The front door reads each request body through the strict reader before the MCP library parses it, with a cap of 1 MiB. It accepts only loopback `Host` headers, to stop DNS rebinding. Each `--allowed-host` adds one more, such as `host.docker.internal:8300` for an app in Docker.
 
-In version 1, the default front door serves plain HTTP only on a loopback address. chaperone refuses to start when the front door address is not loopback and TLS is not set up. TLS comes before the move to the host.
+In version 1, the default front door serves plain HTTP only on a loopback address. chaperone refuses to start when the front door address is not loopback and TLS is not set up. Step 10.5 decides the guard of a front door on a LAN address.
 
 ### 7.7 The effect host
 
@@ -349,7 +343,7 @@ Version 1 proves the idea with one client app.
 
 | Part | Choice |
 |---|---|
-| Client app | LibreChat, run with Docker Compose |
+| Client app | The agent runtime in the sandbox. The runtime of version 1 is Flue. |
 | Upstream | An existing Vikunja MCP server, unchanged, with the env exception |
 | Decision plugin | `ha-call` decision half: an entity allow-list for Home Assistant calls |
 | Effect plugins | `ha-call` effect half: the Home Assistant call. `ha-approval`: the approval channel, through the operator's existing approval flow. |
@@ -363,7 +357,7 @@ Version 1 proves the idea with one client app.
 
 The plugin takes `--hook-url` and `--listen` through `args` in `install.toml`. It refuses an unspecified listen address. It holds the two tokens in memory only, from the secret line of section 7.5. A hook that does not answer `2xx`, or a tap that does not come in the life of the gate, is a denial.
 
-Version 1 is done when a LibreChat agent makes three calls with this result:
+Version 1 is done when the agent runtime in the sandbox makes three calls with this result:
 
 1. An allowed call runs.
 2. A call to a tool with no grant is denied.
@@ -371,7 +365,7 @@ Version 1 is done when a LibreChat agent makes three calls with this result:
 
 The audit file shows all three calls.
 
-Version 1 is installed by hand. The project publishes tagged versions with built binaries. A release pipeline is not part of version 1.
+The project publishes tagged versions with built binaries. An external release tool installs a version on the host and runs `chaperone verify` after the install (step 10.2). The release tool is not part of this repository.
 
 ## 13. Build order
 
@@ -400,10 +394,18 @@ One pull request per step:
    3. The install file.
    4. The plugin manifest.
    5. The policy file.
+10. The rest of version 1, one pull request each:
+    1. Policy reload when the policy file changes (section 6).
+    2. `GET /healthz` on the front door and `chaperone verify`.
+    3. The `attendance` effect plugin, with three tools: `invoke_agent`, `enqueue` and `job_status`.
+    4. The `release` effect plugin. Each call writes one request file.
+    5. A front door bound to a LAN address. The guard is TLS or a host firewall rule (section 14).
+    6. The effect host launches each upstream as its own OS user.
 
 ## 14. Open items
 
 | Item | Settle in |
 |---|---|
-| Stage (b): sandbox per app instance, the OpenHands runtime, the model pass-through | After version 1 |
-| Stage (b): the harness subscribes to the results of its gates, and chaperone publishes each kept result when the run ends. The transport, and how a subscription is bound to one app instance, are open. | After version 1 |
+| The agent runtime subscribes to the results of its gates, and chaperone publishes each kept result when the run ends. The transport, and how a subscription is bound to one app instance, are open. | After version 1 |
+| The 50-character budget of an exposed name (section 7.6) exists for LibreChat, a client that version 1 does not use. The budget can widen. | After version 1 |
+| A front door on a LAN address needs TLS or a host firewall rule. | Step 10.5 |

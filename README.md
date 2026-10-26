@@ -1,12 +1,12 @@
 # chaperone
 
-chaperone is a policy layer between an agent app and its tools. Point an app such as LibreChat at chaperone as its MCP server. chaperone decides every tool call with a deterministic function over a policy file. It allows the call, denies it, or holds it until a human approves it.
+chaperone is a policy layer between an agent app and its tools. The app runs inside a sandbox, and chaperone is its only path to a tool. The app uses chaperone as its MCP server. chaperone decides every tool call with a deterministic function over a policy file. It allows the call, denies it, or holds it until a human approves it.
 
 The app never holds an upstream credential. No model takes part in a decision. A plugin can narrow what an app may reach. A plugin can never widen it.
 
 ## Status
 
-Build step 3 is done. `chaperone serve` decides and audits each call from an MCP client. No upstream runs yet, so an allowed call fails with `not_connected`. `docs/design.md` section 13 lists the build order.
+Build steps 1 to 9 are done. `chaperone serve` decides and audits each call from an MCP client. It runs an allowed call through its upstream. It asks the approval channel about a gated call and runs the call after an approval. Step 10 holds the rest of version 1. `docs/design.md` section 13 lists the build order.
 
 ## Documents
 

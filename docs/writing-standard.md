@@ -52,7 +52,7 @@ Use each name as it is written here. Do not use a synonym for one.
 
 | Name | Meaning |
 |---|---|
-| app | An agent app that sends tool calls to chaperone, such as LibreChat. |
+| app | An agent app that sends tool calls to chaperone, such as the agent runtime in the sandbox. |
 | app instance | One deployment of one app. The unit of a grant. |
 | grant | What an app instance may reach. The policy file holds it. |
 | tool | A named action that an app can call. An upstream provides it. |
