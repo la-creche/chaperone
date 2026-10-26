@@ -570,6 +570,49 @@ fn row_6_the_limit_counts_only_its_own_upstream() {
 }
 
 #[test]
+fn row_6_an_identical_call_of_a_live_gate_skips_the_limit() {
+    let policy = limited(&inflight_policy("1"));
+    let mut case = Case::new("vikunja", "create_task", r#"{"title": "milk"}"#);
+    case.in_flight = 1;
+    let id = case.gate_id();
+
+    // The run of an approved gate holds the only slot. An identical call
+    // reads its gate: it waits, collects the result or is denied.
+    case.gates.pending.insert(id, LATER);
+    assert_eq!(case.decide(Some(&policy)), Decision::Gate(id));
+    case.gates.pending.clear();
+    case.gates.approved.insert(id, LATER);
+    assert_eq!(case.decide(Some(&policy)), Decision::Allow);
+    case.gates.approved.clear();
+    case.gates.denied.insert(id, LATER);
+    assert_eq!(case.decide(Some(&policy)), deny(DenyReason::ApprovalDenied));
+
+    // An expired gate does not count, so the limit denies.
+    case.gates.denied.insert(id, NOW);
+    assert_eq!(case.decide(Some(&policy)), deny(DenyReason::RateLimited));
+}
+
+#[test]
+fn row_6_only_a_gated_call_of_its_own_gate_skips_the_limit() {
+    let policy = limited(&inflight_policy("1"));
+
+    // The live gate of another call does not lift the limit.
+    let mut other = Case::new("vikunja", "create_task", r#"{"title": "milk"}"#);
+    other.in_flight = 1;
+    let bread = Case::new("vikunja", "create_task", r#"{"title": "bread"}"#).gate_id();
+    other.gates.pending.insert(bread, LATER);
+    assert_eq!(other.decide(Some(&policy)), deny(DenyReason::RateLimited));
+
+    // A call that no row gates runs, so a gate with its ID does not lift
+    // the limit.
+    let mut ungated = Case::new("vikunja", "list_tasks", "{}");
+    ungated.in_flight = 1;
+    let id = ungated.gate_id();
+    ungated.gates.approved.insert(id, LATER);
+    assert_eq!(ungated.decide(Some(&policy)), deny(DenyReason::RateLimited));
+}
+
+#[test]
 fn row_7_a_gated_call_waits_then_runs_after_approval() {
     let policy = base_policy();
     let mut case = Case::new("vikunja", "create_task", r#"{"title": "milk"}"#);

@@ -87,7 +87,7 @@ The rows apply in this order. The first row that matches decides.
    - An `allow` fence needs the argument present and equal to a listed value.
    - A `deny` fence refuses a listed value, and refuses an argument that is not a scalar.
 5. A fence plugin returns deny: `Deny(fence)` with that plugin's reason. The reason is a fixed text of the plugin. A fence plugin faults: `Deny(fence_fault)`. Fences run in plugin name order. The first deny wins.
-6. The upstream grant sets `max_inflight`, and that many calls of the app instance to the upstream are in flight: `Deny(rate_limited)`. Rows 2 and 6 give one reason, because each one limits the load of an app instance.
+6. The upstream grant sets `max_inflight`, and that many calls of the app instance to the upstream are in flight: `Deny(rate_limited)`. Rows 2 and 6 give one reason, because each one limits the load of an app instance. A call that row 7 gates skips this row when its gate exists and is not expired. That call starts no run. It gets the waiting text, the kept result or `approval_denied` (section 5.3).
 7. The policy marks the tool `approval = "required"`, or a fence plugin returns gate:
    1. The gate is denied and not expired: `Deny(approval_denied)`.
    2. The gate is approved and not expired: `Allow`.
@@ -166,7 +166,7 @@ The record keeps the arguments only as the SHA-256 of their canonical form. Clos
 | A call to an upstream | The `timeout_s` of the upstream grant of the app instance: 1 to 120 seconds, and 30 seconds when the grant does not set it (section 6). A call that takes longer fails with `upstream_timeout` (G2). The audit holds a `failed` record. | Most tools answer in well under a second. A delegate call of `attendance` can take up to 120 seconds (section 12). A larger bound holds a caller on a stuck upstream. The upstream may still finish its work after the bound. chaperone does not retry (`crates/chaperone/AGENTS.md`). |
 | The life of a gate | 10 minutes from its creation. The approval hook call ends with it, and so does a kept result. | Long enough for a human away from the phone. Short enough that a forgotten gate does not approve a call hours later. |
 
-A call is in flight from the start of its decision until its final record (row 6 of section 5.2). Each call counts the calls in flight before it, so two calls never read the same count. A call that the decision denies or gates is in flight only until it returns. The run of an approved gate is in flight until its `ran` or `failed` record. The limit does not stop that run, because its decision came before.
+A call is in flight from the start of its decision until its final record (row 6 of section 5.2). Each call counts the calls in flight before it, so two calls never read the same count. A call that the decision denies or gates is in flight only until it returns. The run of an approved gate is in flight until its `ran` or `failed` record. The limit does not stop that run, because its decision came before. The limit also does not stop an identical call of a live gate, because that call starts no run (row 6).
 
 ## 6. Configuration
 

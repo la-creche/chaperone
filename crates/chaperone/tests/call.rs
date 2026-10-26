@@ -1004,3 +1004,33 @@ async fn an_approved_gated_call_counts_while_it_runs() {
     let after = call(&gateway, Some(TOKEN), "vikunja__list_tasks").await;
     assert!(matches!(after, CallOutcome::Ran(_)), "{after:?}");
 }
+
+#[tokio::test]
+async fn an_identical_call_waits_while_its_gate_runs() {
+    let root = tempfile::tempdir().unwrap();
+    let (gateway, sink) = limited(root.path(), 1, &["slow"]);
+    let waiting = call(&gateway, Some(TOKEN), "vikunja__slow").await;
+    let CallOutcome::Waiting(gate) = waiting else {
+        panic!("{waiting:?}");
+    };
+    // The approval channel answers at once. The slow tool then runs, and
+    // holds the only slot, for longer than this wait.
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    assert_eq!(sink.records().len(), 2);
+
+    // An identical call sees the waiting text of the same gate.
+    let again = call(&gateway, Some(TOKEN), "vikunja__slow").await;
+    assert!(
+        matches!(again, CallOutcome::Waiting(found) if found == gate),
+        "{again:?}"
+    );
+
+    // After the run, an identical call collects the kept result.
+    until_records(&sink, 5).await;
+    assert!(sink.events().contains(&AuditEvent::Ran { is_error: false }));
+    let collected = call(&gateway, Some(TOKEN), "vikunja__slow").await;
+    let CallOutcome::Ran(result) = collected else {
+        panic!("{collected:?}");
+    };
+    assert_eq!(result.content, ["late"]);
+}
