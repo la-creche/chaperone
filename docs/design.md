@@ -492,7 +492,7 @@ The project publishes tagged versions with built binaries. An external release t
 
 Releases come from `.github/workflows/release.yml`. To release, a pull request changes `version` in `crates/chaperone/Cargo.toml`. The workflow runs on each push to `main`. A version with a tag, or no version, releases nothing. Else the workflow does these steps:
 
-1. It builds `chaperone` and `chaperone-as` for `x86_64-unknown-linux-musl` with `cargo install --locked --no-track`.
+1. It builds `chaperone` and `chaperone-as` for `x86_64-unknown-linux-musl` with `cargo install --locked --no-track`. A `--bin` names each program, so no other binary of a package enters the archive.
 2. It packs the two programs into `chaperone-x86_64-unknown-linux-musl.tar.gz`. The archive holds `chaperone/bin/chaperone` and `chaperone/bin/chaperone-as`, each with mode 0755, and nothing else.
 3. It signs the archive with a keyless Sigstore signature. The bundle is `chaperone-x86_64-unknown-linux-musl.tar.gz.sigstore.json`.
 4. It makes the tag `chaperone-v<version>` at the merge commit, and a Release with the two files. The author of the Release is `github-actions[bot]`.

@@ -79,8 +79,10 @@ jobs:
           persist-credentials: false
 
       # Each program goes to `$CARGO_INSTALL_ROOT/bin/<name>`, the rule of a
-      # binary build of the host's release tool. The remap keeps the paths
-      # of the runner out of each program.
+      # binary build of the host's release tool. `--bin` names each program,
+      # so another binary of a package, such as a test fake, stays out of
+      # the install root. The remap keeps the paths of the runner out of
+      # each program.
       - name: Build
         run: |
           set -euo pipefail
@@ -95,8 +97,8 @@ jobs:
           RUSTFLAGS+=" --remap-path-prefix=$cargo_home=/build/cargo-home"
           RUSTFLAGS+=" --remap-path-prefix=$RUNNER_TEMP=/build/temp"
           export RUSTFLAGS
-          cargo install --locked --no-track --path crates/chaperone
-          cargo install --locked --no-track --path crates/run-as
+          cargo install --locked --no-track --path crates/chaperone --bin chaperone
+          cargo install --locked --no-track --path crates/run-as --bin chaperone-as
 
       # The archive holds two regular files and no directory member:
       # `chaperone/bin/chaperone` and `chaperone/bin/chaperone-as`, mode
