@@ -532,6 +532,15 @@ The audit file shows all three calls.
 
 The project publishes tagged versions with built binaries. An external release tool installs a version on the host and runs `chaperone verify` after the install (step 10.2). The release tool is not part of this repository.
 
+Releases come from `.github/workflows/release.yml`. To release, a pull request changes `version` in `crates/chaperone/Cargo.toml`. The workflow runs on each push to `main`. A version with a tag, or no version, releases nothing. Else the workflow does these steps:
+
+1. It builds `chaperone` and `chaperone-as` for `x86_64-unknown-linux-musl` with `cargo install --locked --no-track`. A `--bin` names each program, so no other binary of a package enters the archive.
+2. It packs the two programs into `chaperone-x86_64-unknown-linux-musl.tar.gz`. The archive holds `chaperone/bin/chaperone` and `chaperone/bin/chaperone-as`, each with mode 0755, and nothing else.
+3. It signs the archive with a keyless Sigstore signature. The bundle is `chaperone-x86_64-unknown-linux-musl.tar.gz.sigstore.json`.
+4. It makes the tag `chaperone-v<version>` at the merge commit, and a Release with the two files. The author of the Release is `github-actions[bot]`.
+
+The certificate of the signature names the identity `https://github.com/<owner>/<repo>/.github/workflows/release.yml@refs/heads/main`, the issuer `https://token.actions.githubusercontent.com` and the merge commit. The workflow never moves a tag.
+
 ## 13. Build order
 
 One pull request per step:
