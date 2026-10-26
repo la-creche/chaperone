@@ -49,6 +49,7 @@ fn the_repository_plugin_tree_holds_the_defaults_and_the_included() {
             "mcp-http",
             "secret-files",
             "system-clock",
+            "attendance",
             "deny-all",
             "ha-approval",
             "ha-call",

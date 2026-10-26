@@ -1,0 +1,7 @@
+name = "attendance"
+version = "1.0.0"
+kind = "effect"
+hooks = ["upstream"]
+secrets = ["DELEGATE_TOKEN", "DISPATCH_TOKEN"]
+pairs_with = "decision"
+command = ["chaperone-attendance"]
