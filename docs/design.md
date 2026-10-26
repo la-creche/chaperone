@@ -125,7 +125,7 @@ The approval hook is the tool `approve` of the approval channel plugin. chaperon
 
 The answer is one text block that holds one strict JSON object: `{"answer":"approved"}` or `{"answer":"denied","reason":"<text>"}`. The reason is at most 200 characters. Any other result is a fault: an error result, another block, other JSON, an unknown field. A fault denies the gate for the rest of its life (G2), and the call fails with `approval_fault`.
 
-A gate lives 10 minutes from its creation (section 5.5). A denial, or a fault, holds for that life: an identical call finds the gate denied. An approval runs one call, and its result is collected once. chaperone removes the gate when the result is collected, so the next identical call needs a new approval. A result that nobody collects goes with the gate when it expires.
+A gate lives 10 minutes from its creation (section 5.5). A denial, or a fault, holds for that life: an identical call finds the gate denied. An approval runs one call, and its result is collected once. When two identical calls read the done gate at the same time, one call collects the result. The other call fails with `approval_spent` and does not run. chaperone removes the gate when the result is collected, so the next identical call needs a new approval. A result that nobody collects goes with the gate when it expires.
 
 In version 1 the app collects a kept result by asking again. Nothing tells the app that the result is there. A later step can change this: the agent runtime in the sandbox subscribes to chaperone for the results of its gates, and chaperone publishes each kept result to it when the run ends. The kept result and the `delivered` record stay as they are, so that step adds a transport and changes no record (section 14).
 

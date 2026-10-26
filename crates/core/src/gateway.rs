@@ -49,6 +49,9 @@ pub enum CallFault {
     /// The approval channel answered with something that is not an answer,
     /// or did not answer in the life of the gate (`docs/design.md` 5.3).
     ApprovalFault,
+    /// An identical call collected the kept result of the gate first. The
+    /// approval runs one call and gives one result (`docs/design.md` 5.3).
+    ApprovalSpent,
 }
 
 impl CallFault {
@@ -66,6 +69,7 @@ impl CallFault {
             Self::BadResult => "bad_result",
             Self::ApprovalDenied => "approval_denied",
             Self::ApprovalFault => "approval_fault",
+            Self::ApprovalSpent => "approval_spent",
         }
     }
 }
@@ -129,6 +133,7 @@ mod tests {
             CallFault::BadResult,
             CallFault::ApprovalDenied,
             CallFault::ApprovalFault,
+            CallFault::ApprovalSpent,
         ];
         let codes: BTreeSet<&str> = faults.iter().map(|fault| fault.code()).collect();
         assert_eq!(codes.len(), faults.len());
