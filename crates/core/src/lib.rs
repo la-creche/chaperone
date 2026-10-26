@@ -32,8 +32,8 @@ pub use ids::{
     AppId, ArgName, Name, NameError, NameKind, PluginName, SecretName, SecretParam, ToolName,
 };
 pub use install::{
-    Binding, Catalog, Found, INSTALL_FILE_CAP, InstallEntry, InstallError, InstallFile, Location,
-    PluginKey, SecretDelivery, Setup, SetupError, resolve,
+    Binding, Catalog, Found, Guard, INSTALL_FILE_CAP, InstallEntry, InstallError, InstallFile,
+    Location, PluginKey, SecretDelivery, Setup, SetupError, resolve,
 };
 pub use plugin::{Hook, Manifest, ManifestError, PLUGIN_FILE_CAP, PluginKind, Runtime, Slot};
 pub use policy::{

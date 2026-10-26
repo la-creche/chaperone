@@ -169,7 +169,7 @@ The install file, the policy file and the plugin manifest are TOML. No file has 
 
 | File | Who writes it | What it holds |
 |---|---|---|
-| `install.toml` | The operator, by hand | Enabled plugins, the plugin for each slot, launch commands, secret bindings |
+| `install.toml` | The operator, by hand | Enabled plugins, the plugin for each slot, launch commands, secret bindings, the front door guard |
 | `policy.toml` | The operator, by hand or with an external tool | App instances, token digests, grants, argument fences, gates, limits |
 | `plugin.toml` | The plugin author | One per plugin directory. See section 7.4. |
 | A secret file | The operator | One secret value per file |
@@ -179,6 +179,7 @@ Rules:
 - Grants and install entries take a typed `note` field for the reason. A TOML file can also hold comments.
 - The policy file holds maps keyed by app ID, plugin name, tool name and argument name, as TOML tables. A tool name or an argument name can hold a `.`, so it needs a quoted key, such as `"tasks.list" = {}`.
 - An install entry of an effect plugin can hold `args`: arguments that chaperone appends to the command of the manifest at launch. The manifest names the program. The install file adds what differs per deployment, such as an address. An argument is never a secret value (G9).
+- The install entry of the front door plugin can hold `guard`: `loopback` or `host-firewall` (section 7.6). An entry without `guard` takes `loopback`. An entry of another plugin that holds `guard` refuses start. Any other value refuses start.
 - The policy file names a plugin by name only. It cannot launch a binary or bind a secret.
 - An external tool that writes the policy file runs as an OS user that cannot write `install.toml`.
 - chaperone reloads `policy.toml` when the file changes. Before each call, it compares the device, inode, size and modification time of the file with the file it loaded. One policy decides the whole call. A reload that fails denies every call until a valid file loads (G2). A bad write by the operator therefore stops every app until a valid file lands.
@@ -270,7 +271,25 @@ Version 1 has no client that adds the LibreChat suffix. The agent runtime of ver
 
 The front door answers `GET /healthz` with no bearer. The answer is `200` with the body `{"ok":true}` while a valid policy is loaded. It is `503` with the body `{"ok":false}` while no valid policy is loaded (section 6). The body is fixed. It shows no policy content, no secret and no version.
 
-In version 1, the default front door serves plain HTTP only on a loopback address. chaperone refuses to start when the front door address is not loopback and TLS is not set up. Step 10.5 decides the guard of a front door on a LAN address.
+The default front door serves plain HTTP. The guard is the rule that limits who reaches the front door address. The install entry of the front door plugin sets it:
+
+| `guard` | Addresses that start | What the operator states |
+|---|---|---|
+| `loopback`, the default | A loopback address | Nothing. Only the host reaches the port. |
+| `host-firewall` | A loopback address or a LAN unicast address | A host firewall rule limits who reaches the port. |
+
+```toml
+[plugins.mcp-http]
+guard = "host-firewall"
+```
+
+chaperone refuses to start in these cases. The error names the rule.
+
+1. The address is unspecified: `0.0.0.0` or `::`.
+2. The address is multicast or broadcast.
+3. The address is not loopback, and the guard is `loopback`.
+
+With `host-firewall` and a LAN address, chaperone logs a warning at each start. The warning names the address and states that only the host firewall limits who reaches it. chaperone does not check the firewall. An app on the LAN sends the LAN address in its `Host` header, so the operator adds it with `--allowed-host`, such as `192.0.2.10:8300`.
 
 ### 7.7 The effect host
 
@@ -410,7 +429,7 @@ One pull request per step:
     2. `GET /healthz` on the front door and `chaperone verify`.
     3. The `attendance` effect plugin, with three tools: `invoke_agent`, `enqueue` and `job_status`.
     4. The `release` effect plugin. Each call writes one request file.
-    5. A front door bound to a LAN address. The guard is TLS or a host firewall rule (section 14).
+    5. A front door bound to a LAN address, under the guard `host-firewall` (section 7.6).
     6. The effect host launches each upstream as its own OS user.
 
 ## 14. Open items
@@ -419,4 +438,4 @@ One pull request per step:
 |---|---|
 | The agent runtime subscribes to the results of its gates, and chaperone publishes each kept result when the run ends. The transport, and how a subscription is bound to one app instance, are open. | After version 1 |
 | The 50-character budget of an exposed name (section 7.6) exists for LibreChat, a client that version 1 does not use. The budget can widen. | After version 1 |
-| A front door on a LAN address needs TLS or a host firewall rule. | Step 10.5 |
+| TLS on the front door. It can come as a third value of `guard` (section 7.6). | After version 1 |

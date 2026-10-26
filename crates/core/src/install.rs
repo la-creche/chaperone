@@ -37,6 +37,20 @@ pub enum SecretDelivery {
     Env,
 }
 
+/// What limits who reaches the front door on its address
+/// (`docs/design.md` 7.6).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum Guard {
+    /// Only a loopback address. The default when the install file sets no
+    /// guard.
+    #[default]
+    Loopback,
+    /// A LAN address too. The operator states that a host firewall limits
+    /// who reaches the port.
+    HostFirewall,
+}
+
 /// One enabled plugin in `install.toml`.
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -53,6 +67,9 @@ pub struct InstallEntry {
     /// (`docs/design.md` 7.4). Never a secret value (G9).
     #[serde(default)]
     args: Vec<String>,
+    /// The guard of a front door plugin. No other plugin takes one.
+    #[serde(default)]
+    guard: Option<Guard>,
 }
 
 impl InstallEntry {
@@ -155,6 +172,7 @@ pub struct Setup {
     fences: BTreeSet<PluginName>,
     upstreams: BTreeSet<PluginName>,
     bindings: BTreeMap<PluginName, Binding>,
+    guard: Guard,
 }
 
 impl Setup {
@@ -180,6 +198,12 @@ impl Setup {
     #[must_use]
     pub fn binding(&self, plugin: &PluginName) -> Option<&Binding> {
         self.bindings.get(plugin)
+    }
+
+    /// The guard that the install file sets for the front door plugin.
+    #[must_use]
+    pub fn guard(&self) -> Guard {
+        self.guard
     }
 
     /// Every active plugin with its secret binding, in name order.
@@ -231,6 +255,8 @@ pub enum SetupError {
     EnvWithoutProcess { plugin: PluginName },
     #[error("{plugin} has no effect half, so args mean nothing")]
     ArgsWithoutProcess { plugin: PluginName },
+    #[error("install.toml sets a guard for {plugin}, but only a front door takes a guard")]
+    GuardWithoutFrontDoor { plugin: PluginName },
 }
 
 /// Resolve the setup from `install.toml` and the plugins found on disk.
@@ -280,11 +306,17 @@ pub fn resolve(install: &InstallFile, catalog: &Catalog) -> Result<Setup, SetupE
         bindings.insert(name.clone(), bind(name, &found, install.plugins.get(name))?);
     }
 
+    let guard = slots
+        .get(&Slot::FrontDoor)
+        .and_then(|plugin| install.plugins.get(plugin))
+        .and_then(|entry| entry.guard)
+        .unwrap_or_default();
     Ok(Setup {
         slots,
         fences,
         upstreams,
         bindings,
+        guard,
     })
 }
 
@@ -386,6 +418,12 @@ fn bind(
         .any(|f| f.manifest.kind() == PluginKind::Effect);
     if !args.is_empty() && !has_process {
         return Err(SetupError::ArgsWithoutProcess {
+            plugin: name.clone(),
+        });
+    }
+    let front_door = found.iter().any(|f| f.manifest.serves(Hook::FrontDoor));
+    if entry.is_some_and(|e| e.guard.is_some()) && !front_door {
+        return Err(SetupError::GuardWithoutFrontDoor {
             plugin: name.clone(),
         });
     }
@@ -652,6 +690,39 @@ pub(crate) mod tests {
                 plugin: name("bearer")
             }
         );
+    }
+
+    #[test]
+    fn the_guard_of_the_front_door_reaches_the_setup() {
+        let setup = resolve(&install(EMPTY_INSTALL), &defaults()).unwrap();
+        assert_eq!(setup.guard(), Guard::Loopback);
+
+        let text = "version = 1\nplugins.mcp-http.guard = \"host-firewall\"\n";
+        let setup = resolve(&install(text), &defaults()).unwrap();
+        assert_eq!(setup.guard(), Guard::HostFirewall);
+        assert_eq!(setup.slot(Slot::FrontDoor), Some(&name("mcp-http")));
+    }
+
+    #[test]
+    fn refuses_a_guard_on_a_plugin_that_is_not_a_front_door() {
+        let text = "version = 1\nplugins.bearer.guard = \"loopback\"\n";
+        let error = resolve(&install(text), &defaults()).unwrap_err();
+        assert_eq!(
+            error,
+            SetupError::GuardWithoutFrontDoor {
+                plugin: name("bearer")
+            }
+        );
+    }
+
+    #[test]
+    fn refuses_an_unknown_guard() {
+        let text = "version = 1\nplugins.mcp-http.guard = \"tls\"\n";
+        let error = InstallFile::read(text.as_bytes()).unwrap_err();
+        assert!(matches!(
+            error,
+            InstallError::Read(StrictError::Shape { .. })
+        ));
     }
 
     #[test]

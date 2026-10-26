@@ -15,7 +15,9 @@ use std::path::{Path, PathBuf};
 
 use chaperone::catalog::{self, CatalogError};
 use chaperone::startup::{self, Loaded, StartError, Warning};
-use chaperone_core::{INSTALL_FILE_CAP, PluginKind, PluginName, SecretError, SecretParam, Slot};
+use chaperone_core::{
+    Guard, INSTALL_FILE_CAP, PluginKind, PluginName, SecretError, SecretParam, Slot,
+};
 use support::{
     INSTALL, config_dir, plugin_tree, policy_text, repo_plugins, secrets_dir, write_manifest,
     write_secret,
@@ -332,15 +334,63 @@ fn another_plugin_in_a_slot_refuses_start() {
     );
 }
 
+/// The front door address `text`, checked under `guard`.
+fn listen(text: &str, guard: Guard) -> Result<Option<Warning>, StartError> {
+    startup::check_listen(text.parse().unwrap(), guard)
+}
+
 #[test]
-fn a_front_door_address_that_is_not_loopback_refuses_start() {
-    let lan = "192.0.2.10:8300".parse().unwrap();
-    assert!(matches!(
-        startup::check_listen(lan),
-        Err(StartError::NotLoopback(_))
-    ));
-    assert!(startup::check_listen("127.0.0.1:8300".parse().unwrap()).is_ok());
-    assert!(startup::check_listen("[::1]:8300".parse().unwrap()).is_ok());
+fn an_unspecified_front_door_address_refuses_start_under_every_guard() {
+    for guard in [Guard::Loopback, Guard::HostFirewall] {
+        for address in ["0.0.0.0:8300", "[::]:8300", "[::ffff:0.0.0.0]:8300"] {
+            let error = listen(address, guard).unwrap_err();
+            assert!(matches!(error, StartError::Unspecified(_)), "{address}");
+            assert!(error.to_string().contains("unspecified"), "{error}");
+        }
+    }
+}
+
+#[test]
+fn a_multicast_or_broadcast_front_door_address_refuses_start() {
+    for guard in [Guard::Loopback, Guard::HostFirewall] {
+        for address in ["224.0.0.1:8300", "255.255.255.255:8300", "[ff02::1]:8300"] {
+            let error = listen(address, guard).unwrap_err();
+            assert!(matches!(error, StartError::NotUnicast(_)), "{address}");
+            assert!(error.to_string().contains("unicast"), "{error}");
+        }
+    }
+}
+
+#[test]
+fn a_lan_front_door_address_without_the_firewall_guard_refuses_start() {
+    let error = listen("192.0.2.10:8300", Guard::Loopback).unwrap_err();
+    assert!(matches!(error, StartError::NoGuard(_)), "{error}");
+    assert!(error.to_string().contains("host-firewall"), "{error}");
+}
+
+#[test]
+fn a_lan_front_door_address_with_the_firewall_guard_starts_with_a_warning() {
+    let address = "192.0.2.10:8300".parse().unwrap();
+    let warning = startup::check_listen(address, Guard::HostFirewall).unwrap();
+    assert_eq!(warning, Some(Warning::HostFirewall(address)));
+    let text = warning.unwrap().to_string();
+    assert!(text.contains("host firewall"), "{text}");
+}
+
+#[test]
+fn a_loopback_front_door_address_starts_under_every_guard() {
+    for guard in [Guard::Loopback, Guard::HostFirewall] {
+        assert_eq!(listen("127.0.0.1:8300", guard).unwrap(), None);
+        assert_eq!(listen("[::1]:8300", guard).unwrap(), None);
+    }
+}
+
+#[test]
+fn the_firewall_guard_in_the_install_file_reaches_the_setup() {
+    let root = tempfile::tempdir().unwrap();
+    let install = format!("{INSTALL}plugins.mcp-http.guard = \"host-firewall\"\n");
+    let loaded = load(root.path(), &install, &policy_text(30)).unwrap();
+    assert_eq!(loaded.setup.guard(), Guard::HostFirewall);
 }
 
 #[test]

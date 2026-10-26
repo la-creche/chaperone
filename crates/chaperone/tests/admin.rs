@@ -59,6 +59,17 @@ fn the_check_passes_the_fixture_and_refuses_a_broken_policy() {
 }
 
 #[test]
+fn the_check_refuses_an_unknown_guard() {
+    let root = tempfile::tempdir().unwrap();
+    let plugins = plugin_tree(root.path());
+    let config = config_dir(root.path(), INSTALL, &policy_text(30));
+    let install = format!("{INSTALL}plugins.mcp-http.guard = \"tls\"\n");
+    let error =
+        admin::check(ConfigFile::Install, install.as_bytes(), &config, &plugins).unwrap_err();
+    assert!(error.to_string().contains("at line 3"), "{error}");
+}
+
+#[test]
 fn a_new_token_authenticates_and_the_previous_file_is_kept() {
     let root = tempfile::tempdir().unwrap();
     let plugins = plugin_tree(root.path());
