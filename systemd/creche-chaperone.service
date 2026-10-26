@@ -29,8 +29,9 @@ Group=chaperone
 EnvironmentFile=/etc/creche/site.env
 # --config-dir and --plugins-dir take their defaults: /etc/chaperone and
 # /etc/chaperone/plugins. --allowed-host lets an app send the front door
-# address as its Host header.
-ExecStart=/opt/components/chaperone/bin/chaperone serve --listen ${CHAPERONE_LISTEN} --allowed-host ${CHAPERONE_LISTEN} --secrets-dir /etc/chaperone/secrets --audit-file /var/lib/chaperone/audit.jsonl --admin-socket /run/chaperone/admin.sock
+# address as its Host header. --audit-mode 0640 lets the group chaperone
+# read the audit file.
+ExecStart=/opt/components/chaperone/bin/chaperone serve --listen ${CHAPERONE_LISTEN} --allowed-host ${CHAPERONE_LISTEN} --secrets-dir /etc/chaperone/secrets --audit-file /var/lib/chaperone/audit.jsonl --audit-mode 0640 --admin-socket /run/chaperone/admin.sock
 # systemd calls an exit on SIGTERM clean, so on-failure would leave
 # chaperone down after a stray signal. The delay grows from 5 s to 120 s.
 Restart=always
@@ -41,9 +42,12 @@ RestartMaxDelaySec=120s
 # then on this PATH (docs/design.md 7.7).
 Environment=PATH=/usr/local/bin:/usr/bin:/bin
 
-# /var/lib/chaperone holds the audit file. Only chaperone reads it.
+# /var/lib/chaperone holds the audit file, mode 0640. Only chaperone
+# writes it. The operator puts the user of a reader, such as a dashboard,
+# in the group chaperone. systemd sets this mode on each start, also on a
+# directory that exists.
 StateDirectory=chaperone
-StateDirectoryMode=0700
+StateDirectoryMode=0750
 # /run/chaperone holds the admin socket, mode 0660. The operator puts the
 # user of an external tool in the group chaperone to open it.
 RuntimeDirectory=chaperone

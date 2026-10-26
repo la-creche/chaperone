@@ -288,6 +288,19 @@ fn the_unit_starts_the_program_of_the_install_tree() {
 }
 
 #[test]
+fn the_unit_lets_the_group_read_the_audit() {
+    let text = unit_text();
+    let starts = values(&text, "ExecStart");
+    let argv: Vec<&str> = starts[0].split_whitespace().collect();
+    assert!(
+        argv.windows(2).any(|pair| pair == ["--audit-mode", "0640"]),
+        "{argv:?}"
+    );
+    assert_eq!(values(&text, "Group"), ["chaperone"]);
+    assert_eq!(values(&text, "StateDirectoryMode"), ["0750"]);
+}
+
+#[test]
 fn the_unit_holds_only_the_two_capabilities_of_chaperone_as() {
     let text = unit_text();
     assert_eq!(values(&text, "User"), ["chaperone"]);

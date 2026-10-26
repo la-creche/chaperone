@@ -18,17 +18,21 @@ use chaperone_core::{
     AuditSink, Clock, FenceCode, Identity, NameError, PluginName, SecretSource, Slot,
 };
 use chaperone_plugin_attendance_fence::FamilyFence;
+pub use chaperone_plugin_audit_jsonl::AuditMode;
 use chaperone_plugin_audit_jsonl::{JsonlAudit, OpenError};
 use chaperone_plugin_bearer::BearerIdentity;
 use chaperone_plugin_ha_call_fence::EntityFence;
 use chaperone_plugin_secret_files::FileSecrets;
 use chaperone_plugin_system_clock::SystemClock;
 
+/// Opens an audit sink on a file with a mode.
+pub type OpenAuditSink = fn(&Path, AuditMode) -> Result<Arc<dyn AuditSink>, OpenError>;
+
 /// How this build constructs the plugin of one row.
 #[derive(Debug, Clone, Copy)]
 pub enum Build {
     Identity(fn() -> Box<dyn Identity>),
-    AuditSink(fn(&Path) -> Result<Arc<dyn AuditSink>, OpenError>),
+    AuditSink(OpenAuditSink),
     Clock(fn() -> Box<dyn Clock>),
     SecretSource(fn(&Path) -> Box<dyn SecretSource>),
     /// A front door. `chaperone serve` starts it over the gateway after the
@@ -126,7 +130,7 @@ fn secret_files(dir: &Path) -> Box<dyn SecretSource> {
     Box::new(FileSecrets::new(dir.to_owned()))
 }
 
-fn audit_jsonl(file: &Path) -> Result<Arc<dyn AuditSink>, OpenError> {
-    let sink = JsonlAudit::open(file)?;
+fn audit_jsonl(file: &Path, mode: AuditMode) -> Result<Arc<dyn AuditSink>, OpenError> {
+    let sink = JsonlAudit::open(file, mode)?;
     Ok(Arc::new(sink))
 }

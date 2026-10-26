@@ -18,7 +18,7 @@ use chaperone_plugin_audit_jsonl::OpenError;
 
 use crate::catalog::{self, CatalogError};
 use crate::files::{self, ReadError};
-use crate::registry::{self, Build, Entry};
+use crate::registry::{self, AuditMode, Build, Entry};
 use crate::reload::Stamp;
 
 const INSTALL_FILE: &str = "install.toml";
@@ -120,7 +120,7 @@ pub struct Loaded {
 }
 
 /// Load `install.toml` and `policy.toml` from `config_dir` and every plugin
-/// under `plugins_dir`. Open `audit_file`. Read every bound secret through
+/// under `plugins_dir`. Open `audit_file` with `audit_mode`. Read every bound secret through
 /// the secret source over `secrets_dir`. Check that this build can run the
 /// setup.
 ///
@@ -131,6 +131,7 @@ pub fn load(
     config_dir: &Path,
     plugins_dir: &Path,
     audit_file: &Path,
+    audit_mode: AuditMode,
     secrets_dir: &Path,
 ) -> Result<Loaded, StartError> {
     let install_bytes = files::read_capped(&config_dir.join(INSTALL_FILE), INSTALL_FILE_CAP)?;
@@ -143,7 +144,7 @@ pub fn load(
         entry_for(&setup, slot)?;
     }
     let identity = identity_for(&setup)?;
-    let audit = audit_for(&setup, audit_file)?;
+    let audit = audit_for(&setup, audit_file, audit_mode)?;
     let clock = clock_for(&setup)?;
     let source = secret_source_for(&setup, secrets_dir)?;
 
@@ -291,12 +292,16 @@ fn identity_for(setup: &Setup) -> Result<Box<dyn Identity>, StartError> {
     }
 }
 
-/// The audit sink of the setup, opened on `audit_file` from its registry
-/// row.
-fn audit_for(setup: &Setup, audit_file: &Path) -> Result<Arc<dyn AuditSink>, StartError> {
+/// The audit sink of the setup, opened on `audit_file` with `audit_mode`
+/// from its registry row.
+fn audit_for(
+    setup: &Setup,
+    audit_file: &Path,
+    audit_mode: AuditMode,
+) -> Result<Arc<dyn AuditSink>, StartError> {
     let (plugin, entry) = entry_for(setup, Slot::AuditSink)?;
     match entry.build {
-        Build::AuditSink(open) => Ok(open(audit_file)?),
+        Build::AuditSink(open) => Ok(open(audit_file, audit_mode)?),
         Build::Identity(_) | Build::Clock(_) | Build::SecretSource(_) | Build::FrontDoor => {
             Err(no_code(Slot::AuditSink, plugin))
         }

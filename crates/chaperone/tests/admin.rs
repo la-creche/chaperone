@@ -14,6 +14,7 @@ use std::os::unix::fs::PermissionsExt;
 use std::path::Path;
 
 use chaperone::admin::{self, ConfigFile};
+use chaperone::registry::AuditMode;
 use chaperone::startup;
 use chaperone_core::{Bearer, Credentials};
 use support::{INSTALL, TOKEN, config_dir, plugin_tree, policy_text, secrets_dir, write_manifest};
@@ -153,6 +154,7 @@ fn a_new_token_authenticates_and_the_previous_file_is_kept() {
         &config,
         &plugins,
         &root.path().join("audit.jsonl"),
+        AuditMode::OwnerOnly,
         &secrets,
     )
     .unwrap();

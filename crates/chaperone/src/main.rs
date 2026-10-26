@@ -13,6 +13,7 @@ use chaperone::approval::ApprovalChannel;
 use chaperone::effect::{self, Redactor};
 use chaperone::env_file::{DEFAULT_LISTEN_KEY, EnvKey};
 use chaperone::gateway::{Bounds, ChaperoneGateway, Plugins, SharedGateway};
+use chaperone::registry::AuditMode;
 use chaperone::reload::PolicyFile;
 use chaperone::{startup, verify};
 use clap::{Parser, Subcommand};
@@ -106,9 +107,16 @@ struct Serve {
     /// The plugin tree: default/, then <kind>/included and <kind>/added.
     #[arg(long, default_value = DEFAULT_PLUGINS_DIR)]
     plugins_dir: PathBuf,
-    /// The audit file. chaperone creates it with mode 0600.
+    /// The audit file. chaperone creates it with the --audit-mode.
     #[arg(long)]
     audit_file: PathBuf,
+    /// The mode of the audit file: 0600 or 0640. 0600 lets only the
+    /// chaperone user read the audit, under a directory of mode 0700. 0640
+    /// lets the group of the file read it too, under a directory of mode
+    /// 0750. With 0640, chaperone sets a file of mode 0600 to 0640. It
+    /// refuses a file of any other mode.
+    #[arg(long, default_value = "0600")]
+    audit_mode: AuditMode,
     /// The secrets directory: one file per secret, mode 0600, owned by the
     /// user that runs chaperone.
     #[arg(long)]
@@ -241,13 +249,20 @@ async fn run(args: Serve) -> ExitCode {
         config_dir,
         plugins_dir,
         audit_file,
+        audit_mode,
         secrets_dir,
         admin_socket,
         listen,
         mut allowed_hosts,
     } = args;
 
-    let mut loaded = match startup::load(&config_dir, &plugins_dir, &audit_file, &secrets_dir) {
+    let mut loaded = match startup::load(
+        &config_dir,
+        &plugins_dir,
+        &audit_file,
+        audit_mode,
+        &secrets_dir,
+    ) {
         Ok(loaded) => loaded,
         Err(error) => {
             tracing::error!(%error, "refusing to start");
@@ -393,6 +408,45 @@ mod tests {
         };
         assert_eq!(args.config_dir, PathBuf::from(DEFAULT_CONFIG_DIR));
         assert_eq!(args.plugins_dir, PathBuf::from(DEFAULT_PLUGINS_DIR));
+        assert_eq!(args.audit_mode, AuditMode::OwnerOnly);
+    }
+
+    const SERVE_PATHS: [&str; 7] = [
+        "serve",
+        "--audit-file",
+        "/var/lib/chaperone/audit.jsonl",
+        "--secrets-dir",
+        "/etc/chaperone/secrets",
+        "--admin-socket",
+        "/run/chaperone/admin.sock",
+    ];
+
+    fn try_serve(mode: &str) -> Result<Cli, clap::Error> {
+        Cli::try_parse_from(
+            std::iter::once("chaperone")
+                .chain(SERVE_PATHS)
+                .chain(["--audit-mode", mode]),
+        )
+    }
+
+    #[test]
+    fn serve_takes_audit_mode_0600_or_0640() {
+        for (text, mode) in [
+            ("0600", AuditMode::OwnerOnly),
+            ("0640", AuditMode::GroupRead),
+        ] {
+            let Command::Serve(args) = try_serve(text).unwrap().command else {
+                panic!("not serve");
+            };
+            assert_eq!(args.audit_mode, mode, "{text}");
+        }
+    }
+
+    #[test]
+    fn serve_refuses_any_other_audit_mode() {
+        for text in ["0644", "0700", "640", "group"] {
+            assert!(try_serve(text).is_err(), "{text}");
+        }
     }
 
     #[test]

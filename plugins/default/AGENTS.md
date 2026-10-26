@@ -11,7 +11,7 @@ This directory holds one plugin for each required slot. chaperone does not start
 | front door | adapter | MCP over streamable HTTP | Serves the manifest and tool calls to an app |
 | identity | decision | bearer token | Resolves a bearer token to an app instance by its SHA-256 digest. Constant-time compare. Refuses text that is not a 64-character hex token. |
 | secret source | adapter | secret files | One file per secret, named after it. Opened without following a link. Refuses a non-regular file, a mode other than 0600, another owner, an empty or oversized value, a control character and white space at either end. |
-| audit sink | adapter | JSONL file | Appends one line per call and syncs it before return. Refuses a link, a non-regular file and a mode other than 0600. |
+| audit sink | adapter | JSONL file | Appends one line per call and syncs it before return. Refuses a link, a non-regular file and a mode other than the `--audit-mode`: 0600 by default, or 0640. With 0640, sets a file of mode 0600 to 0640. |
 | approval channel | effect | deny all | Answers `Denied("no approval channel")` to every request |
 | clock | adapter | system clock | Reads the OS clock on each call. A time before the Unix epoch reads as the epoch. |
 

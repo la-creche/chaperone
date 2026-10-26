@@ -14,6 +14,7 @@ use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 
 use chaperone::catalog::{self, CatalogError};
+use chaperone::registry::AuditMode;
 use chaperone::startup::{self, Loaded, StartError, Warning};
 use chaperone_core::{
     Guard, INSTALL_FILE_CAP, PluginKind, PluginName, SecretError, SecretParam, Slot,
@@ -32,7 +33,13 @@ fn load(root: &Path, install: &str, policy: &str) -> Result<Loaded, StartError> 
     let plugins = plugin_tree(root);
     let config = config_dir(root, install, policy);
     let secrets = secrets_dir(root);
-    startup::load(&config, &plugins, &root.join("audit.jsonl"), &secrets)
+    startup::load(
+        &config,
+        &plugins,
+        &root.join("audit.jsonl"),
+        AuditMode::OwnerOnly,
+        &secrets,
+    )
 }
 
 #[test]
@@ -166,6 +173,18 @@ fn the_defaults_load_and_open_the_audit_file() {
 }
 
 #[test]
+fn group_read_opens_the_audit_file_with_mode_0640() {
+    let root = tempfile::tempdir().unwrap();
+    let plugins = plugin_tree(root.path());
+    let config = config_dir(root.path(), INSTALL, &policy_text(30));
+    let secrets = secrets_dir(root.path());
+    let audit = root.path().join("audit.jsonl");
+    startup::load(&config, &plugins, &audit, AuditMode::GroupRead, &secrets).unwrap();
+    let mode = std::fs::metadata(&audit).unwrap().permissions().mode() & 0o777;
+    assert_eq!(mode, 0o640);
+}
+
+#[test]
 fn a_missing_install_file_refuses_start() {
     let root = tempfile::tempdir().unwrap();
     let plugins = plugin_tree(root.path());
@@ -176,6 +195,7 @@ fn a_missing_install_file_refuses_start() {
         &config,
         &plugins,
         &root.path().join("audit.jsonl"),
+        AuditMode::OwnerOnly,
         &secrets,
     )
     .unwrap_err();
@@ -233,6 +253,7 @@ fn a_bound_secret_is_read_at_start() {
         &config,
         &plugins,
         &root.path().join("audit.jsonl"),
+        AuditMode::OwnerOnly,
         &secrets,
     )
     .unwrap();
@@ -256,6 +277,7 @@ fn a_bound_secret_that_is_missing_refuses_start() {
         &config,
         &plugins,
         &root.path().join("audit.jsonl"),
+        AuditMode::OwnerOnly,
         &secrets,
     )
     .unwrap_err();
@@ -279,7 +301,14 @@ fn a_setup_without_secrets_never_needs_the_directory() {
     let plugins = plugin_tree(root.path());
     let config = config_dir(root.path(), INSTALL, &policy_text(30));
     let none = root.path().join("no-such-dir");
-    let loaded = startup::load(&config, &plugins, &root.path().join("audit.jsonl"), &none).unwrap();
+    let loaded = startup::load(
+        &config,
+        &plugins,
+        &root.path().join("audit.jsonl"),
+        AuditMode::OwnerOnly,
+        &none,
+    )
+    .unwrap();
     assert!(loaded.secrets.is_empty());
 }
 
@@ -322,6 +351,7 @@ fn another_plugin_in_a_slot_refuses_start() {
         &config,
         &plugins,
         &root.path().join("audit.jsonl"),
+        AuditMode::OwnerOnly,
         &secrets,
     )
     .unwrap_err();
@@ -405,6 +435,7 @@ fn an_unsafe_audit_file_refuses_start() {
     std::fs::write(&audit, b"").unwrap();
     std::fs::set_permissions(&audit, std::fs::Permissions::from_mode(0o644)).unwrap();
     let secrets = secrets_dir(root.path());
-    let error = startup::load(&config, &plugins, &audit, &secrets).unwrap_err();
+    let error =
+        startup::load(&config, &plugins, &audit, AuditMode::OwnerOnly, &secrets).unwrap_err();
     assert!(matches!(error, StartError::Audit(_)), "{error}");
 }

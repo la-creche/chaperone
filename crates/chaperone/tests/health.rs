@@ -19,6 +19,7 @@ use std::sync::Arc;
 use chaperone::effect::{Redactor, Upstreams};
 use chaperone::env_file::EnvKey;
 use chaperone::gateway::{Bounds, ChaperoneGateway, Plugins, SharedGateway};
+use chaperone::registry::AuditMode;
 use chaperone::reload::PolicyFile;
 use chaperone::verify::Target;
 use chaperone::{startup, verify};
@@ -40,7 +41,7 @@ async fn serve() -> Served {
     let config = config_dir(root.path(), INSTALL, &policy_text(30));
     let audit = root.path().join("audit.jsonl");
     let secrets = secrets_dir(root.path());
-    let loaded = startup::load(&config, &plugins, &audit, &secrets).unwrap();
+    let loaded = startup::load(&config, &plugins, &audit, AuditMode::OwnerOnly, &secrets).unwrap();
     let policy = PolicyFile::new(&config, loaded.setup, loaded.policy, loaded.policy_stamp);
     let gateway = Arc::new(SharedGateway::new(ChaperoneGateway::new(
         loaded.run,

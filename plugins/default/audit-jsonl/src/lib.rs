@@ -6,14 +6,16 @@
 //! also synced, so the new directory entry survives a crash.
 //!
 //! The sink refuses an unsafe audit path. It refuses a symbolic link, a
-//! file that is not a regular file, and a file with a mode other than 0600.
-//! A link could send the records elsewhere. A wider mode would let another
-//! OS user read or change them.
+//! file that is not a regular file, and a file with a mode other than the
+//! [`AuditMode`]. A link could send the records elsewhere. A wider mode
+//! would let another OS user read or change them.
 
-use std::fs::{File, FileType, OpenOptions};
+use std::fmt;
+use std::fs::{File, FileType, OpenOptions, Permissions};
 use std::io::{ErrorKind, Write};
 use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
 use std::path::Path;
+use std::str::FromStr;
 use std::sync::Mutex;
 
 use chaperone_core::{AuditError, AuditEvent, AuditRecord, AuditSink};
@@ -21,8 +23,56 @@ use serde::Serialize;
 use time::OffsetDateTime;
 use time::format_description::well_known::Rfc3339;
 
-const FILE_MODE: u32 = 0o600;
+const OWNER_ONLY_MODE: u32 = 0o600;
+const GROUP_READ_MODE: u32 = 0o640;
 const MODE_BITS: u32 = 0o777;
+
+/// The mode of the audit file. The directory of the file needs the
+/// matching mode: 0700 for 0600 and 0750 for 0640. systemd sets the
+/// directory mode, not the sink.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum AuditMode {
+    /// 0600. Only the owner reads the file.
+    #[default]
+    OwnerOnly,
+    /// 0640. The group of the file reads it too. Only the owner writes it.
+    GroupRead,
+}
+
+impl AuditMode {
+    /// The permission bits of the file.
+    #[must_use]
+    pub const fn bits(self) -> u32 {
+        match self {
+            Self::OwnerOnly => OWNER_ONLY_MODE,
+            Self::GroupRead => GROUP_READ_MODE,
+        }
+    }
+}
+
+impl fmt::Display for AuditMode {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{:04o}", self.bits())
+    }
+}
+
+/// The text is not one of the two audit modes.
+#[derive(Debug, thiserror::Error)]
+#[error("the audit mode must be 0600 or 0640")]
+pub struct ModeError;
+
+impl FromStr for AuditMode {
+    type Err = ModeError;
+
+    /// Read `0600` or `0640`. Every other text is an error.
+    fn from_str(text: &str) -> Result<Self, ModeError> {
+        match text {
+            "0600" => Ok(Self::OwnerOnly),
+            "0640" => Ok(Self::GroupRead),
+            _ => Err(ModeError),
+        }
+    }
+}
 
 /// Why the audit file cannot be used. chaperone then refuses to start (G6).
 #[derive(Debug, thiserror::Error)]
@@ -33,8 +83,8 @@ pub enum OpenError {
     Link,
     #[error("the audit path is not a regular file")]
     NotRegular,
-    #[error("the audit file has mode {found:o}, not {FILE_MODE:o}")]
-    Mode { found: u32 },
+    #[error("the audit file has mode {found:04o}, not {expected}")]
+    Mode { found: u32, expected: AuditMode },
 }
 
 #[derive(Debug)]
@@ -43,16 +93,18 @@ pub struct JsonlAudit {
 }
 
 impl JsonlAudit {
-    /// Open `path` for append. Create it with mode 0600 if it is missing.
+    /// Open `path` for append. Create it with `mode` if it is missing.
     /// Refuse a link, a file that is not regular and a file with another
-    /// mode. Sync a new file and its parent directory before return.
+    /// mode. One exception: with [`AuditMode::GroupRead`], set a file of
+    /// mode 0600 to 0640, so a file of the 0600 default stays in use. Sync
+    /// a new file and its parent directory before return.
     ///
     /// # Errors
     ///
     /// Returns an [`OpenError`] when the path is unsafe or the I/O fails.
-    pub fn open(path: &Path) -> Result<Self, OpenError> {
-        let file = open_no_follow(path)?;
-        check_file(&file)?;
+    pub fn open(path: &Path, mode: AuditMode) -> Result<Self, OpenError> {
+        let file = open_no_follow(path, mode)?;
+        check_file(&file, mode)?;
         file.sync_all()?;
         sync_parent(path)?;
         Ok(Self {
@@ -62,12 +114,12 @@ impl JsonlAudit {
 }
 
 /// Open `path` for append without following a final symbolic link. Create
-/// the file with mode 0600 when it is missing.
-fn open_no_follow(path: &Path) -> Result<File, OpenError> {
+/// the file with `mode` when it is missing.
+fn open_no_follow(path: &Path, mode: AuditMode) -> Result<File, OpenError> {
     let created = OpenOptions::new()
         .append(true)
         .create_new(true)
-        .mode(FILE_MODE)
+        .mode(mode.bits())
         .custom_flags(libc::O_NOFOLLOW)
         .open(path);
     let existing = match created {
@@ -86,17 +138,26 @@ fn open_no_follow(path: &Path) -> Result<File, OpenError> {
 }
 
 /// Check the opened file, not the path. A file swapped in after the open
-/// is checked too.
-fn check_file(file: &File) -> Result<(), OpenError> {
+/// is checked too. The mode change also goes through the opened file.
+fn check_file(file: &File, mode: AuditMode) -> Result<(), OpenError> {
     let metadata = file.metadata()?;
     if !FileType::is_file(&metadata.file_type()) {
         return Err(OpenError::NotRegular);
     }
     let found = metadata.permissions().mode() & MODE_BITS;
-    if found != FILE_MODE {
-        return Err(OpenError::Mode { found });
+    if found == mode.bits() {
+        return Ok(());
     }
-    Ok(())
+    match mode {
+        AuditMode::GroupRead if found == OWNER_ONLY_MODE => {
+            file.set_permissions(Permissions::from_mode(GROUP_READ_MODE))?;
+            Ok(())
+        }
+        AuditMode::GroupRead | AuditMode::OwnerOnly => Err(OpenError::Mode {
+            found,
+            expected: mode,
+        }),
+    }
 }
 
 fn sync_parent(path: &Path) -> std::io::Result<()> {
@@ -202,7 +263,7 @@ mod tests {
     fn writes_safe_records_with_mode_0600() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("audit.jsonl");
-        let sink = JsonlAudit::open(&path).unwrap();
+        let sink = JsonlAudit::open(&path, AuditMode::OwnerOnly).unwrap();
         let first = CallNumber::FIRST;
         let second = first.checked_next().unwrap();
 
@@ -237,7 +298,10 @@ mod tests {
         std::fs::write(&target, b"").unwrap();
         let link = dir.path().join("audit.jsonl");
         std::os::unix::fs::symlink(&target, &link).unwrap();
-        assert!(matches!(JsonlAudit::open(&link), Err(OpenError::Link)));
+        assert!(matches!(
+            JsonlAudit::open(&link, AuditMode::OwnerOnly),
+            Err(OpenError::Link)
+        ));
         assert_eq!(std::fs::metadata(&target).unwrap().len(), 0);
     }
 
@@ -248,15 +312,15 @@ mod tests {
         std::fs::write(&path, b"").unwrap();
         std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o644)).unwrap();
         assert!(matches!(
-            JsonlAudit::open(&path),
-            Err(OpenError::Mode { found: 0o644 })
+            JsonlAudit::open(&path, AuditMode::OwnerOnly),
+            Err(OpenError::Mode { found: 0o644, .. })
         ));
     }
 
     #[test]
     fn refuses_a_path_that_is_not_a_regular_file() {
         let dir = tempfile::tempdir().unwrap();
-        assert!(JsonlAudit::open(dir.path()).is_err());
+        assert!(JsonlAudit::open(dir.path(), AuditMode::OwnerOnly).is_err());
     }
 
     #[test]
@@ -267,12 +331,86 @@ mod tests {
         let first = CallNumber::FIRST;
         let second = first.checked_next().unwrap();
 
-        let sink = JsonlAudit::open(&path).unwrap();
+        let sink = JsonlAudit::open(&path, AuditMode::OwnerOnly).unwrap();
         allowed(first, &sink).ran(false, END, &sink).unwrap();
         drop(sink);
-        let sink = JsonlAudit::open(&path).unwrap();
+        let sink = JsonlAudit::open(&path, AuditMode::OwnerOnly).unwrap();
         allowed(second, &sink).ran(true, END, &sink).unwrap();
 
         assert_eq!(std::fs::read_to_string(&path).unwrap().lines().count(), 4);
+    }
+
+    fn mode_of(path: &Path) -> u32 {
+        std::fs::metadata(path).unwrap().permissions().mode() & 0o777
+    }
+
+    /// Write an empty audit file with `mode` and return its path.
+    fn file_with_mode(dir: &Path, mode: u32) -> std::path::PathBuf {
+        let path = dir.join("audit.jsonl");
+        std::fs::write(&path, b"").unwrap();
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(mode)).unwrap();
+        path
+    }
+
+    #[test]
+    fn group_read_creates_the_file_with_mode_0640() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("audit.jsonl");
+        let sink = JsonlAudit::open(&path, AuditMode::GroupRead).unwrap();
+        allowed(CallNumber::FIRST, &sink)
+            .ran(false, END, &sink)
+            .unwrap();
+        assert_eq!(mode_of(&path), 0o640);
+        assert_eq!(std::fs::read_to_string(&path).unwrap().lines().count(), 2);
+    }
+
+    #[test]
+    fn group_read_opens_a_file_of_mode_0640() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = file_with_mode(dir.path(), 0o640);
+        assert!(JsonlAudit::open(&path, AuditMode::GroupRead).is_ok());
+        assert_eq!(mode_of(&path), 0o640);
+    }
+
+    #[test]
+    fn group_read_sets_a_file_of_mode_0600_to_0640() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = file_with_mode(dir.path(), 0o600);
+        assert!(JsonlAudit::open(&path, AuditMode::GroupRead).is_ok());
+        assert_eq!(mode_of(&path), 0o640);
+    }
+
+    #[test]
+    fn group_read_refuses_a_file_with_a_wider_mode() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = file_with_mode(dir.path(), 0o644);
+        assert!(matches!(
+            JsonlAudit::open(&path, AuditMode::GroupRead),
+            Err(OpenError::Mode { found: 0o644, .. })
+        ));
+        assert_eq!(mode_of(&path), 0o644);
+    }
+
+    #[test]
+    fn owner_only_refuses_a_file_of_mode_0640() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = file_with_mode(dir.path(), 0o640);
+        assert!(matches!(
+            JsonlAudit::open(&path, AuditMode::OwnerOnly),
+            Err(OpenError::Mode { found: 0o640, .. })
+        ));
+        assert_eq!(mode_of(&path), 0o640);
+    }
+
+    #[test]
+    fn the_audit_mode_reads_only_0600_and_0640() {
+        assert_eq!("0600".parse::<AuditMode>().unwrap(), AuditMode::OwnerOnly);
+        assert_eq!("0640".parse::<AuditMode>().unwrap(), AuditMode::GroupRead);
+        for text in ["600", "640", "0644", "0700", "0o600", "", "group"] {
+            assert!(text.parse::<AuditMode>().is_err(), "{text}");
+        }
+        assert_eq!(AuditMode::default(), AuditMode::OwnerOnly);
+        assert_eq!(AuditMode::OwnerOnly.to_string(), "0600");
+        assert_eq!(AuditMode::GroupRead.to_string(), "0640");
     }
 }

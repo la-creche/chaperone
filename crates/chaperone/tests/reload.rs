@@ -19,6 +19,7 @@ use std::sync::{Arc, Mutex};
 
 use chaperone::effect::{Redactor, Upstreams};
 use chaperone::gateway::{Bounds, ChaperoneGateway, Plugins, SharedGateway};
+use chaperone::registry::AuditMode;
 use chaperone::reload::PolicyFile;
 use chaperone::startup;
 use chaperone_core::{
@@ -84,7 +85,7 @@ fn harness(policy: &str) -> Harness {
     let config = config_dir(root.path(), INSTALL, policy);
     let secrets = secrets_dir(root.path());
     let audit = root.path().join("audit.jsonl");
-    let loaded = startup::load(&config, &plugins, &audit, &secrets).unwrap();
+    let loaded = startup::load(&config, &plugins, &audit, AuditMode::OwnerOnly, &secrets).unwrap();
     let policy = PolicyFile::new(&config, loaded.setup, loaded.policy, loaded.policy_stamp);
     let sink = Arc::new(MemorySink::default());
     let gateway = SharedGateway::new(ChaperoneGateway::new(

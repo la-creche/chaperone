@@ -20,6 +20,7 @@ use std::time::{Duration, Instant};
 use chaperone::approval::ApprovalChannel;
 use chaperone::effect::{Effect, EffectFault, EffectTool, RESULT_CAP, Redactor, Upstreams};
 use chaperone::gateway::{Bounds, ChaperoneGateway, Plugins, SharedGateway};
+use chaperone::registry::AuditMode;
 use chaperone::startup::{self, Secrets};
 use chaperone_core::{
     AppId, ArgValue, AuditDecision, AuditError, AuditEvent, AuditRecord, AuditSink, AuditTool,
@@ -143,7 +144,14 @@ fn loaded(root: &std::path::Path, calls_per_minute: u32) -> startup::Loaded {
     let plugins = plugin_tree(root);
     let config = config_dir(root, INSTALL, &policy_text(calls_per_minute));
     let secrets = secrets_dir(root);
-    startup::load(&config, &plugins, &root.join("audit.jsonl"), &secrets).unwrap()
+    startup::load(
+        &config,
+        &plugins,
+        &root.join("audit.jsonl"),
+        AuditMode::OwnerOnly,
+        &secrets,
+    )
+    .unwrap()
 }
 
 const SECRET_VALUE: &str = "tok-123";
@@ -925,7 +933,14 @@ fn gateway_over(root: &std::path::Path, policy: &str) -> (SharedGateway, Arc<Mem
     let config = config_dir(root, INSTALL, policy);
     let secret_files = secrets_dir(root);
     let audit_file = root.join("audit.jsonl");
-    let loaded = startup::load(&config, &plugins, &audit_file, &secret_files).unwrap();
+    let loaded = startup::load(
+        &config,
+        &plugins,
+        &audit_file,
+        AuditMode::OwnerOnly,
+        &secret_files,
+    )
+    .unwrap();
     let sink = Arc::new(MemorySink::default());
     let gateway = SharedGateway::new(ChaperoneGateway::new(
         RUN,
