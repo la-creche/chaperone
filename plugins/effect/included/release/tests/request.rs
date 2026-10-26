@@ -149,6 +149,10 @@ fn a_bad_argument_is_refused_with_no_value_in_the_error() {
             ArgumentError::RollbackOf,
         ),
         (
+            json!({"components": {"chaperone": "1.2.3"}, "kind": "rollback", "rollback_of": "Z0000000000000000000000000"}),
+            ArgumentError::RollbackOf,
+        ),
+        (
             json!({"components": {"chaperone": "1.2.3"}, "rollback_of": rollback}),
             ArgumentError::ReleaseWithTarget,
         ),
