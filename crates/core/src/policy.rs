@@ -7,7 +7,7 @@ use std::fmt;
 
 use serde::{Deserialize, Serialize};
 
-use crate::hook::{Fence, PreparedFence, RawSection, SectionError};
+use crate::hook::{CrossAppError, Fence, PreparedFence, RawSection, SectionError};
 use crate::ids::{AppId, ArgName, PluginName, ToolName};
 use crate::install::Setup;
 use crate::strict::{self, ByteCap, StrictError};
@@ -252,6 +252,9 @@ pub struct App {
     grants: BTreeMap<PluginName, UpstreamGrant>,
     bounds: BTreeMap<PluginName, UpstreamBound>,
     inflight: BTreeMap<PluginName, InflightLimit>,
+    /// The plugin sections as the policy file holds them. Each fence
+    /// prepares its own at load.
+    sections: BTreeMap<PluginName, toml::Value>,
     fences: Vec<ActiveFence>,
 }
 
@@ -361,6 +364,68 @@ pub enum PolicyError {
         plugin: PluginName,
         error: SectionError,
     },
+    #[error("the fence {plugin} refuses the policy: {error}")]
+    CrossApp {
+        plugin: PluginName,
+        error: CrossAppError,
+    },
+}
+
+/// A [`Fence`] of any section type, as [`Policy::load`] takes it. Every
+/// fence is one, and nothing else can be one.
+pub trait FenceCode: Send + Sync + fmt::Debug + sealed::Sealed {
+    /// The plugin name of the fence.
+    fn plugin(&self) -> &PluginName;
+
+    /// Prepare the section of each app instance in `apps`, then check the
+    /// sections together. Only when both pass does each app instance get
+    /// its prepared fence.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`PolicyError::Section`] or [`PolicyError::CrossApp`].
+    fn prepare_apps(&self, apps: &mut BTreeMap<AppId, App>) -> Result<(), PolicyError>;
+}
+
+mod sealed {
+    pub trait Sealed {}
+
+    impl<F: super::Fence> Sealed for F {}
+}
+
+impl<F: Fence> FenceCode for F {
+    fn plugin(&self) -> &PluginName {
+        self.name()
+    }
+
+    fn prepare_apps(&self, apps: &mut BTreeMap<AppId, App>) -> Result<(), PolicyError> {
+        let plugin = self.name();
+        let mut prepared = Vec::with_capacity(apps.len());
+        for (id, app) in apps.iter_mut() {
+            let section = app.sections.get(plugin).map(RawSection::new);
+            let fence = self
+                .prepare(section)
+                .map_err(|error| PolicyError::Section {
+                    app: id.clone(),
+                    plugin: plugin.clone(),
+                    error,
+                })?;
+            prepared.push((id, app, fence));
+        }
+        let sections = prepared.iter().map(|(id, _, fence)| (*id, fence)).collect();
+        self.check_sections(&sections)
+            .map_err(|error| PolicyError::CrossApp {
+                plugin: plugin.clone(),
+                error,
+            })?;
+        for (_, app, fence) in prepared {
+            app.fences.push(ActiveFence {
+                plugin: plugin.clone(),
+                fence: Box::new(fence),
+            });
+        }
+        Ok(())
+    }
 }
 
 /// Read `policy.toml` through the strict reader.
@@ -427,7 +492,11 @@ impl Policy {
     /// # Errors
     ///
     /// Returns the first [`PolicyError`] found. Checks run in a fixed order.
-    pub fn load(bytes: &[u8], setup: &Setup, fences: &[&dyn Fence]) -> Result<Self, PolicyError> {
+    pub fn load(
+        bytes: &[u8],
+        setup: &Setup,
+        fences: &[&dyn FenceCode],
+    ) -> Result<Self, PolicyError> {
         let raw: RawPolicy = read_raw(bytes)?;
         if raw.version != POLICY_VERSION {
             return Err(PolicyError::Version { found: raw.version });
@@ -435,10 +504,10 @@ impl Policy {
 
         // Two fences of one name would let the registration order pick
         // the code that runs (G10). Refuse the pair instead.
-        let mut code: BTreeMap<&PluginName, &dyn Fence> = BTreeMap::new();
+        let mut code: BTreeMap<&PluginName, &dyn FenceCode> = BTreeMap::new();
         for fence in fences {
-            if code.insert(fence.name(), *fence).is_some() {
-                return Err(PolicyError::DuplicateFence(fence.name().clone()));
+            if code.insert(fence.plugin(), *fence).is_some() {
+                return Err(PolicyError::DuplicateFence(fence.plugin().clone()));
             }
         }
         for name in setup.fences() {
@@ -450,7 +519,7 @@ impl Policy {
         let mut owners: BTreeMap<TokenDigest, AppId> = BTreeMap::new();
         let mut apps = BTreeMap::new();
         for (id, raw_app) in raw.apps {
-            let app = load_app(&id, raw_app, setup, &code)?;
+            let app = load_app(&id, raw_app, setup)?;
             for digest in &app.digests {
                 if let Some(first) = owners.get(digest) {
                     return Err(PolicyError::SharedDigest {
@@ -461,6 +530,12 @@ impl Policy {
                 owners.insert(digest.clone(), id.clone());
             }
             apps.insert(id, app);
+        }
+        for name in setup.fences() {
+            let Some(fence) = code.get(name) else {
+                return Err(PolicyError::MissingFence(name.clone()));
+            };
+            fence.prepare_apps(&mut apps)?;
         }
         Ok(Self { apps })
     }
@@ -485,12 +560,7 @@ impl Policy {
     }
 }
 
-fn load_app(
-    id: &AppId,
-    raw: RawApp,
-    setup: &Setup,
-    code: &BTreeMap<&PluginName, &dyn Fence>,
-) -> Result<App, PolicyError> {
+fn load_app(id: &AppId, raw: RawApp, setup: &Setup) -> Result<App, PolicyError> {
     if raw.token_sha256.is_empty() || raw.token_sha256.len() > DIGESTS_MAX {
         return Err(PolicyError::DigestCount { app: id.clone() });
     }
@@ -561,25 +631,6 @@ fn load_app(
         }
     }
 
-    let mut fences = Vec::new();
-    for name in setup.fences() {
-        let Some(fence) = code.get(name) else {
-            return Err(PolicyError::MissingFence(name.clone()));
-        };
-        let section = raw.plugins.get(name).map(RawSection::new);
-        let prepared = fence
-            .prepare(section)
-            .map_err(|error| PolicyError::Section {
-                app: id.clone(),
-                plugin: name.clone(),
-                error,
-            })?;
-        fences.push(ActiveFence {
-            plugin: name.clone(),
-            fence: prepared,
-        });
-    }
-
     Ok(App {
         note: raw.note,
         digests: raw.token_sha256,
@@ -587,6 +638,7 @@ fn load_app(
         grants: raw.grants,
         bounds,
         inflight,
-        fences,
+        sections: raw.plugins,
+        fences: Vec::new(),
     })
 }

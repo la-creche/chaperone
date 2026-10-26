@@ -16,7 +16,7 @@ use std::path::Path;
 use chaperone::admin::{self, ConfigFile};
 use chaperone::startup;
 use chaperone_core::{Bearer, Credentials};
-use support::{INSTALL, TOKEN, config_dir, plugin_tree, policy_text, secrets_dir};
+use support::{INSTALL, TOKEN, config_dir, plugin_tree, policy_text, secrets_dir, write_manifest};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio_util::sync::CancellationToken;
 
@@ -56,6 +56,53 @@ fn the_check_passes_the_fixture_and_refuses_a_broken_policy() {
     )
     .unwrap_err();
     assert!(error.to_string().contains("ghost"), "{error}");
+}
+
+#[test]
+fn the_check_refuses_a_delegation_chain_and_names_both_apps() {
+    let root = tempfile::tempdir().unwrap();
+    let plugins = plugin_tree(root.path());
+    write_manifest(
+        &plugins,
+        "decision/included/attendance",
+        r#"
+            name = "attendance"
+            version = "1"
+            kind = "decision"
+            hooks = ["fence"]
+        "#,
+    );
+    let install = "version = 1\nplugins = { attendance = {}, vikunja = {} }\n";
+    let config = config_dir(root.path(), install, &policy_text(30));
+    let policy = |beta_delegates: &str| {
+        format!(
+            r#"
+            version = 1
+
+            [apps.alpha]
+            token_sha256 = ["{}"]
+            limits = {{ calls_per_minute = 1, max_pending_gates = 1 }}
+            plugins.attendance = {{ delegates = ["beta"] }}
+
+            [apps.beta]
+            token_sha256 = ["{}"]
+            limits = {{ calls_per_minute = 1, max_pending_gates = 1 }}
+            plugins.attendance = {{ delegates = [{beta_delegates}] }}
+            "#,
+            "a".repeat(64),
+            "b".repeat(64)
+        )
+    };
+
+    let chain = policy("\"gamma\"");
+    let error = admin::check(ConfigFile::Policy, chain.as_bytes(), &config, &plugins).unwrap_err();
+    let shown = error.to_string();
+    assert!(shown.contains("caller app alpha"), "{shown}");
+    assert!(shown.contains("target app beta"), "{shown}");
+    assert!(shown.contains("one_hop"), "{shown}");
+
+    let one_hop = policy("");
+    admin::check(ConfigFile::Policy, one_hop.as_bytes(), &config, &plugins).unwrap();
 }
 
 #[test]

@@ -112,28 +112,47 @@ fn catalog() -> Catalog {
 /// A policy with one app instance that may call every tool of both
 /// upstreams, with the given `attendance` section.
 fn load(section: Option<&str>) -> Result<Policy, PolicyError> {
+    load_apps(&[("librechat", section)])
+}
+
+/// A policy with these app instances, each with its `attendance` section.
+fn load_apps(apps: &[(&str, Option<&str>)]) -> Result<Policy, PolicyError> {
     let install = InstallFile::read(INSTALL.as_bytes()).unwrap();
     let setup = resolve(&install, &catalog()).unwrap();
-    let plugins = section.map_or(String::new(), |text| {
-        format!("plugins.attendance = {text}\n")
-    });
-    let text = format!(
-        r#"
-        version = 1
-
-        [apps.librechat]
-        token_sha256 = ["{}"]
-        limits = {{ calls_per_minute = 100, max_pending_gates = 1 }}
-        grants.attendance.tools.invoke_agent = {{}}
-        grants.attendance.tools.enqueue = {{}}
-        grants.attendance.tools.job_status = {{}}
-        grants.attendance.tools.other = {{}}
-        grants.vikunja.tools.list_tasks = {{}}
-        {plugins}"#,
-        "0".repeat(64)
-    );
+    let mut text = "version = 1\n".to_owned();
+    for (index, (app, section)) in apps.iter().enumerate() {
+        let plugins = section.map_or(String::new(), |text| {
+            format!("plugins.attendance = {text}\n")
+        });
+        text.push_str(&format!(
+            r#"
+            [apps.{app}]
+            token_sha256 = ["{}"]
+            limits = {{ calls_per_minute = 100, max_pending_gates = 1 }}
+            grants.attendance.tools.invoke_agent = {{}}
+            grants.attendance.tools.enqueue = {{}}
+            grants.attendance.tools.job_status = {{}}
+            grants.attendance.tools.other = {{}}
+            grants.vikunja.tools.list_tasks = {{}}
+            {plugins}"#,
+            format!("{index:x}").repeat(64)
+        ));
+    }
     let fence = FamilyFence::new().unwrap();
     Policy::load(text.as_bytes(), &setup, &[&fence])
+}
+
+/// The app IDs and the rule of a cross-app refusal.
+fn refused_pair(error: &PolicyError) -> (&str, &str, &str) {
+    let PolicyError::CrossApp { plugin, error } = error else {
+        panic!("not a cross-app refusal: {error}");
+    };
+    assert_eq!(plugin.as_str(), "attendance");
+    (
+        error.caller.as_str(),
+        error.target.as_str(),
+        error.rule.as_str(),
+    )
 }
 
 fn decision(
@@ -287,6 +306,56 @@ fn a_bad_section_does_not_load() {
     }
     load(Some(&too_many(32, "delegates"))).unwrap();
     load(Some(&too_many(64, "enqueue_targets"))).unwrap();
+}
+
+#[test]
+fn a_delegate_target_that_delegates_does_not_load() {
+    let error = load_apps(&[
+        ("alpha", Some(r#"{ delegates = ["beta"] }"#)),
+        ("beta", Some(r#"{ delegates = ["gamma"] }"#)),
+        ("gamma", None),
+    ])
+    .unwrap_err();
+    let (caller, target, rule) = refused_pair(&error);
+    assert_eq!((caller, target), ("alpha", "beta"));
+    assert!(rule.starts_with("one_hop"), "{rule}");
+    let shown = error.to_string();
+    assert!(shown.contains("alpha") && shown.contains("beta"), "{shown}");
+}
+
+#[test]
+fn a_star_of_callers_around_one_target_loads() {
+    load_apps(&[
+        ("alpha", Some(r#"{ delegates = ["hub"] }"#)),
+        (
+            "beta",
+            Some(r#"{ delegates = ["hub"], enqueue_targets = ["alpha"] }"#),
+        ),
+        ("gamma", Some(r#"{ delegates = ["hub", "outside"] }"#)),
+        ("hub", Some(r#"{ enqueue_targets = ["alpha"] }"#)),
+    ])
+    .unwrap();
+}
+
+#[test]
+fn an_app_that_delegates_to_itself_does_not_load() {
+    let error = load_apps(&[
+        ("alpha", Some(r#"{ enqueue_targets = ["beta"] }"#)),
+        ("beta", Some(r#"{ delegates = ["beta"] }"#)),
+    ])
+    .unwrap_err();
+    let (caller, target, rule) = refused_pair(&error);
+    assert_eq!((caller, target), ("beta", "beta"));
+    assert!(rule.contains("itself"), "{rule}");
+}
+
+#[test]
+fn a_delegate_target_with_no_section_loads() {
+    load_apps(&[
+        ("alpha", Some(r#"{ delegates = ["beta"] }"#)),
+        ("beta", None),
+    ])
+    .unwrap();
 }
 
 fn arg_value() -> impl Strategy<Value = ArgValue> {
