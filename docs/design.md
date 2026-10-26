@@ -180,6 +180,7 @@ Rules:
 - Grants and install entries take a typed `note` field for the reason. A TOML file can also hold comments.
 - The policy file holds maps keyed by app ID, plugin name, tool name and argument name, as TOML tables. A tool name or an argument name can hold a `.`, so it needs a quoted key, such as `"tasks.list" = {}`.
 - An install entry of an effect plugin can hold `args`: arguments that chaperone appends to the command of the manifest at launch. The manifest names the program. The install file adds what differs per deployment, such as an address. An argument is never a secret value (G9).
+- An install entry of an effect plugin can hold `user`: the OS user that the plugin runs as (section 8). The value is `mcp-`, then `a-z`, then 1 to 30 of `a-z`, `0-9` and `-`. An entry of a plugin with no effect half that holds `user` refuses start. Any other value refuses start.
 - The install entry of the front door plugin can hold `guard`: `loopback` or `host-firewall` (section 7.6). An entry without `guard` takes `loopback`. An entry of another plugin that holds `guard` refuses start. Any other value refuses start.
 - An upstream grant can hold `timeout_s`: the bound of one call to that upstream, in whole seconds (section 5.5). The value is an integer from 1 to 120. A grant without it takes 30. Any other value does not load, and the error names the rule.
 
@@ -310,6 +311,8 @@ Start:
 3. A launch that fails, an `initialize` that fails or a `tools/list` that fails refuses start (G2). An approval channel that does not list the tool `approve` refuses start.
 4. The host reads stderr as log text. It logs each line with the plugin name, after it blanks each exact secret value (G9).
 
+An effect plugin whose install entry holds `user` starts through the helper `chaperone-as` (section 8). The host runs `chaperone-as <user> <program> <args...>`, with the helper next to the chaperone binary. The program must be an absolute path, or a program next to chaperone. The host does not look it up on `PATH`. A missing helper, or a program that is not absolute, refuses start. A plugin without `user` starts as the user of chaperone.
+
 A call:
 
 1. The decision allowed the call and the `decided` record is durable (G6).
@@ -333,7 +336,7 @@ The manifest an app sees holds a tool when the policy grants it, the caller's re
 - In code, a secret is a `Secret` value. It has no `Display` and no `Serialize`. Its `Debug` prints only the name. One named method exposes the value. The memory is wiped when the value is dropped.
 - chaperone replaces each exact secret value in a tool result with `[redacted]`. It does this before it returns the result and before it writes the final audit record.
 - In production, the service unit runs chaperone as the `chaperone` user. Its `CapabilityBoundingSet` and its `AmbientCapabilities` are exactly `CAP_SETUID CAP_SETGID`. It sets `NoNewPrivileges=yes`.
-- In production, every upstream runs as its own OS user. An upstream user owns no secret file and cannot read the files of chaperone. A plugin that cannot run as its user does not run.
+- In production, every upstream runs as its own OS user, through `user` in the install file (section 6). An upstream user owns no secret file and cannot read the files of chaperone. A plugin that cannot run as its user does not run.
 
 `chaperone-as` is the only code that uses the two capabilities. It takes these steps:
 
@@ -344,9 +347,9 @@ The manifest an app sees holds a tool when the policy grants it, the caller's re
 5. It empties the ambient, effective, permitted and inheritable capability sets, and sets `no_new_privs`. It then reads `/proc/self/status` and checks the ids, the groups, the four sets, `NoNewPrivs` and `Threads: 1`.
 6. It calls `execve` with the command, the arguments and the environment of step 2.
 
-A step that fails writes one line to stderr and exits with 125, before the exec. The helper never writes stdout, because stdout is the MCP channel of the plugin.
+A step that fails writes one line to stderr and exits with 125, before the exec. The host reads that exit as an upstream that fails its `initialize`, so chaperone refuses start (section 7.7). The helper never writes stdout, because stdout is the MCP channel of the plugin.
 
-The helper must start with the one variable and no other. It holds `CAP_SETUID` while it starts, and an ambient capability does not make the dynamic loader ignore `LD_PRELOAD`. A switch between two users that are not root keeps every capability, so step 5 is necessary. The calls of step 4 change the calling thread only, so the helper runs on one thread.
+The host starts the helper with the one variable and no other. It holds `CAP_SETUID` while it starts, and an ambient capability does not make the dynamic loader ignore `LD_PRELOAD`. A switch between two users that are not root keeps every capability, so step 5 is necessary. The calls of step 4 change the calling thread only, so the helper runs on one thread.
 
 ## 9. Tokens
 

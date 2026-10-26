@@ -6,7 +6,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use serde::Deserialize;
 
-use crate::ids::{PluginName, SecretName, SecretParam};
+use crate::ids::{PluginName, PluginUser, SecretName, SecretParam};
 use crate::plugin::{Hook, Manifest, PluginKind, Slot};
 use crate::strict::{self, ByteCap, StrictError};
 
@@ -74,6 +74,9 @@ pub struct InstallEntry {
     /// The guard of a front door plugin. No other plugin takes one.
     #[serde(default)]
     guard: Option<Guard>,
+    /// The OS user an effect plugin runs as (`docs/design.md` 8).
+    #[serde(default)]
+    user: Option<PluginUser>,
 }
 
 impl InstallEntry {
@@ -166,6 +169,7 @@ pub struct Binding {
     pub secrets: BTreeMap<SecretParam, SecretName>,
     pub delivery: SecretDelivery,
     pub args: Vec<String>,
+    pub user: Option<PluginUser>,
 }
 
 /// The resolved setup: which plugin fills each slot, which fences and
@@ -257,6 +261,8 @@ pub enum SetupError {
     EnvNotAllowed { plugin: PluginName },
     #[error("{plugin} has no effect half, so secret_delivery env means nothing")]
     EnvWithoutProcess { plugin: PluginName },
+    #[error("{plugin} has no effect half, so a user means nothing")]
+    UserWithoutProcess { plugin: PluginName },
     #[error("{plugin} has no effect half, so args mean nothing")]
     ArgsWithoutProcess { plugin: PluginName },
     #[error("install.toml sets a guard for {plugin}, but only a front door takes a guard")]
@@ -417,9 +423,15 @@ fn bind(
     let secrets = entry.map(|e| e.secrets.clone()).unwrap_or_default();
     let delivery = entry.map(|e| e.secret_delivery).unwrap_or_default();
     let args = entry.map(|e| e.args.clone()).unwrap_or_default();
+    let user = entry.and_then(|e| e.user.clone());
     let has_process = found
         .iter()
         .any(|f| f.manifest.kind() == PluginKind::Effect);
+    if user.is_some() && !has_process {
+        return Err(SetupError::UserWithoutProcess {
+            plugin: name.clone(),
+        });
+    }
     if !args.is_empty() && !has_process {
         return Err(SetupError::ArgsWithoutProcess {
             plugin: name.clone(),
@@ -467,6 +479,7 @@ fn bind(
         secrets,
         delivery,
         args,
+        user,
     })
 }
 
@@ -694,6 +707,24 @@ pub(crate) mod tests {
                 plugin: name("bearer")
             }
         );
+    }
+
+    #[test]
+    fn a_user_reaches_the_binding_of_an_effect_plugin_only() {
+        let text = "version = 1\nplugins.vikunja.user = \"mcp-vikunja\"\n\
+                    plugins.vikunja.secrets = { VIKUNJA_TOKEN = \"vikunja_token\" }\n";
+        let setup = resolve(&install(text), &v1_catalog()).unwrap();
+        let user = setup.binding(&name("vikunja")).unwrap().user.clone();
+        assert_eq!(user.unwrap().as_str(), "mcp-vikunja");
+        assert_eq!(setup.binding(&name("bearer")).unwrap().user, None);
+
+        let text = "version = 1\nplugins.bearer.user = \"mcp-bearer\"\n";
+        let error = resolve(&install(text), &v1_catalog()).unwrap_err();
+        let plugin = name("bearer");
+        assert_eq!(error, SetupError::UserWithoutProcess { plugin });
+
+        let text = "version = 1\nplugins.vikunja.user = \"root\"\n";
+        assert!(InstallFile::read(text.as_bytes()).is_err());
     }
 
     #[test]
