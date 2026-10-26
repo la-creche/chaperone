@@ -376,13 +376,13 @@ The production layout gives the default of two flags:
 | `/etc/chaperone` | `install.toml` and `policy.toml` | `--config-dir` |
 | `/etc/chaperone/plugins` | The plugin tree of section 7.3 | `--plugins-dir` |
 
-`chaperone serve`, `chaperone verify`, `chaperone check` and `chaperone token new` take the same defaults. One layout thus applies to the service and to each check of it. A flag overrules its default. The plugin tree is not in the install tree of the release tool (section 12). The release archive holds only the two programs, and the release tool replaces that tree at each install.
+`chaperone serve`, `chaperone verify`, `chaperone check` and `chaperone token new` take the same defaults. One layout thus applies to the service and to each check of it. A flag overrules its default. The plugin tree is not in the install tree of the release tool (section 12). The release archive holds only programs, and the release tool replaces that tree at each install.
 
 The service unit gives the other paths of the layout:
 
 | Path | Contents | Who provides it |
 |---|---|---|
-| `/opt/components/chaperone/bin` | `chaperone` and `chaperone-as` | The release tool, from the release archive |
+| `/opt/components/chaperone/bin` | `chaperone`, `chaperone-as` and the program of each effect plugin of this repository | The release tool, from the release archive |
 | `/etc/chaperone/secrets` | One file per secret, as above | The operator. The `chaperone` user owns the directory, mode 0700. |
 | `/var/lib/chaperone/audit.jsonl` | The audit file | systemd makes the directory, mode 0700. chaperone makes the file. |
 | `/run/chaperone/admin.sock` | The admin socket (section 10) | systemd makes the directory, mode 0750. chaperone makes the socket. |
@@ -392,7 +392,7 @@ The unit reads `CHAPERONE_LISTEN` from the site file. It passes the value to `--
 
 1. Make the OS user and the group `chaperone`.
 2. Write `install.toml` and `policy.toml` in `/etc/chaperone`.
-3. Copy the plugin tree into `/etc/chaperone/plugins`. Put each program of an effect plugin on the `PATH` of the unit.
+3. Copy the plugin tree of this repository into `/etc/chaperone/plugins`. The program of each effect plugin of this repository is next to `chaperone`. Put the program of each other effect plugin on the `PATH` of the unit.
 4. Write each bound secret in `/etc/chaperone/secrets`.
 5. Set `CHAPERONE_LISTEN` in the site file.
 6. Install the unit file once. The release tool refreshes an installed unit. It does not install a unit that is not installed.
@@ -574,8 +574,8 @@ The release tool refuses a version that is not higher than the installed version
 
 Releases come from `.github/workflows/release.yml`. To release, a pull request changes `version` in `crates/chaperone/Cargo.toml`. The workflow runs on each push to `main`. A version with a tag, or no version, releases nothing. Else the workflow does these steps:
 
-1. It builds `chaperone` and `chaperone-as` for `x86_64-unknown-linux-musl` with `cargo install --locked --no-track`. A `--bin` names each program, so no other binary of a package enters the archive.
-2. It packs the two programs into `chaperone-x86_64-unknown-linux-musl.tar.gz`. The archive holds `chaperone/bin/chaperone` and `chaperone/bin/chaperone-as`, each with mode 0755, and nothing else.
+1. It builds `chaperone`, `chaperone-as` and the program of each `plugin.toml` for `x86_64-unknown-linux-musl` with `cargo install --locked --no-track`. A `--bin` names each program, so no other binary of a package enters the archive. The `build` list of `component.toml` holds the same commands in the same order.
+2. It packs the programs into `chaperone-x86_64-unknown-linux-musl.tar.gz`. The archive holds these members, each with mode 0755, in this order, and nothing else: `chaperone/bin/chaperone`, `chaperone/bin/chaperone-as`, `chaperone/bin/chaperone-attendance`, `chaperone/bin/chaperone-deny-all`, `chaperone/bin/chaperone-ha-approval`, `chaperone/bin/chaperone-ha-call` and `chaperone/bin/chaperone-release`. The release tool takes only members named `chaperone/bin/<program>`, so the plugin tree is not in the archive.
 3. It signs the archive with a keyless Sigstore signature. The bundle is `chaperone-x86_64-unknown-linux-musl.tar.gz.sigstore.json`.
 4. It makes the tag `chaperone-v<version>` at the merge commit, and a Release with the two files. The author of the Release is `github-actions[bot]`.
 

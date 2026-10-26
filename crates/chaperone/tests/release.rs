@@ -1,7 +1,8 @@
 //! The files that the external release tool reads: `component.toml` and
 //! the service unit it names (`docs/design.md` 8 and 12). The release tool
 //! holds its own copy of the manifest text. A change to a field here thus
-//! fails this test before it fails an install.
+//! fails this test before it fails an install. The release workflow
+//! builds and packs the same programs, one for each `plugin.toml` command.
 
 #![allow(
     clippy::unwrap_used,
@@ -10,9 +11,11 @@
     reason = "test fixtures fail loudly on a bad fixture"
 )]
 
+use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
 use chaperone_core::strict::{ByteCap, read_toml};
+use chaperone_core::{Manifest, Runtime};
 use serde::Deserialize;
 
 /// The most bytes of `component.toml` that the test reads.
@@ -29,6 +32,28 @@ const SITE_FILE: &str = "/etc/creche/site.env";
 
 /// The key of the front door address in the site file.
 const LISTEN_KEY: &str = "CHAPERONE_LISTEN";
+
+/// The package path and the program of each build, in the order of the
+/// manifest. The order is the name order of the programs, which is the
+/// order of the archive members.
+const BUILDS: [(&str, &str); 7] = [
+    ("crates/chaperone", "chaperone"),
+    ("crates/run-as", "chaperone-as"),
+    ("plugins/effect/included/attendance", "chaperone-attendance"),
+    ("plugins/default/deny-all", "chaperone-deny-all"),
+    (
+        "plugins/effect/included/ha-approval",
+        "chaperone-ha-approval",
+    ),
+    ("plugins/effect/included/ha-call", "chaperone-ha-call"),
+    ("plugins/effect/included/release", "chaperone-release"),
+];
+
+/// The programs of the build that no `plugin.toml` names.
+const HOST_PROGRAMS: [&str; 2] = ["chaperone", "chaperone-as"];
+
+/// The directory of the programs in the archive.
+const ARCHIVE_BIN: &str = "chaperone/bin";
 
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -78,6 +103,57 @@ fn component() -> Component {
     read_toml(&bytes, MANIFEST_CAP).unwrap()
 }
 
+/// The text of the release workflow.
+fn workflow_text() -> String {
+    std::fs::read_to_string(repo_root().join(".github/workflows/release.yml")).unwrap()
+}
+
+/// The argv of one build: one program of one package.
+fn install(path: &str, program: &str) -> Vec<String> {
+    [
+        "cargo",
+        "install",
+        "--locked",
+        "--no-track",
+        "--path",
+        path,
+        "--bin",
+        program,
+    ]
+    .map(String::from)
+    .to_vec()
+}
+
+/// The program of each build of the manifest, in its order.
+fn built_programs() -> Vec<String> {
+    component()
+        .build
+        .iter()
+        .map(|argv| {
+            let at = argv.iter().position(|word| word == "--bin").unwrap();
+            argv[at + 1].clone()
+        })
+        .collect()
+}
+
+/// Every `plugin.toml` under `dir`, outside `target` directories, sorted.
+fn plugin_manifests(dir: &Path, found: &mut Vec<PathBuf>) {
+    let mut paths: Vec<PathBuf> = std::fs::read_dir(dir)
+        .unwrap()
+        .map(|entry| entry.unwrap().path())
+        .collect();
+    paths.sort();
+    for path in paths {
+        if path.is_dir() {
+            if path.file_name().is_some_and(|name| name != "target") {
+                plugin_manifests(&path, found);
+            }
+        } else if path.file_name().is_some_and(|name| name == "plugin.toml") {
+            found.push(path);
+        }
+    }
+}
+
 /// The text of the unit file that `component.toml` names.
 fn unit_text() -> String {
     let unit = component().unit;
@@ -102,31 +178,11 @@ fn the_manifest_holds_the_fields_of_the_release_tool() {
     assert_eq!(component.kind, "binary");
     assert_eq!(component.unit, "creche-chaperone.service");
     assert_eq!(component.runs_as, "root");
-    assert_eq!(
-        component.build,
-        [
-            [
-                "cargo",
-                "install",
-                "--locked",
-                "--no-track",
-                "--path",
-                "crates/chaperone",
-                "--bin",
-                "chaperone"
-            ],
-            [
-                "cargo",
-                "install",
-                "--locked",
-                "--no-track",
-                "--path",
-                "crates/run-as",
-                "--bin",
-                "chaperone-as"
-            ],
-        ]
-    );
+    let builds: Vec<Vec<String>> = BUILDS
+        .iter()
+        .map(|(path, program)| install(path, program))
+        .collect();
+    assert_eq!(component.build, builds);
     assert_eq!(component.install.to, INSTALL_TO);
     assert_eq!(component.install.prev, format!("{INSTALL_TO}.prev"));
     assert_eq!(
@@ -149,13 +205,67 @@ fn the_manifest_holds_the_fields_of_the_release_tool() {
 }
 
 #[test]
-fn the_release_workflow_runs_each_build_of_the_manifest() {
-    let workflow =
-        std::fs::read_to_string(repo_root().join(".github/workflows/release.yml")).unwrap();
-    for argv in component().build {
-        let command = argv.join(" ");
-        assert!(workflow.contains(&command), "{command}");
+fn the_release_workflow_runs_the_builds_of_the_manifest_in_order() {
+    let workflow = workflow_text();
+    let runs: Vec<&str> = workflow
+        .lines()
+        .map(str::trim)
+        .filter(|line| line.starts_with("cargo install "))
+        .collect();
+    let builds: Vec<String> = component()
+        .build
+        .iter()
+        .map(|argv| argv.join(" "))
+        .collect();
+    assert_eq!(runs, builds);
+}
+
+#[test]
+fn the_archive_holds_each_program_of_the_build_in_name_order() {
+    let workflow = workflow_text();
+    let members: Vec<&str> = workflow
+        .lines()
+        .map(str::trim)
+        .skip_while(|line| *line != "members=(")
+        .skip(1)
+        .take_while(|line| *line != ")")
+        .collect();
+    let programs = built_programs();
+    let expected: Vec<String> = programs
+        .iter()
+        .map(|program| format!("{ARCHIVE_BIN}/{program}"))
+        .collect();
+    assert_eq!(members, expected);
+    assert!(programs.is_sorted(), "{programs:?}");
+}
+
+#[test]
+fn each_plugin_program_is_built_from_its_own_plugin() {
+    let root = repo_root();
+    let mut manifests = Vec::new();
+    plugin_manifests(&root.join("plugins"), &mut manifests);
+    assert!(!manifests.is_empty());
+
+    let builds = component().build;
+    let mut programs: BTreeSet<String> = HOST_PROGRAMS.map(String::from).into();
+    for file in manifests {
+        let manifest = Manifest::read(&std::fs::read(&file).unwrap()).unwrap();
+        match manifest.runtime() {
+            Runtime::Compiled => {}
+            Runtime::Process { command } => {
+                let program = &command[0];
+                let dir = file.parent().unwrap().strip_prefix(&root).unwrap();
+                let path = dir.to_str().unwrap();
+                assert!(
+                    builds.contains(&install(path, program)),
+                    "{program} of {path}"
+                );
+                programs.insert(program.clone());
+            }
+        }
     }
+    let built: BTreeSet<String> = built_programs().into_iter().collect();
+    assert_eq!(built, programs);
 }
 
 #[test]

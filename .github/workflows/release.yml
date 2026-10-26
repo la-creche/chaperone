@@ -79,10 +79,13 @@ jobs:
           persist-credentials: false
 
       # Each program goes to `$CARGO_INSTALL_ROOT/bin/<name>`, the rule of a
-      # binary build of the host's release tool. `--bin` names each program,
-      # so another binary of a package, such as a test fake, stays out of
-      # the install root. The remap keeps the paths of the runner out of
-      # each program.
+      # binary build of the host's release tool. The programs are chaperone,
+      # its helper chaperone-as and the program of each `plugin.toml`, in
+      # name order. `serve` finds a plugin program next to chaperone, and it
+      # refuses to start when a plugin of `install.toml` does not launch.
+      # `--bin` names each program, so another binary of a package, such as
+      # a test fake, stays out of the install root. The remap keeps the
+      # paths of the runner out of each program.
       - name: Build
         run: |
           set -euo pipefail
@@ -99,10 +102,16 @@ jobs:
           export RUSTFLAGS
           cargo install --locked --no-track --path crates/chaperone --bin chaperone
           cargo install --locked --no-track --path crates/run-as --bin chaperone-as
+          cargo install --locked --no-track --path plugins/effect/included/attendance --bin chaperone-attendance
+          cargo install --locked --no-track --path plugins/default/deny-all --bin chaperone-deny-all
+          cargo install --locked --no-track --path plugins/effect/included/ha-approval --bin chaperone-ha-approval
+          cargo install --locked --no-track --path plugins/effect/included/ha-call --bin chaperone-ha-call
+          cargo install --locked --no-track --path plugins/effect/included/release --bin chaperone-release
 
-      # The archive holds two regular files and no directory member:
-      # `chaperone/bin/chaperone` and `chaperone/bin/chaperone-as`, mode
-      # 0755. The same tree gives the same bytes.
+      # The archive holds one regular file per program of the build, mode
+      # 0755, as `chaperone/bin/<name>` in name order, and no directory
+      # member. The host's release tool refuses each other member. The same
+      # tree gives the same bytes.
       - name: Check and pack
         id: pack
         run: |
@@ -110,10 +119,18 @@ jobs:
           export LC_ALL=C
           work="$RUNNER_TEMP/work"
           out="$RUNNER_TEMP/out"
-          members=(chaperone/bin/chaperone chaperone/bin/chaperone-as)
+          members=(
+            chaperone/bin/chaperone
+            chaperone/bin/chaperone-as
+            chaperone/bin/chaperone-attendance
+            chaperone/bin/chaperone-deny-all
+            chaperone/bin/chaperone-ha-approval
+            chaperone/bin/chaperone-ha-call
+            chaperone/bin/chaperone-release
+          )
           expected="$(printf '%s\n' chaperone chaperone/bin "${members[@]}")"
           if [[ "$(cd "$work" && find . -mindepth 1 | sed 's|^\./||' | sort)" != "$expected" ]]; then
-            echo "::error::the install tree holds another file than the two programs"
+            echo "::error::the install tree holds another file than the programs of the build"
             exit 1
           fi
           for member in "${members[@]}"; do
