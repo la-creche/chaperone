@@ -10,9 +10,12 @@
 
 use std::os::unix::fs::PermissionsExt;
 use std::path::Path;
+use std::sync::Barrier;
 use std::time::Duration;
 
-use chaperone_plugin_release::{ArgumentError, Arguments, FileError, Request, Requester, file};
+use chaperone_plugin_release::{
+    ArgumentError, Arguments, FileError, MAX_PENDING, Request, Requester, file,
+};
 use serde_json::json;
 
 /// 1761400000.5 seconds after the Unix epoch.
@@ -184,4 +187,41 @@ fn nothing_is_written_when_the_directory_refuses() {
     }
     assert!(matches!(file(&real, &release), Err(FileError::Full)));
     assert_eq!(names(&real).len(), 8);
+}
+
+#[test]
+fn a_burst_of_calls_never_files_more_than_the_cap() {
+    const CALLS: usize = 32;
+    const ROUNDS: u8 = 20;
+    for round in 0..ROUNDS {
+        let root = tempfile::tempdir().unwrap();
+        let barrier = Barrier::new(CALLS);
+        let filed = std::thread::scope(|scope| {
+            let calls: Vec<_> = (0..CALLS)
+                .map(|call| {
+                    let barrier = &barrier;
+                    let dir = root.path();
+                    let mut entropy = [round; 10];
+                    entropy[9] = u8::try_from(call).unwrap();
+                    scope.spawn(move || {
+                        let release =
+                            request(json!({"components": {"chaperone": "1.2.3"}}), entropy);
+                        barrier.wait();
+                        file(dir, &release)
+                    })
+                })
+                .collect();
+            calls
+                .into_iter()
+                .map(|call| call.join().unwrap())
+                .filter(Result::is_ok)
+                .count()
+        });
+        let requests = names(root.path())
+            .iter()
+            .filter(|name| name.ends_with(".json"))
+            .count();
+        assert_eq!(filed, MAX_PENDING, "round {round}");
+        assert_eq!(requests, MAX_PENDING, "round {round}");
+    }
 }

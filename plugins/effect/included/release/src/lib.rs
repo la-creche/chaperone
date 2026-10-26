@@ -9,6 +9,7 @@ use std::fs::{self, OpenOptions, Permissions};
 use std::io::{self, Write};
 use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
 use std::path::{Path, PathBuf};
+use std::sync::{Mutex, PoisonError};
 use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
@@ -26,6 +27,10 @@ pub const MAX_REQUEST_BYTES: usize = 4096;
 const REQUEST_SUFFIX: &str = ".json";
 const REQUEST_FILE_MODE: u32 = 0o600;
 const LATEST: &str = "latest";
+
+/// A call holds this lock from its count of pending requests to its link.
+/// The calls of this process then never file more than [`MAX_PENDING`].
+static PUBLISH: Mutex<()> = Mutex::new(());
 
 /// Upper-case Crockford base32: no I, L, O or U.
 const ULID_ALPHABET: &[u8; 32] = b"0123456789ABCDEFGHJKMNPQRSTVWXYZ";
@@ -312,17 +317,30 @@ impl Request {
 /// Write `request` into `dir` as `<ID>.json` with mode 0600, and return its
 /// path. The body goes to `.<ID>.json.tmp` first, then a hard link gives it
 /// its name. A reader sees a whole file or none. A link never replaces a
-/// file that exists, where a rename would.
+/// file that exists, where a rename would. Calls in one process count and
+/// link one at a time.
 ///
 /// # Errors
 ///
-/// Returns a [`FileError`]. No request file exists after an error.
+/// Returns a [`FileError`]. No request file exists after an error. A
+/// request file exists after a success, even when the temporary name stays.
 pub fn file(dir: &Path, request: &Request) -> Result<PathBuf, FileError> {
+    file_with(dir, request, remove_if_present)
+}
+
+/// [`file`], with `clean` to remove the temporary name after the link.
+fn file_with(
+    dir: &Path,
+    request: &Request,
+    clean: impl Fn(&Path) -> Result<(), FileError>,
+) -> Result<PathBuf, FileError> {
     let body = request.body()?;
     let is_dir = fs::symlink_metadata(dir).is_ok_and(|meta| meta.is_dir());
     if !is_dir {
         return Err(FileError::NoDirectory);
     }
+    // The lock guards no data, so a poisoned lock still serializes the calls.
+    let _publishing = PUBLISH.lock().unwrap_or_else(PoisonError::into_inner);
     let mut pending = 0;
     for entry in fs::read_dir(dir)? {
         if entry?
@@ -350,9 +368,16 @@ pub fn file(dir: &Path, request: &Request) -> Result<PathBuf, FileError> {
             }
         })
     });
-    let removed = remove_if_present(&temporary);
+    let removed = clean(&temporary);
     linked?;
-    removed?;
+    if let Err(error) = removed {
+        // The executor reads only `<ID>.json` names, so it never reads the
+        // temporary name. The request exists, so the call succeeds.
+        eprintln!(
+            "release: {} stays after the request was filed: {error}",
+            temporary.display()
+        );
+    }
     Ok(target)
 }
 
@@ -374,5 +399,32 @@ fn remove_if_present(path: &Path) -> Result<(), FileError> {
         Ok(()) => Ok(()),
         Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(()),
         Err(error) => Err(FileError::Io(error)),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_failed_cleanup_after_the_link_still_files_one_request() {
+        let root = tempfile::tempdir().unwrap();
+        let raw = serde_json::json!({"components": {"chaperone": "1.2.3"}});
+        let arguments = Arguments::parse(raw.as_object().unwrap().clone()).unwrap();
+        let requester = Requester::parse("agent-control").unwrap();
+        let request = Request::new(arguments, requester, Duration::from_millis(1), [0; 10]);
+        let refuse = |_: &Path| {
+            Err(FileError::Io(io::Error::from(
+                io::ErrorKind::PermissionDenied,
+            )))
+        };
+
+        let target = file_with(root.path(), &request, refuse).unwrap();
+        let requests: Vec<PathBuf> = fs::read_dir(root.path())
+            .unwrap()
+            .map(|entry| entry.unwrap().path())
+            .filter(|path| path.to_string_lossy().ends_with(REQUEST_SUFFIX))
+            .collect();
+        assert_eq!(requests, vec![target]);
     }
 }
