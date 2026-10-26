@@ -17,8 +17,10 @@ use std::process::Command;
 use std::sync::Arc;
 
 use chaperone::effect::{Redactor, Upstreams};
+use chaperone::env_file::EnvKey;
 use chaperone::gateway::{Bounds, ChaperoneGateway, Plugins, SharedGateway};
 use chaperone::reload::PolicyFile;
+use chaperone::verify::Target;
 use chaperone::{startup, verify};
 use support::{INSTALL, config_dir, hanging_approval, plugin_tree, policy_text, secrets_dir};
 use tokio_util::sync::CancellationToken;
@@ -115,16 +117,20 @@ async fn verify_passes_a_healthy_service_and_fails_a_refused_policy() {
         served.plugins.clone(),
         served.address,
     );
-    let report = tokio::task::spawn_blocking(move || verify::run(&config, &plugins, address))
-        .await
-        .unwrap();
+    let report = tokio::task::spawn_blocking(move || {
+        verify::run(&config, &plugins, Target::Listen(address))
+    })
+    .await
+    .unwrap();
     assert!(report.passed(), "{}", report.lines());
 
     break_policy(&served.config);
     let (config, plugins) = (served.config.clone(), served.plugins.clone());
-    let report = tokio::task::spawn_blocking(move || verify::run(&config, &plugins, address))
-        .await
-        .unwrap();
+    let report = tokio::task::spawn_blocking(move || {
+        verify::run(&config, &plugins, Target::Listen(address))
+    })
+    .await
+    .unwrap();
     assert!(!report.passed());
     let lines = report.lines();
     assert!(lines.contains("PASS install.toml"), "{lines}");
@@ -164,4 +170,125 @@ fn the_cli_exits_1_with_a_json_report_when_nothing_answers() {
     assert_eq!(names, ["install.toml", "policy.toml", "healthz"]);
     assert_eq!(checks[0]["ok"], true);
     assert_eq!(checks[2]["ok"], false);
+}
+
+#[tokio::test]
+async fn verify_reads_the_listen_address_from_an_env_file() {
+    let served = serve().await;
+    let env_file = served.config.join("site.env");
+    let address = served.address;
+    std::fs::write(
+        &env_file,
+        format!("# The site.\nSITE_TOKEN=s3cret-value\nCHAPERONE_LISTEN={address}\n"),
+    )
+    .unwrap();
+    let (config, plugins) = (served.config.clone(), served.plugins.clone());
+    let report = tokio::task::spawn_blocking(move || {
+        let key: EnvKey = "CHAPERONE_LISTEN".parse().unwrap();
+        let target = Target::EnvFile {
+            path: &env_file,
+            key: &key,
+        };
+        verify::run(&config, &plugins, target)
+    })
+    .await
+    .unwrap();
+    let lines = report.lines();
+    assert!(report.passed(), "{lines}");
+    assert!(lines.contains("PASS env-file"), "{lines}");
+    assert!(lines.contains("PASS healthz"), "{lines}");
+    // Nothing of the file is printed, the address included.
+    assert!(!lines.contains(&address.to_string()), "{lines}");
+    assert!(!lines.contains("s3cret"), "{lines}");
+    served.shutdown.cancel();
+}
+
+/// Run `chaperone verify --json` over a fresh configuration with `args`.
+fn verify_cli(args: &[&str]) -> std::process::Output {
+    let root = tempfile::tempdir().unwrap();
+    let plugins = plugin_tree(root.path());
+    let config = config_dir(root.path(), INSTALL, &policy_text(30));
+    Command::new(env!("CARGO_BIN_EXE_chaperone"))
+        .arg("verify")
+        .arg("--json")
+        .arg("--config-dir")
+        .arg(&config)
+        .arg("--plugins-dir")
+        .arg(&plugins)
+        .args(args)
+        .output()
+        .unwrap()
+}
+
+/// A free loopback address that nothing listens on.
+fn unused_address() -> SocketAddr {
+    let unused = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    unused.local_addr().unwrap()
+}
+
+#[test]
+fn the_cli_refuses_listen_with_env_file_and_a_key_without_a_file() {
+    let dir = tempfile::tempdir().unwrap();
+    let env_file = dir.path().join("site.env");
+    std::fs::write(&env_file, "CHAPERONE_LISTEN=127.0.0.1:8300\n").unwrap();
+    let env_file = env_file.to_str().unwrap();
+    for args in [
+        vec!["--listen", "127.0.0.1:8300", "--env-file", env_file],
+        vec!["--listen-key", "PEP_BIND"],
+        vec!["--env-file", env_file, "--listen-key", "pep_bind"],
+    ] {
+        let output = verify_cli(&args);
+        assert_eq!(output.status.code(), Some(2), "{args:?}");
+        assert!(output.stdout.is_empty(), "{args:?}");
+    }
+}
+
+#[test]
+fn the_cli_takes_the_named_key_and_reports_a_bad_file_without_its_values() {
+    let dir = tempfile::tempdir().unwrap();
+    let env_file = dir.path().join("site.env");
+    let address = unused_address();
+    std::fs::write(
+        &env_file,
+        format!("PEP_BIND={address}\nSITE_TOKEN=s3cret-value\n"),
+    )
+    .unwrap();
+    let path = env_file.to_str().unwrap();
+    let output = verify_cli(&["--env-file", path, "--listen-key", "PEP_BIND"]);
+    assert_eq!(output.status.code(), Some(1));
+    let report: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    let checks = report["checks"].as_array().unwrap();
+    let names: Vec<&str> = checks
+        .iter()
+        .map(|check| check["name"].as_str().unwrap())
+        .collect();
+    assert_eq!(
+        names,
+        ["install.toml", "policy.toml", "env-file", "healthz"]
+    );
+    assert_eq!(checks[2]["ok"], true, "{report}");
+    assert_eq!(checks[3]["ok"], false, "{report}");
+
+    // The default key is absent, and a repeated key fails the file.
+    for (text, detail) in [
+        (format!("PEP_BIND={address}\n"), "no key CHAPERONE_LISTEN"),
+        (
+            "SITE_TOKEN=s3cret-value\nSITE_TOKEN=s3cret-value\n".to_owned(),
+            "repeats the key of line 1",
+        ),
+    ] {
+        std::fs::write(&env_file, text).unwrap();
+        let output = verify_cli(&["--env-file", path]);
+        assert_eq!(output.status.code(), Some(1));
+        let stdout = String::from_utf8(output.stdout).unwrap();
+        assert!(!stdout.contains("s3cret"), "{stdout}");
+        let report: serde_json::Value = serde_json::from_str(&stdout).unwrap();
+        let checks = report["checks"].as_array().unwrap();
+        assert_eq!(checks[2]["ok"], false, "{report}");
+        assert!(
+            checks[2]["detail"].as_str().unwrap().contains(detail),
+            "{report}"
+        );
+        assert_eq!(checks[3]["detail"], "no address to probe", "{report}");
+    }
 }
