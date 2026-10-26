@@ -40,11 +40,16 @@ const OTHER_TOKEN: &str = "fedcba9876543210fedcba9876543210fedcba9876543210fedcb
 
 /// A sink that keeps each record for the test.
 #[derive(Debug, Default)]
-struct MemorySink(Mutex<Vec<AuditRecord>>);
+struct MemorySink {
+    records: Mutex<Vec<AuditRecord>>,
+    /// How long a write of a `ran` record takes after the record is
+    /// visible, as a slow disk sync takes.
+    ran_delay: Duration,
+}
 
 impl MemorySink {
     fn records(&self) -> Vec<AuditRecord> {
-        self.0.lock().unwrap().clone()
+        self.records.lock().unwrap().clone()
     }
 
     fn events(&self) -> Vec<AuditEvent> {
@@ -57,7 +62,10 @@ impl MemorySink {
 
 impl AuditSink for MemorySink {
     fn write(&self, record: &AuditRecord) -> Result<(), AuditError> {
-        self.0.lock().unwrap().push(record.clone());
+        self.records.lock().unwrap().push(record.clone());
+        if matches!(record.event(), AuditEvent::Ran { .. }) {
+            std::thread::sleep(self.ran_delay);
+        }
         Ok(())
     }
 }
@@ -233,9 +241,14 @@ struct Harness {
 
 /// A gateway over the fixture policy, a memory sink and a fixed clock.
 fn harness(calls_per_minute: u32) -> Harness {
+    harness_with(calls_per_minute, MemorySink::default())
+}
+
+/// As [`harness`], with `sink`.
+fn harness_with(calls_per_minute: u32, sink: MemorySink) -> Harness {
     let root = tempfile::tempdir().unwrap();
     let loaded = loaded(root.path(), calls_per_minute);
-    let sink = Arc::new(MemorySink::default());
+    let sink = Arc::new(sink);
     let clock = Arc::new(FixedClock(Mutex::new(START)));
     let gateway = SharedGateway::new(ChaperoneGateway::new(
         RUN,
@@ -338,6 +351,29 @@ async fn until_records(sink: &MemorySink, count: usize) {
         "the sink holds {} records, not {count}",
         sink.records().len()
     );
+}
+
+#[tokio::test]
+async fn a_visible_ran_record_means_the_result_is_kept() {
+    let Harness { gateway, sink, .. } = harness_with(
+        30,
+        MemorySink {
+            ran_delay: Duration::from_millis(500),
+            ..MemorySink::default()
+        },
+    );
+    let outcome = call(&gateway, Some(TOKEN), "vikunja__create_task").await;
+    assert!(matches!(outcome, CallOutcome::Waiting(_)), "{outcome:?}");
+
+    // The ran record is visible while the sink still writes it. An
+    // identical call then waits for the write and collects the result.
+    until_records(&sink, 3).await;
+    assert_eq!(sink.events()[2], AuditEvent::Ran { is_error: false });
+    let collected = call(&gateway, Some(TOKEN), "vikunja__create_task").await;
+    let CallOutcome::Ran(result) = collected else {
+        panic!("{collected:?}");
+    };
+    assert_eq!(result.content, ["created"]);
 }
 
 #[tokio::test]

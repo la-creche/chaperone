@@ -412,9 +412,30 @@ impl ChaperoneGateway {
         }
     }
 
-    /// Write the final record of a gated call that ran. It blocks on the
-    /// audit sink. The result is kept only after the record is durable (G6).
+    /// Write the final record of a gated call that ran, and move its gate
+    /// to done or faulted in the same step. The gate status stays locked
+    /// while the sink writes, so a reader that sees the record finds the
+    /// gate moved. The result is kept only after the record is durable (G6).
+    /// It blocks on the audit sink.
     fn finish_waiting(
+        &self,
+        sender: &watch::Sender<GateStatus>,
+        call: WaitingCall,
+        gate: GateId,
+        result: Result<UpstreamResult, CallFault>,
+    ) {
+        sender.send_modify(|status| {
+            *status = match self.final_record(call, gate, result) {
+                Some(result) => GateStatus::Done(result),
+                None => GateStatus::Faulted,
+            };
+        });
+    }
+
+    /// Write the final record of a gated call that ran. Return the result
+    /// to keep, or `None` when the call failed or the record is not
+    /// durable.
+    fn final_record(
         &self,
         call: WaitingCall,
         gate: GateId,
@@ -481,19 +502,15 @@ impl ChaperoneGateway {
                         )
                         .await;
                     let finishing = Arc::clone(&gateway);
-                    let kept = tokio::task::spawn_blocking(move || {
-                        finishing.finish_waiting(call, gate, result)
+                    let moving = sender.clone();
+                    let finished = tokio::task::spawn_blocking(move || {
+                        finishing.finish_waiting(&moving, call, gate, result);
                     })
                     .await;
-                    let status = match kept {
-                        Ok(Some(result)) => GateStatus::Done(result),
-                        Ok(None) => GateStatus::Faulted,
-                        Err(error) => {
-                            tracing::error!(%error, "the final record did not return");
-                            GateStatus::Faulted
-                        }
-                    };
-                    sender.send_replace(status);
+                    if let Err(error) = finished {
+                        tracing::error!(%error, "the final record did not return");
+                        sender.send_replace(GateStatus::Faulted);
+                    }
                     return;
                 }
                 Ok(Ok(GateAnswer::Denied(reason))) => {
