@@ -45,10 +45,10 @@ enum Command {
 #[derive(Debug, clap::Args)]
 struct Verify {
     /// The directory that holds install.toml and policy.toml.
-    #[arg(long)]
+    #[arg(long, default_value = DEFAULT_CONFIG_DIR)]
     config_dir: PathBuf,
     /// The plugin tree: default/, then <kind>/included and <kind>/added.
-    #[arg(long)]
+    #[arg(long, default_value = DEFAULT_PLUGINS_DIR)]
     plugins_dir: PathBuf,
     /// The front door address that `chaperone serve` listens on. Cannot be
     /// used with --env-file.
@@ -72,7 +72,7 @@ struct Check {
     /// directory.
     file: PathBuf,
     /// The plugin tree: default/, then <kind>/included and <kind>/added.
-    #[arg(long)]
+    #[arg(long, default_value = DEFAULT_PLUGINS_DIR)]
     plugins_dir: PathBuf,
 }
 
@@ -94,17 +94,17 @@ struct TokenNew {
     /// The app ID in policy.toml.
     app: String,
     /// The directory that holds policy.toml.
-    #[arg(long)]
+    #[arg(long, default_value = DEFAULT_CONFIG_DIR)]
     config_dir: PathBuf,
 }
 
 #[derive(Debug, clap::Args)]
 struct Serve {
     /// The directory that holds install.toml and policy.toml.
-    #[arg(long)]
+    #[arg(long, default_value = DEFAULT_CONFIG_DIR)]
     config_dir: PathBuf,
     /// The plugin tree: default/, then <kind>/included and <kind>/added.
-    #[arg(long)]
+    #[arg(long, default_value = DEFAULT_PLUGINS_DIR)]
     plugins_dir: PathBuf,
     /// The audit file. chaperone creates it with mode 0600.
     #[arg(long)]
@@ -125,6 +125,13 @@ struct Serve {
     #[arg(long = "allowed-host")]
     allowed_hosts: Vec<String>,
 }
+
+/// The configuration directory of the production layout
+/// (`docs/design.md` 8).
+const DEFAULT_CONFIG_DIR: &str = "/etc/chaperone";
+
+/// The plugin tree of the production layout (`docs/design.md` 8).
+const DEFAULT_PLUGINS_DIR: &str = "/etc/chaperone/plugins";
 
 /// The front door address when no `--listen` is given.
 const DEFAULT_LISTEN: &str = "127.0.0.1:8300";
@@ -341,4 +348,80 @@ async fn shutdown_on_signal(shutdown: CancellationToken) {
         () = terminate => {}
     }
     shutdown.cancel();
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn parse(args: &[&str]) -> Command {
+        Cli::try_parse_from(std::iter::once("chaperone").chain(args.iter().copied()))
+            .unwrap()
+            .command
+    }
+
+    #[test]
+    fn verify_takes_the_release_tool_command_with_the_layout_dirs() {
+        let Command::Verify(args) = parse(&[
+            "verify",
+            "--json",
+            "--env-file",
+            "/etc/creche/site.env",
+            "--listen-key",
+            "CHAPERONE_LISTEN",
+        ]) else {
+            panic!("not verify");
+        };
+        assert_eq!(args.config_dir, PathBuf::from(DEFAULT_CONFIG_DIR));
+        assert_eq!(args.plugins_dir, PathBuf::from(DEFAULT_PLUGINS_DIR));
+        assert_eq!(args.env_file, Some(PathBuf::from("/etc/creche/site.env")));
+        assert!(args.json);
+    }
+
+    #[test]
+    fn serve_takes_the_same_layout_dirs_as_verify() {
+        let Command::Serve(args) = parse(&[
+            "serve",
+            "--audit-file",
+            "/var/lib/chaperone/audit.jsonl",
+            "--secrets-dir",
+            "/etc/chaperone/secrets",
+            "--admin-socket",
+            "/run/chaperone/admin.sock",
+        ]) else {
+            panic!("not serve");
+        };
+        assert_eq!(args.config_dir, PathBuf::from(DEFAULT_CONFIG_DIR));
+        assert_eq!(args.plugins_dir, PathBuf::from(DEFAULT_PLUGINS_DIR));
+    }
+
+    #[test]
+    fn an_explicit_dir_overrules_the_layout() {
+        let Command::Verify(args) = parse(&[
+            "verify",
+            "--config-dir",
+            "/srv/config",
+            "--plugins-dir",
+            "/srv/plugins",
+        ]) else {
+            panic!("not verify");
+        };
+        assert_eq!(args.config_dir, PathBuf::from("/srv/config"));
+        assert_eq!(args.plugins_dir, PathBuf::from("/srv/plugins"));
+    }
+
+    #[test]
+    fn check_and_token_take_the_layout_dirs() {
+        let Command::Check(args) = parse(&["check", "/etc/chaperone/policy.toml"]) else {
+            panic!("not check");
+        };
+        assert_eq!(args.plugins_dir, PathBuf::from(DEFAULT_PLUGINS_DIR));
+        let Command::Token(TokenCommand {
+            action: TokenAction::New(args),
+        }) = parse(&["token", "new", "research"])
+        else {
+            panic!("not token new");
+        };
+        assert_eq!(args.config_dir, PathBuf::from(DEFAULT_CONFIG_DIR));
+    }
 }
