@@ -1,5 +1,5 @@
 //! The effect host with a real child process: the fake upstream of
-//! `tests/fake_upstream.rs`. It covers the launch, the secret line on
+//! `src/bin/fake_upstream.rs`. It covers the launch, the secret line on
 //! stdin, the env exception, the tool list and a call through the gateway
 //! (`docs/design.md` 7.5 and 7.7).
 
@@ -13,7 +13,6 @@
 mod support;
 
 use std::collections::BTreeMap;
-use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 
 use chaperone::approval::ApprovalChannel;
@@ -27,27 +26,10 @@ use support::{
     TOKEN, config_dir, plugin_tree, policy_text, secrets_dir, write_manifest, write_secret,
 };
 
-/// The fake upstream binary: the sibling test binary that Cargo built
-/// without a harness, next to this one in the `deps` directory.
+/// The fake upstream binary of `src/bin/fake_upstream.rs`, as Cargo built
+/// it for this test run.
 fn fake_binary() -> PathBuf {
-    let exe = std::env::current_exe().unwrap();
-    let deps = exe.parent().unwrap();
-    let mut found: Vec<PathBuf> = std::fs::read_dir(deps)
-        .unwrap()
-        .filter_map(|entry| entry.ok().map(|entry| entry.path()))
-        .filter(|path| {
-            let name = path
-                .file_name()
-                .and_then(|name| name.to_str())
-                .unwrap_or("");
-            name.starts_with("fake_upstream-")
-                && !name.contains('.')
-                && path.is_file()
-                && path.metadata().unwrap().permissions().mode() & 0o111 != 0
-        })
-        .collect();
-    found.sort();
-    found.pop().expect("cargo built tests/fake_upstream.rs")
+    PathBuf::from(env!("CARGO_BIN_EXE_fake_upstream"))
 }
 
 /// The command that runs the fake with `args`, as an array of strings. A

@@ -22,7 +22,7 @@ chaperone-plugin-system-clock = { path = "../../plugins/default/system-clock" }
 clap = { workspace = true }
 getrandom = { workspace = true }
 hex = { workspace = true }
-rmcp = { workspace = true, features = ["client", "transport-child-process"] }
+rmcp = { workspace = true, features = ["client", "server", "transport-child-process", "transport-io"] }
 serde = { workspace = true }
 serde_json = { workspace = true }
 sha2 = { workspace = true }
@@ -37,6 +37,11 @@ tracing-subscriber = { workspace = true }
 rmcp = { workspace = true, features = ["client", "reqwest", "server", "transport-io", "transport-streamable-http-client-reqwest"] }
 tempfile = { workspace = true }
 
-[[test]]
+# A fake upstream for the effect host tests. Cargo gives each integration
+# test its path in `CARGO_BIN_EXE_fake_upstream`, so a test always runs the
+# fake of the current build.
+[[bin]]
 name = "fake_upstream"
-harness = false
+path = "src/bin/fake_upstream.rs"
+test = false
+doc = false

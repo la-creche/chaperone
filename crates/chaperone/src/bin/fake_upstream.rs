@@ -1,6 +1,6 @@
 //! A fake upstream for the effect host tests. Cargo builds this file as a
-//! test binary with no harness. Run with no argument, it exits at once, so
-//! `cargo test` passes it. Run with `--fake-upstream`, it serves MCP on
+//! binary for the tests of this crate. Run with no argument, it exits at
+//! once. Run with `--fake-upstream`, it serves MCP on
 //! stdio: it reads the secret line of `docs/design.md` 7.5 first, or the
 //! `VIKUNJA_TOKEN` variable with `--env`, and offers these tools:
 //!
