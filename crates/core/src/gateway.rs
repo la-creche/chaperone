@@ -92,6 +92,15 @@ pub enum CallOutcome {
     Failed(CallFault),
 }
 
+/// Whether chaperone can decide a call now (`docs/design.md` 7.6).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Health {
+    /// A valid policy is loaded.
+    Serving,
+    /// No valid policy is loaded, so every call is denied (G2).
+    PolicyNotLoaded,
+}
+
 /// Why chaperone refuses to list tools.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
 pub enum ListError {

@@ -268,6 +268,8 @@ Version 1 has no client that adds the LibreChat suffix. The agent runtime of ver
 
 `chaperone serve` starts the front door. It takes `--config-dir` (the directory of `install.toml` and `policy.toml`), `--plugins-dir`, `--audit-file`, `--secrets-dir` and `--listen`. The front door reads each request body through the strict reader before the MCP library parses it, with a cap of 1 MiB. It accepts only loopback `Host` headers, to stop DNS rebinding. Each `--allowed-host` adds one more, such as `host.docker.internal:8300` for an app in Docker.
 
+The front door answers `GET /healthz` with no bearer. The answer is `200` with the body `{"ok":true}` while a valid policy is loaded. It is `503` with the body `{"ok":false}` while no valid policy is loaded (section 6). The body is fixed. It shows no policy content, no secret and no version.
+
 In version 1, the default front door serves plain HTTP only on a loopback address. chaperone refuses to start when the front door address is not loopback and TLS is not set up. Step 10.5 decides the guard of a front door on a LAN address.
 
 ### 7.7 The effect host
@@ -322,10 +324,19 @@ The admin socket is a Unix socket. It is never on the front-door port. `chaperon
 |---|---|---|
 | `chaperone check <file>` | `POST /check` | Run the strict reader and every cross-file rule |
 | `chaperone token new <app>` | `POST /token` | Create a token, as in section 9 |
+| `chaperone verify` | None | Check the installed chaperone, for a release tool |
 
 A CLI command and its endpoint call the same function. They cannot drift. The CLI works when the chaperone service is down, so a broken policy can be fixed.
 
 `chaperone check <file>` takes `install.toml` or `policy.toml` in its configuration directory, and `--plugins-dir`. `POST /check` takes `{"file": "<name>", "content": "<text>"}` and answers `200 {"ok": true}` or `422 {"ok": false, "error": "<text>"}`. `POST /token` takes `{"app": "<id>"}` and answers `200 {"token": "<text>"}` once, or `422`. `chaperone token new` keeps the previous policy file as `policy.toml.prev` and lands the new one by an atomic rename. Each function runs on the service's own files. The socket does not take a path.
+
+`chaperone verify` takes `--config-dir`, `--plugins-dir`, `--listen` and `--json`. It does these checks in this order:
+
+1. It runs the check of `chaperone check` on `install.toml` in the configuration directory.
+2. It runs the same check on `policy.toml`.
+3. It sends `GET /healthz` to the `--listen` address and needs `200`.
+
+It writes nothing and reads no secret. It prints one line per check. With `--json` it prints one object: `{"ok": <bool>, "checks": [{"name": "<text>", "ok": <bool>, "detail": "<text>"}]}`. It exits with 0 when every check passes, and with 1 otherwise. An external release tool runs it after each install (section 12).
 
 ## 11. Writing the policy file
 

@@ -7,17 +7,19 @@
 //! 3. It passes the request to the [`Gateway`].
 //! 4. It turns the answer into an MCP result.
 //!
-//! It decides nothing and caches nothing (`plugins/adapter/AGENTS.md`).
+//! It also answers `GET /healthz` (`docs/design.md` 7.6). It decides nothing
+//! and caches nothing (`plugins/adapter/AGENTS.md`).
 
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use axum::body::{Body, to_bytes};
 use axum::extract::Request;
+use axum::http::header::CONTENT_TYPE;
 use axum::middleware::{self, Next};
 use axum::response::{IntoResponse, Response};
 use chaperone_core::strict::{self, ByteCap};
-use chaperone_core::{ArgValue, Bearer, CallOutcome, Credentials, Gateway, ListedTool};
+use chaperone_core::{ArgValue, Bearer, CallOutcome, Credentials, Gateway, Health, ListedTool};
 use http::{Method, StatusCode};
 use rmcp::model::{
     CallToolRequestParams, CallToolResponse, CallToolResult, ContentBlock, ListToolsResult,
@@ -32,6 +34,9 @@ use tokio_util::sync::CancellationToken;
 
 /// The path where the front door serves MCP.
 pub const MCP_PATH: &str = "/mcp";
+
+/// The path where the front door answers a health probe.
+pub const HEALTH_PATH: &str = "/healthz";
 
 /// The largest request body the front door reads (`docs/design.md` 7.6).
 pub const BODY_CAP: ByteCap = ByteCap::new(1024 * 1024);
@@ -211,6 +216,16 @@ async fn strict_body(request: Request, next: Next) -> Response {
         .await
 }
 
+/// `GET /healthz`: `200` while a valid policy is loaded, else `503`. The
+/// body is fixed, so it shows no policy content and no version.
+async fn healthz<G: Gateway>(gateway: Arc<G>) -> Response {
+    let (status, body) = match gateway.health().await {
+        Health::Serving => (StatusCode::OK, r#"{"ok":true}"#),
+        Health::PolicyNotLoaded => (StatusCode::SERVICE_UNAVAILABLE, r#"{"ok":false}"#),
+    };
+    (status, [(CONTENT_TYPE, "application/json")], body).into_response()
+}
+
 /// Serve MCP on `listener` until `shutdown` is cancelled. `allowed_hosts`
 /// lists the `Host` values to accept. `rmcp` refuses every other host, to
 /// stop DNS rebinding.
@@ -224,6 +239,7 @@ pub async fn serve<G: Gateway>(
     allowed_hosts: Vec<String>,
     shutdown: CancellationToken,
 ) -> std::io::Result<()> {
+    let probed = Arc::clone(&gateway);
     let front = Front { gateway };
     let config = StreamableHttpServerConfig::default()
         .with_allowed_hosts(allowed_hosts)
@@ -234,6 +250,10 @@ pub async fn serve<G: Gateway>(
         config,
     );
     let router = axum::Router::new()
+        .route(
+            HEALTH_PATH,
+            axum::routing::get(move || healthz(Arc::clone(&probed))),
+        )
         .nest_service(MCP_PATH, service)
         .layer(middleware::from_fn(strict_body));
     axum::serve(listener, router)

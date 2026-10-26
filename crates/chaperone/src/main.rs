@@ -13,7 +13,7 @@ use chaperone::approval::ApprovalChannel;
 use chaperone::effect::{self, Redactor};
 use chaperone::gateway::{Bounds, ChaperoneGateway, Plugins, SharedGateway};
 use chaperone::reload::PolicyFile;
-use chaperone::startup;
+use chaperone::{startup, verify};
 use clap::{Parser, Subcommand};
 use tokio_util::sync::CancellationToken;
 
@@ -36,6 +36,25 @@ enum Command {
     Check(Check),
     /// Tokens of app instances.
     Token(TokenCommand),
+    /// Check the configuration and probe the running front door. Exit 0
+    /// when every check passes.
+    Verify(Verify),
+}
+
+#[derive(Debug, clap::Args)]
+struct Verify {
+    /// The directory that holds install.toml and policy.toml.
+    #[arg(long)]
+    config_dir: PathBuf,
+    /// The plugin tree: default/, then <kind>/included and <kind>/added.
+    #[arg(long)]
+    plugins_dir: PathBuf,
+    /// The front door address that `chaperone serve` listens on.
+    #[arg(long, default_value = DEFAULT_LISTEN)]
+    listen: SocketAddr,
+    /// Print one JSON object instead of one line per check.
+    #[arg(long)]
+    json: bool,
 }
 
 #[derive(Debug, clap::Args)]
@@ -89,13 +108,16 @@ struct Serve {
     #[arg(long)]
     admin_socket: PathBuf,
     /// The front door address. Only loopback in version 1.
-    #[arg(long, default_value = "127.0.0.1:8300")]
+    #[arg(long, default_value = DEFAULT_LISTEN)]
     listen: SocketAddr,
     /// A Host header value to accept, such as host.docker.internal:8300.
     /// Loopback hosts are always accepted. Repeat for more.
     #[arg(long = "allowed-host")]
     allowed_hosts: Vec<String>,
 }
+
+/// The front door address when no `--listen` is given.
+const DEFAULT_LISTEN: &str = "127.0.0.1:8300";
 
 /// The `Host` values the front door accepts without a flag.
 const LOOPBACK_HOSTS: [&str; 3] = ["localhost", "127.0.0.1", "::1"];
@@ -112,6 +134,21 @@ fn main() -> ExitCode {
         Command::Token(TokenCommand {
             action: TokenAction::New(args),
         }) => token_new(&args),
+        Command::Verify(args) => verify(&args),
+    }
+}
+
+fn verify(args: &Verify) -> ExitCode {
+    let report = verify::run(&args.config_dir, &args.plugins_dir, args.listen);
+    if args.json {
+        println!("{}", report.json());
+    } else {
+        print!("{}", report.lines());
+    }
+    if report.passed() {
+        ExitCode::SUCCESS
+    } else {
+        ExitCode::FAILURE
     }
 }
 
