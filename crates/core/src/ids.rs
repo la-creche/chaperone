@@ -221,6 +221,33 @@ impl NameKind for SecretParamKind {
     }
 }
 
+const USER_PREFIX: &str = "mcp-";
+const USER_RULE: &str = "\"mcp-\", then a-z, then 1 to 30 of a-z, 0-9 and '-'";
+
+fn is_plugin_user(text: &str) -> bool {
+    let Some(rest) = text.strip_prefix(USER_PREFIX) else {
+        return false;
+    };
+    let mut chars = rest.chars();
+    chars.next().is_some_and(|c| c.is_ascii_lowercase())
+        && (2..=31).contains(&rest.len())
+        && chars.all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-')
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum PluginUserKind {}
+
+impl sealed::Sealed for PluginUserKind {}
+
+impl NameKind for PluginUserKind {
+    const KIND: &'static str = "plugin user";
+    const RULE: &'static str = USER_RULE;
+
+    fn is_valid(text: &str) -> bool {
+        is_plugin_user(text)
+    }
+}
+
 /// The ID of one app instance in the policy file.
 pub type AppId = Name<AppIdKind>;
 /// The name of one plugin. It equals the plugin's directory name.
@@ -234,10 +261,29 @@ pub type ArgName = Name<ArgNameKind>;
 /// The name under which a plugin receives one secret. For a plugin with
 /// the env exception, it is the name of the environment variable.
 pub type SecretParam = Name<SecretParamKind>;
+/// The OS user that an effect plugin runs as (`docs/design.md` 8).
+pub type PluginUser = Name<PluginUserKind>;
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_plugin_user_is_mcp_then_a_name() {
+        for good in [
+            "mcp-ha",
+            "mcp-vikunja-2",
+            &format!("mcp-a{}", "b".repeat(30)),
+        ] {
+            assert!(PluginUser::try_new(good).is_ok(), "{good}");
+        }
+        let long = format!("mcp-a{}", "b".repeat(31));
+        for bad in [
+            "root", "mcp-", "mcp-a", "mcp-1ab", "mcp-Ab", "mcp-a_b", "xmcp-ab", &long,
+        ] {
+            assert!(PluginUser::try_new(bad).is_err(), "{bad}");
+        }
+    }
 
     #[test]
     fn a_slug_takes_lower_case_digits_dash_and_underscore() {

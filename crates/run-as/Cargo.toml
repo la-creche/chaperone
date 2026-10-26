@@ -1,0 +1,20 @@
+[package]
+name = "chaperone-run-as"
+description = "chaperone-as: starts one effect plugin as its own OS user, with no capability left"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[[bin]]
+name = "chaperone-as"
+path = "src/main.rs"
+
+[lints]
+workspace = true
+
+[dependencies]
+chaperone-core = { path = "../core" }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+rustix = { workspace = true }

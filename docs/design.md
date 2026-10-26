@@ -50,6 +50,7 @@ Limits of the guarantee:
 | core | `crates/core` | Policy types, the strict reader, the decision function, the hook traits. No I/O. |
 | chaperone | `crates/chaperone` | The program. It hosts the adapter plugins and the effect plugins, writes the audit, serves the admin socket and runs the CLI. |
 | plugins | `plugins/` | Every plugin. See section 7. |
+| run-as | `crates/run-as` | The helper `chaperone-as`. It starts an effect plugin as its own OS user (section 8). |
 
 ## 5. The decision
 
@@ -331,6 +332,21 @@ The manifest an app sees holds a tool when the policy grants it, the caller's re
 - In production, a dedicated `chaperone` OS user owns the secrets directory. Agents that edit code run as a different user and cannot read it.
 - In code, a secret is a `Secret` value. It has no `Display` and no `Serialize`. Its `Debug` prints only the name. One named method exposes the value. The memory is wiped when the value is dropped.
 - chaperone replaces each exact secret value in a tool result with `[redacted]`. It does this before it returns the result and before it writes the final audit record.
+- In production, the service unit runs chaperone as the `chaperone` user. Its `CapabilityBoundingSet` and its `AmbientCapabilities` are exactly `CAP_SETUID CAP_SETGID`. It sets `NoNewPrivileges=yes`.
+- In production, every upstream runs as its own OS user. An upstream user owns no secret file and cannot read the files of chaperone. A plugin that cannot run as its user does not run.
+
+`chaperone-as` is the only code that uses the two capabilities. It takes these steps:
+
+1. It reads its arguments: a user, then an absolute command, then the arguments of the command. A user is `mcp-`, then `a-z`, then 1 to 30 of `a-z`, `0-9` and `-`.
+2. It reads the environment of the plugin from one variable, `CHAPERONE_CHILD_ENV`: one JSON object of strings. It reads nothing else of its own environment.
+3. It finds the user in `/etc/passwd`, once. It refuses a user that is not there exactly once, root's ids and the ids of chaperone.
+4. It calls `setgroups([])`, then `setresgid`, then `setresuid`.
+5. It empties the ambient, effective, permitted and inheritable capability sets, and sets `no_new_privs`. It then reads `/proc/self/status` and checks the ids, the groups, the four sets, `NoNewPrivs` and `Threads: 1`.
+6. It calls `execve` with the command, the arguments and the environment of step 2.
+
+A step that fails writes one line to stderr and exits with 125, before the exec. The helper never writes stdout, because stdout is the MCP channel of the plugin.
+
+The helper must start with the one variable and no other. It holds `CAP_SETUID` while it starts, and an ambient capability does not make the dynamic loader ignore `LD_PRELOAD`. A switch between two users that are not root keeps every capability, so step 5 is necessary. The calls of step 4 change the calling thread only, so the helper runs on one thread.
 
 ## 9. Tokens
 
@@ -504,7 +520,7 @@ One pull request per step:
     3. The `attendance` plugin, both halves, with three tools: `invoke_agent`, `enqueue` and `job_status` (section 12). The one-hop bound and the in-flight delegation limit come later (section 14).
     4. The `release` effect plugin. Each call writes one request file (section 12).
     5. A front door bound to a LAN address, under the guard `host-firewall` (section 7.6).
-    6. The effect host launches each upstream as its own OS user.
+    6. The effect host launches each upstream as its own OS user, through `chaperone-as` (section 8).
     7. The bound of an upstream call, per upstream grant (section 5.5).
 
 ## 14. Open items

@@ -4,6 +4,7 @@ members = [
   "crates/chaperone",
   "crates/core",
   "crates/lint",
+  "crates/run-as",
   "crates/ulid",
   "plugins/default/audit-jsonl",
   "plugins/default/bearer",
