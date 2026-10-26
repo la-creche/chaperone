@@ -17,6 +17,32 @@ pub const POLICY_FILE_CAP: ByteCap = ByteCap::new(1024 * 1024);
 
 const POLICY_VERSION: u32 = 1;
 const DIGESTS_MAX: usize = 2;
+const BOUND_MIN_SECONDS: u64 = 1;
+const BOUND_MAX_SECONDS: u64 = 120;
+
+/// The longest chaperone waits for one call to one upstream, in whole
+/// seconds from 1 to 120 (`docs/design.md` 5.5).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct UpstreamBound(u64);
+
+impl UpstreamBound {
+    /// The bound of a grant that sets no `timeout_s`.
+    pub const DEFAULT: Self = Self(30);
+
+    /// The bound of `seconds`, or `None` outside 1 to 120.
+    #[must_use]
+    pub fn from_seconds(seconds: i64) -> Option<Self> {
+        let seconds = u64::try_from(seconds).ok()?;
+        (BOUND_MIN_SECONDS..=BOUND_MAX_SECONDS)
+            .contains(&seconds)
+            .then_some(Self(seconds))
+    }
+
+    #[must_use]
+    pub const fn seconds(self) -> u64 {
+        self.0
+    }
+}
 
 /// The SHA-256 digest of one bearer token.
 #[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
@@ -136,6 +162,9 @@ struct UpstreamGrant {
     /// The operator's reason for the grant.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     note: Option<String>,
+    /// The bound of one call, in seconds. See [`UpstreamBound`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    timeout_s: Option<i64>,
     /// The granted tools of the upstream, by tool name.
     tools: BTreeMap<ToolName, ToolGrant>,
 }
@@ -194,6 +223,7 @@ pub struct App {
     digests: Vec<TokenDigest>,
     limits: Limits,
     grants: BTreeMap<PluginName, UpstreamGrant>,
+    bounds: BTreeMap<PluginName, UpstreamBound>,
     fences: Vec<ActiveFence>,
 }
 
@@ -208,6 +238,13 @@ impl App {
     #[must_use]
     pub fn upstream_note(&self, upstream: &PluginName) -> Option<&str> {
         self.grants.get(upstream)?.note.as_deref()
+    }
+
+    /// The bound of a call to `upstream`, or `None` when the policy grants
+    /// no tool of it.
+    #[must_use]
+    pub fn upstream_bound(&self, upstream: &PluginName) -> Option<UpstreamBound> {
+        self.bounds.get(upstream).copied()
     }
 
     /// The token digests of this app instance: one or two.
@@ -267,6 +304,8 @@ pub enum PolicyError {
     UnknownUpstream { app: AppId, upstream: PluginName },
     #[error("the app {app} grants no tool of {upstream}")]
     EmptyGrant { app: AppId, upstream: PluginName },
+    #[error("the app {app} sets timeout_s of {upstream} outside 1 to 120 seconds")]
+    UpstreamBound { app: AppId, upstream: PluginName },
     #[error("the app {app} fences {argument} of {tool} with an empty list")]
     EmptyFence {
         app: AppId,
@@ -428,6 +467,7 @@ fn load_app(
         }
     }
 
+    let mut bounds = BTreeMap::new();
     for (upstream, grant) in &raw.grants {
         if !setup.upstreams().contains(upstream) {
             return Err(PolicyError::UnknownUpstream {
@@ -441,6 +481,15 @@ fn load_app(
                 upstream: upstream.clone(),
             });
         }
+        let bound = match grant.timeout_s {
+            None => Some(UpstreamBound::DEFAULT),
+            Some(seconds) => UpstreamBound::from_seconds(seconds),
+        };
+        let bound = bound.ok_or_else(|| PolicyError::UpstreamBound {
+            app: id.clone(),
+            upstream: upstream.clone(),
+        })?;
+        bounds.insert(upstream.clone(), bound);
         for (tool, tool_grant) in &grant.tools {
             for (argument, fence) in &tool_grant.arguments {
                 let empty = match fence {
@@ -490,6 +539,7 @@ fn load_app(
         digests: raw.token_sha256,
         limits: raw.limits,
         grants: raw.grants,
+        bounds,
         fences,
     })
 }

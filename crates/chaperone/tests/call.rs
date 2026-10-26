@@ -147,6 +147,9 @@ fn secrets() -> Secrets {
     secrets
 }
 
+/// How long the fake `slow` tool takes to answer.
+const SLOW: Duration = Duration::from_millis(1500);
+
 /// An upstream in memory. Each tool answers by its name.
 #[derive(Debug)]
 struct FakeUpstream(Vec<EffectTool>);
@@ -199,7 +202,7 @@ impl Effect for FakeUpstream {
                 "big" => text("a".repeat(RESULT_CAP + 1)),
                 "broken" => CallToolResult::error(vec![ContentBlock::text("boom".to_owned())]),
                 "slow" => {
-                    tokio::time::sleep(Duration::from_secs(5)).await;
+                    tokio::time::sleep(SLOW).await;
                     text("late".to_owned())
                 }
                 "secret_echo" => text(SECRET_VALUE.to_owned()),
@@ -813,10 +816,20 @@ async fn an_error_result_runs_with_the_error_flag() {
     assert_eq!(sink.events()[1], AuditEvent::Ran { is_error: true });
 }
 
-#[tokio::test]
-async fn an_upstream_that_does_not_answer_in_time_fails_upstream_timeout() {
-    let root = tempfile::tempdir().unwrap();
-    let loaded = loaded(root.path(), 30);
+/// A gateway over the fixture policy with `timeout_s` on the `vikunja`
+/// grant, and its memory sink.
+fn bounded(root: &std::path::Path, seconds: u64) -> (SharedGateway, Arc<MemorySink>) {
+    let plugins = plugin_tree(root);
+    let policy = policy_text(30).replace(
+        "[apps.librechat.grants.vikunja.tools]",
+        &format!(
+            "[apps.librechat.grants.vikunja]\ntimeout_s = {seconds}\n\n[apps.librechat.grants.vikunja.tools]"
+        ),
+    );
+    let config = config_dir(root, INSTALL, &policy);
+    let secret_files = secrets_dir(root);
+    let audit_file = root.join("audit.jsonl");
+    let loaded = startup::load(&config, &plugins, &audit_file, &secret_files).unwrap();
     let sink = Arc::new(MemorySink::default());
     let gateway = SharedGateway::new(ChaperoneGateway::new(
         RUN,
@@ -829,23 +842,44 @@ async fn an_upstream_that_does_not_answer_in_time_fails_upstream_timeout() {
             approval: fake_approval(),
             redactor: Redactor::new(secrets()),
         },
-        Bounds {
-            upstream: Duration::from_millis(50),
-            ..Bounds::DEFAULT
-        },
+        Bounds::DEFAULT,
     ));
+    (gateway, sink)
+}
+
+#[tokio::test]
+async fn the_bound_of_the_upstream_grant_ends_a_slow_call() {
+    let (short_root, long_root) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
+    let (short, short_sink) = bounded(short_root.path(), 1);
+    let (long, long_sink) = bounded(long_root.path(), 2);
     let began = Instant::now();
-    let outcome = call(&gateway, Some(TOKEN), "vikunja__slow").await;
-    assert!(began.elapsed() < Duration::from_secs(4));
+    let timed = async {
+        let outcome = call(&short, Some(TOKEN), "vikunja__slow").await;
+        (outcome, began.elapsed())
+    };
+    let ((short_outcome, short_took), long_outcome) =
+        tokio::join!(timed, call(&long, Some(TOKEN), "vikunja__slow"));
+    assert!(began.elapsed() < Duration::from_secs(3));
+
     assert!(matches!(
-        outcome,
+        short_outcome,
         CallOutcome::Failed(CallFault::UpstreamTimeout)
     ));
+    assert!(
+        short_took >= Duration::from_secs(1) && short_took < SLOW,
+        "{short_took:?}"
+    );
     assert_eq!(
-        sink.events(),
+        short_sink.events(),
         [
             AuditEvent::Decided(AuditDecision::Allow),
             AuditEvent::Failed(CallFault::UpstreamTimeout),
         ]
     );
+
+    let CallOutcome::Ran(result) = long_outcome else {
+        panic!("{long_outcome:?}");
+    };
+    assert_eq!(result.content, ["late"]);
+    assert_eq!(long_sink.events()[1], AuditEvent::Ran { is_error: false });
 }

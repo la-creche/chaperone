@@ -160,7 +160,7 @@ The record keeps the arguments only as the SHA-256 of their canonical form. Clos
 |---|---|---|
 | The decision | 5 seconds. A decision that takes longer fails the call with `no_decision` (G2). | A pure function over a policy file takes far less. A larger bound holds a caller longer on a stuck fence. A smaller bound fails a call on a slow host. |
 | The identity hook | None | The hook runs on the caller's thread, because `Credentials` borrows the request. A hook that never returns holds only that one call. A bound would need an owned copy of the bearer token. The hook is compiled code that the operator chooses in `install.toml`. |
-| A call to an upstream | 30 seconds. A call that takes longer fails with `upstream_timeout` (G2). The audit holds a `failed` record. | A tool of version 1 answers in well under a second. A larger bound holds a caller on a stuck upstream. The upstream may still finish its work after the bound. chaperone does not retry (`crates/chaperone/AGENTS.md`). |
+| A call to an upstream | The `timeout_s` of the upstream grant of the app instance: 1 to 120 seconds, and 30 seconds when the grant does not set it (section 6). A call that takes longer fails with `upstream_timeout` (G2). The audit holds a `failed` record. | Most tools answer in well under a second. A delegate call of `attendance` can take up to 120 seconds (section 12). A larger bound holds a caller on a stuck upstream. The upstream may still finish its work after the bound. chaperone does not retry (`crates/chaperone/AGENTS.md`). |
 | The life of a gate | 10 minutes from its creation. The approval hook call ends with it, and so does a kept result. | Long enough for a human away from the phone. Short enough that a forgotten gate does not approve a call hours later. |
 
 ## 6. Configuration
@@ -180,6 +180,13 @@ Rules:
 - The policy file holds maps keyed by app ID, plugin name, tool name and argument name, as TOML tables. A tool name or an argument name can hold a `.`, so it needs a quoted key, such as `"tasks.list" = {}`.
 - An install entry of an effect plugin can hold `args`: arguments that chaperone appends to the command of the manifest at launch. The manifest names the program. The install file adds what differs per deployment, such as an address. An argument is never a secret value (G9).
 - The install entry of the front door plugin can hold `guard`: `loopback` or `host-firewall` (section 7.6). An entry without `guard` takes `loopback`. An entry of another plugin that holds `guard` refuses start. Any other value refuses start.
+- An upstream grant can hold `timeout_s`: the bound of one call to that upstream, in whole seconds (section 5.5). The value is an integer from 1 to 120. A grant without it takes 30. Any other value does not load, and the error names the rule.
+
+  ```toml
+  [apps.research.grants.attendance]
+  timeout_s = 120
+  ```
+
 - The policy file names a plugin by name only. It cannot launch a binary or bind a secret.
 - An external tool that writes the policy file runs as an OS user that cannot write `install.toml`.
 - chaperone reloads `policy.toml` when the file changes. Before each call, it compares the device, inode, size and modification time of the file with the file it loaded. One policy decides the whole call. A reload that fails denies every call until a valid file loads (G2). A bad write by the operator therefore stops every app until a valid file lands.
@@ -425,7 +432,7 @@ An error result holds `{"ok": false, "reason": "<reason>", "detail": "<text>"}`.
 
 The detail is the door's `message`, or its code. A detail is at most 65536 characters. The plugin blanks each copy of either token in a detail and in the content (G9). An argument that breaks its rule gives `arg_validation`, and no request goes out.
 
-The chaperone bound of section 5.5 is 30 seconds, so chaperone ends a delegate call that takes longer with `upstream_timeout` (section 14).
+An app instance that delegates sets `timeout_s = 120` on its `attendance` grant (section 6). With a lower bound, chaperone ends a longer delegate call with `upstream_timeout` (section 5.5).
 
 `ha-approval` sits in `plugins/effect/included`. The operator's flow is a Node-RED instance in front of Home Assistant with two legs. The plugin speaks the flow's language and changes nothing in the flow:
 
@@ -498,6 +505,7 @@ One pull request per step:
     4. The `release` effect plugin. Each call writes one request file (section 12).
     5. A front door bound to a LAN address, under the guard `host-firewall` (section 7.6).
     6. The effect host launches each upstream as its own OS user.
+    7. The bound of an upstream call, per upstream grant (section 5.5).
 
 ## 14. Open items
 
@@ -508,4 +516,3 @@ One pull request per step:
 | TLS on the front door. It can come as a third value of `guard` (section 7.6). | After version 1 |
 | The one-hop bound of `attendance`: a family that a delegate call reached cannot delegate again. It needs the delegation ID of the calling session. | After version 1 |
 | The in-flight delegation limit of `attendance`: a cap on the delegate calls of one family at one time. | After version 1 |
-| The bound of an `attendance` delegate call. The plugin waits up to 120 seconds, and chaperone ends an upstream call at 30 seconds (section 5.5). A bound per upstream can close the gap. | After version 1 |
