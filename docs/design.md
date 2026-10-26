@@ -395,13 +395,30 @@ A CLI command and its endpoint call the same function. They cannot drift. The CL
 
 `chaperone check <file>` takes `install.toml` or `policy.toml` in its configuration directory, and `--plugins-dir`. `POST /check` takes `{"file": "<name>", "content": "<text>"}` and answers `200 {"ok": true}` or `422 {"ok": false, "error": "<text>"}`. `POST /token` takes `{"app": "<id>"}` and answers `200 {"token": "<text>"}` once, or `422`. `chaperone token new` keeps the previous policy file as `policy.toml.prev` and lands the new one by an atomic rename. Each function runs on the service's own files. The socket does not take a path.
 
-`chaperone verify` takes `--config-dir`, `--plugins-dir`, `--listen` and `--json`. It does these checks in this order:
+`chaperone verify` takes `--config-dir`, `--plugins-dir`, `--listen`, `--env-file`, `--listen-key` and `--json`. The front door address comes from `--listen`, or from one key of an env file:
+
+- `--env-file <path>` names an env file of the service, such as the `EnvironmentFile=` of its unit. `--listen-key <NAME>` names the key that holds the address. Without it, the key is `CHAPERONE_LISTEN`.
+- `--listen` and `--env-file` cannot be used together. `--listen-key` needs `--env-file`.
+- The reader of the env file is strict. Each line is `KEY=VALUE`, a comment that starts with `#`, or empty. A key is `A-Z`, then any of `A-Z`, `0-9` and `_`. The value is the text after the first `=`. The reader does no quoting and no expansion.
+
+The env file check fails in these cases:
+
+1. The file is larger than 64 KiB, or it is not UTF-8.
+2. A line is not one of the three kinds. `export KEY=VALUE` is such a line, and so is a line with white space only.
+3. A key appears on two lines.
+4. The key is absent.
+5. The value is not a socket address: an IP address and a port, such as `192.0.2.10:8300`.
+
+A check result names a line by its number and a key by its name. It never shows a value of the file, the address included (G9).
+
+`chaperone verify` does these checks in this order:
 
 1. It runs the check of `chaperone check` on `install.toml` in the configuration directory.
 2. It runs the same check on `policy.toml`.
-3. It sends `GET /healthz` to the `--listen` address and needs `200`.
+3. With `--env-file` only: it reads the front door address from the env file. The check is named `env-file`.
+4. It sends `GET /healthz` to the front door address and needs `200`. When the env file gives no address, this check fails.
 
-It writes nothing and reads no secret. It prints one line per check. With `--json` it prints one object: `{"ok": <bool>, "checks": [{"name": "<text>", "ok": <bool>, "detail": "<text>"}]}`. It exits with 0 when every check passes, and with 1 otherwise. An external release tool runs it after each install (section 12).
+It writes nothing. It reads no file of the secrets directory. Of the env file, it keeps only the address. It prints one line per check. With `--json` it prints one object: `{"ok": <bool>, "checks": [{"name": "<text>", "ok": <bool>, "detail": "<text>"}]}`. It exits with 0 when every check passes, and with 1 otherwise. An external release tool runs it after each install (section 12).
 
 ## 11. Writing the policy file
 
@@ -552,6 +569,7 @@ One pull request per step:
     7. The bound of an upstream call, per upstream grant (section 5.5).
     8. The in-flight limit of an upstream grant (section 5.2).
     9. The `check_sections` fence hook, and the one-hop check of `attendance` through it (sections 7.8 and 12).
+    10. `chaperone verify` reads the front door address from an env file (section 10).
 
 ## 14. Open items
 

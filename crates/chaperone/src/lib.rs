@@ -10,6 +10,7 @@ pub mod admin;
 pub mod approval;
 pub mod catalog;
 pub mod effect;
+pub mod env_file;
 mod files;
 pub mod gates;
 pub mod gateway;

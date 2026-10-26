@@ -11,6 +11,7 @@ use std::sync::Arc;
 use chaperone::admin::{self, ConfigFile};
 use chaperone::approval::ApprovalChannel;
 use chaperone::effect::{self, Redactor};
+use chaperone::env_file::{DEFAULT_LISTEN_KEY, EnvKey};
 use chaperone::gateway::{Bounds, ChaperoneGateway, Plugins, SharedGateway};
 use chaperone::reload::PolicyFile;
 use chaperone::{startup, verify};
@@ -49,9 +50,17 @@ struct Verify {
     /// The plugin tree: default/, then <kind>/included and <kind>/added.
     #[arg(long)]
     plugins_dir: PathBuf,
-    /// The front door address that `chaperone serve` listens on.
-    #[arg(long, default_value = DEFAULT_LISTEN)]
+    /// The front door address that `chaperone serve` listens on. Cannot be
+    /// used with --env-file.
+    #[arg(long, default_value = DEFAULT_LISTEN, conflicts_with = "env_file")]
     listen: SocketAddr,
+    /// An env file of the service: one KEY=VALUE per line, # comments and
+    /// empty lines. The front door address is the value of --listen-key.
+    #[arg(long)]
+    env_file: Option<PathBuf>,
+    /// The key of the front door address in the env file.
+    #[arg(long, default_value = DEFAULT_LISTEN_KEY, requires = "env_file")]
+    listen_key: EnvKey,
     /// Print one JSON object instead of one line per check.
     #[arg(long)]
     json: bool,
@@ -140,7 +149,14 @@ fn main() -> ExitCode {
 }
 
 fn verify(args: &Verify) -> ExitCode {
-    let report = verify::run(&args.config_dir, &args.plugins_dir, args.listen);
+    let target = match &args.env_file {
+        Some(path) => verify::Target::EnvFile {
+            path,
+            key: &args.listen_key,
+        },
+        None => verify::Target::Listen(args.listen),
+    };
+    let report = verify::run(&args.config_dir, &args.plugins_dir, target);
     if args.json {
         println!("{}", report.json());
     } else {
