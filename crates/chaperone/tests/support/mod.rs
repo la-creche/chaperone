@@ -74,6 +74,9 @@ pub fn policy_text(calls_per_minute: u32) -> String {
         create_task = {{ approval = "required" }}
         picture = {{}}
         big = {{}}
+        read_file = {{}}
+        read_blob = {{}}
+        big_file = {{}}
         broken = {{}}
         slow = {{}}
         delete_task = {{ approval = "required" }}
