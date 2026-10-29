@@ -29,7 +29,7 @@ use chaperone_core::{
     RawSection, RunId, Secret, SecretName, SecretParam, SectionError, Timestamp, ToolCall,
     ToolName, UpstreamResult,
 };
-use rmcp::model::{CallToolResult, ContentBlock};
+use rmcp::model::{CallToolResult, ContentBlock, ResourceContents};
 use support::{
     FakeApproval, INSTALL, TOKEN, config_dir, fake_approval, hanging_approval, plugin_tree,
     policy_text, secrets_dir, write_manifest,
@@ -185,6 +185,9 @@ impl FakeUpstream {
             "create_task",
             "picture",
             "big",
+            "read_file",
+            "read_blob",
+            "big_file",
             "broken",
             "slow",
             "secret_echo",
@@ -224,6 +227,22 @@ impl Effect for FakeUpstream {
                     "image/png".to_owned(),
                 )]),
                 "big" => text("a".repeat(RESULT_CAP + 1)),
+                "read_file" => CallToolResult::success(vec![
+                    ContentBlock::text("downloaded".to_owned()),
+                    ContentBlock::embedded_text("repo://README.md", format!("key {SECRET_VALUE}")),
+                ]),
+                "read_blob" => CallToolResult::success(vec![ContentBlock::resource(
+                    ResourceContents::BlobResourceContents {
+                        uri: "repo://logo.png".to_owned(),
+                        mime_type: Some("image/png".to_owned()),
+                        blob: "iVBORw0KGgo=".to_owned(),
+                        meta: None,
+                    },
+                )]),
+                "big_file" => CallToolResult::success(vec![ContentBlock::embedded_text(
+                    "repo://big.txt",
+                    "a".repeat(RESULT_CAP + 1),
+                )]),
                 "broken" => CallToolResult::error(vec![ContentBlock::text("boom".to_owned())]),
                 "slow" => {
                     tokio::time::sleep(SLOW).await;
@@ -611,12 +630,15 @@ async fn a_known_caller_sees_the_granted_tools_the_upstream_lists() {
         names,
         [
             "vikunja__big",
+            "vikunja__big_file",
             "vikunja__broken",
             "vikunja__create_task",
             "vikunja__delete_task",
             "vikunja__list_tasks",
             "vikunja__odd_task",
             "vikunja__picture",
+            "vikunja__read_blob",
+            "vikunja__read_file",
             "vikunja__slow",
             "vikunja__wait_task",
         ]
@@ -816,7 +838,7 @@ async fn the_shared_gateway_answers_through_the_trait() {
         bearer: Some(&bearer),
         headers: &headers,
     };
-    assert_eq!(shared.list_tools(&credentials).await.unwrap().len(), 9);
+    assert_eq!(shared.list_tools(&credentials).await.unwrap().len(), 12);
     let outcome = shared
         .call_tool(&credentials, "vikunja__list_tasks", BTreeMap::new())
         .await;
@@ -892,6 +914,33 @@ async fn a_result_with_a_block_that_is_not_text_fails_bad_result() {
             AuditEvent::Failed(CallFault::BadResult),
         ]
     );
+}
+
+#[tokio::test]
+async fn an_embedded_text_resource_reaches_the_app_as_text() {
+    let Harness { gateway, sink, .. } = harness(30);
+    let outcome = call(&gateway, Some(TOKEN), "vikunja__read_file").await;
+    let CallOutcome::Ran(result) = outcome else {
+        panic!("the call did not run: {outcome:?}");
+    };
+    assert_eq!(result.content, ["downloaded", "key [redacted]"]);
+    assert_eq!(sink.events()[1], AuditEvent::Ran { is_error: false });
+}
+
+#[tokio::test]
+async fn an_embedded_blob_fails_bad_result() {
+    let Harness { gateway, sink, .. } = harness(30);
+    let outcome = call(&gateway, Some(TOKEN), "vikunja__read_blob").await;
+    assert!(matches!(outcome, CallOutcome::Failed(CallFault::BadResult)));
+    assert_eq!(sink.events()[1], AuditEvent::Failed(CallFault::BadResult));
+}
+
+#[tokio::test]
+async fn an_embedded_text_resource_over_the_cap_fails_bad_result() {
+    let Harness { gateway, sink, .. } = harness(30);
+    let outcome = call(&gateway, Some(TOKEN), "vikunja__big_file").await;
+    assert!(matches!(outcome, CallOutcome::Failed(CallFault::BadResult)));
+    assert_eq!(sink.events()[1], AuditEvent::Failed(CallFault::BadResult));
 }
 
 #[tokio::test]

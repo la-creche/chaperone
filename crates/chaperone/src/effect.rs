@@ -16,7 +16,10 @@ use chaperone_core::{
     Policy, Runtime, SecretDelivery, Setup, Slot, ToolName, UpstreamResult,
 };
 use rmcp::ServiceExt;
-use rmcp::model::{CallToolRequestParams, CallToolResult, MetaObject, RequestMetaObject, Tool};
+use rmcp::model::{
+    CallToolRequestParams, CallToolResult, ContentBlock, MetaObject, RequestMetaObject,
+    ResourceContents, Tool,
+};
 use rmcp::service::{RoleClient, RunningService, ServiceError};
 use tokio::io::AsyncWriteExt;
 use tokio::process::{Child, ChildStderr, Command};
@@ -108,8 +111,9 @@ impl Redactor {
     }
 }
 
-/// Check one raw result (`docs/design.md` 7.7): text blocks only, at most
-/// [`RESULT_CAP`] bytes of text, each secret value blanked.
+/// Check one raw result (`docs/design.md` 7.7): text only, at most
+/// [`RESULT_CAP`] bytes of text, each secret value blanked. An embedded
+/// text resource counts as its text.
 ///
 /// # Errors
 ///
@@ -122,19 +126,35 @@ pub fn check_result(
     let mut content = Vec::with_capacity(result.content.len());
     let mut total = 0_usize;
     for block in &result.content {
-        let Some(text) = block.as_text() else {
+        let Some(text) = text_of(block) else {
             return Err(EffectFault::BadResult);
         };
-        total = total.saturating_add(text.text.len());
+        total = total.saturating_add(text.len());
         if total > RESULT_CAP {
             return Err(EffectFault::BadResult);
         }
-        content.push(redactor.blank(&text.text));
+        content.push(redactor.blank(text));
     }
     Ok(UpstreamResult {
         content,
         is_error: result.is_error.unwrap_or(false),
     })
+}
+
+/// The text of one content block: a text block, or an embedded resource
+/// that holds text. A file that an upstream returns as a resource is text
+/// like any other. A blob, an image, audio and a resource link have no
+/// text, so they answer `None`.
+fn text_of(block: &ContentBlock) -> Option<&str> {
+    if let Some(text) = block.as_text() {
+        return Some(&text.text);
+    }
+
+    if let ResourceContents::TextResourceContents { text, .. } = &block.as_resource()?.resource {
+        return Some(text);
+    }
+
+    None
 }
 
 /// Why an upstream did not start. Each one refuses start (G2).
