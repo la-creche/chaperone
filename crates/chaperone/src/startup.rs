@@ -84,6 +84,9 @@ pub enum Warning {
     /// `policy.toml` refuses one app, so each call of that app is denied
     /// (`docs/design.md` 6).
     RefusedApp { app: AppId, error: PolicyError },
+    /// `policy.toml` does not load at start, so every call is denied until
+    /// a valid file lands (`docs/design.md` 6).
+    NoPolicy { reason: String },
 }
 
 impl fmt::Display for Warning {
@@ -101,6 +104,10 @@ impl fmt::Display for Warning {
                 f,
                 "the app {app} is refused, and each of its calls is denied: {error}"
             ),
+            Self::NoPolicy { reason } => write!(
+                f,
+                "policy.toml does not load, so every call is denied until a valid file lands: {reason}"
+            ),
         }
     }
 }
@@ -116,11 +123,14 @@ pub struct Loaded {
     pub run: RunId,
     pub catalog: Catalog,
     pub setup: Setup,
-    pub policy: Policy,
+    /// The policy, or `None` when `policy.toml` did not load. Every call is
+    /// then denied until a valid file lands.
+    pub policy: Option<Policy>,
     /// The bytes of `policy.toml` that `policy` holds.
     pub policy_bytes: Vec<u8>,
-    /// The stamp of `policy.toml` when chaperone read it.
-    pub policy_stamp: Stamp,
+    /// The stamp of `policy.toml` when chaperone read it, or `None` when
+    /// its metadata did not read.
+    pub policy_stamp: Option<Stamp>,
     pub identity: Box<dyn Identity>,
     pub audit: Arc<dyn AuditSink>,
     pub clock: Box<dyn Clock>,
@@ -181,13 +191,14 @@ pub fn load(
     }
 
     let policy_path = config_dir.join(POLICY_FILE);
-    let policy_stamp = Stamp::of(&policy_path)?;
-    let policy_bytes = files::read_capped(&policy_path, POLICY_FILE_CAP)?;
-    let policy = policy_from(&policy_bytes, &setup)?;
-    warnings.extend(policy.refused().map(|(app, error)| Warning::RefusedApp {
-        app: app.clone(),
-        error: error.clone(),
-    }));
+    let policy_stamp = Stamp::of(&policy_path).ok();
+    let (policy, policy_bytes) = first_policy(&policy_path, &setup, &mut warnings)?;
+    if let Some(policy) = &policy {
+        warnings.extend(policy.refused().map(|(app, error)| Warning::RefusedApp {
+            app: app.clone(),
+            error: error.clone(),
+        }));
+    }
     let run = run_id()?;
     Ok(Loaded {
         run,
@@ -202,6 +213,45 @@ pub fn load(
         secrets,
         warnings,
     })
+}
+
+/// `policy.toml` at start, and its bytes. A fault of the file itself starts
+/// chaperone with no policy, with a warning: an absent or unreadable file,
+/// the strict reader, the version. A fault of this build refuses start: a
+/// fence of `install.toml` with no code (`docs/design.md` 6).
+fn first_policy(
+    path: &Path,
+    setup: &Setup,
+    warnings: &mut Vec<Warning>,
+) -> Result<(Option<Policy>, Vec<u8>), StartError> {
+    fences_for(setup)?;
+    let bytes = match files::read_capped(path, POLICY_FILE_CAP) {
+        Ok(bytes) => bytes,
+        Err(error) => {
+            let reason = error.to_string();
+            warnings.push(Warning::NoPolicy { reason });
+            return Ok((None, Vec::new()));
+        }
+    };
+    match policy_from(&bytes, setup) {
+        Ok(policy) => Ok((Some(policy), bytes)),
+        Err(error) if is_of_this_build(&error) => Err(error),
+        Err(error) => {
+            let reason = error.to_string();
+            warnings.push(Warning::NoPolicy { reason });
+            Ok((None, bytes))
+        }
+    }
+}
+
+/// Whether a policy fault is of this build of chaperone, not of the file.
+fn is_of_this_build(error: &StartError) -> bool {
+    matches!(
+        error,
+        StartError::NoFenceCode { .. }
+            | StartError::FenceBuild { .. }
+            | StartError::Policy(PolicyError::MissingFence(_) | PolicyError::DuplicateFence(_))
+    )
 }
 
 /// The plugin tree under `plugins_dir` and the setup that `install_bytes`

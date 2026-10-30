@@ -292,21 +292,27 @@ async fn run(args: Serve) -> ExitCode {
     }
     if !launched.down.is_empty() {
         let down = launched.down.keys().cloned().collect();
-        match startup::mark_down(&loaded.setup, &loaded.policy_bytes, &down) {
-            Ok((setup, policy)) => {
-                loaded.setup = setup;
-                loaded.policy = policy;
+        if loaded.policy.is_some() {
+            match startup::mark_down(&loaded.setup, &loaded.policy_bytes, &down) {
+                Ok((setup, policy)) => {
+                    loaded.setup = setup;
+                    loaded.policy = Some(policy);
+                }
+                Err(error) => {
+                    tracing::error!(%error, "refusing to start");
+                    return ExitCode::FAILURE;
+                }
             }
-            Err(error) => {
-                tracing::error!(%error, "refusing to start");
-                return ExitCode::FAILURE;
-            }
+        } else {
+            loaded.setup = loaded.setup.clone().with_down(&down);
         }
-        for warning in startup::down_warnings(&loaded.policy) {
+        for warning in loaded.policy.iter().flat_map(startup::down_warnings) {
             tracing::warn!(%warning);
         }
     }
-    effect::warn_unlisted(&loaded.policy, &launched.upstreams);
+    if let Some(policy) = &loaded.policy {
+        effect::warn_unlisted(policy, &launched.upstreams);
+    }
     let listener = match tokio::net::TcpListener::bind(listen).await {
         Ok(listener) => listener,
         Err(error) => {

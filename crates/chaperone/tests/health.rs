@@ -36,9 +36,14 @@ struct Served {
 }
 
 async fn serve() -> Served {
+    serve_policy(&policy_text(30)).await
+}
+
+/// As [`serve`], with `policy` as the text of the policy file at start.
+async fn serve_policy(policy: &str) -> Served {
     let root = tempfile::tempdir().unwrap();
     let plugins = plugin_tree(root.path());
-    let config = config_dir(root.path(), INSTALL, &policy_text(30));
+    let config = config_dir(root.path(), INSTALL, policy);
     let audit = root.path().join("audit.jsonl");
     let secrets = secrets_dir(root.path());
     let loaded = startup::load(&config, &plugins, &audit, AuditMode::OwnerOnly, &secrets).unwrap();
@@ -107,6 +112,20 @@ async fn healthz_answers_200_with_a_policy_and_503_without_one() {
     let answer = get_healthz(served.address).await;
     assert!(answer.starts_with("HTTP/1.1 503"), "{answer}");
     assert!(answer.ends_with(r#"{"ok":false}"#), "{answer}");
+    served.shutdown.cancel();
+}
+
+#[tokio::test]
+async fn a_start_with_no_policy_answers_503_until_a_valid_file_lands() {
+    let served = serve_policy("version = 1\n[apps.librechat\n").await;
+    let answer = get_healthz(served.address).await;
+    assert!(answer.starts_with("HTTP/1.1 503"), "{answer}");
+
+    let staged = served.config.join("policy.toml.new");
+    std::fs::write(&staged, policy_text(30)).unwrap();
+    std::fs::rename(&staged, served.config.join("policy.toml")).unwrap();
+    let answer = get_healthz(served.address).await;
+    assert!(answer.starts_with("HTTP/1.1 200"), "{answer}");
     served.shutdown.cancel();
 }
 

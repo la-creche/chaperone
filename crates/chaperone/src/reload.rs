@@ -66,16 +66,22 @@ struct Watched {
 
 impl PolicyFile {
     /// Watch `policy.toml` in `config_dir`. `policy` was read from the file
-    /// when it had `stamp`.
+    /// when it had `stamp`. With no policy, each call reads the file again
+    /// until a valid file loads.
     #[must_use]
-    pub fn new(config_dir: &Path, setup: Setup, policy: Policy, stamp: Stamp) -> Self {
+    pub fn new(
+        config_dir: &Path,
+        setup: Setup,
+        policy: Option<Policy>,
+        stamp: Option<Stamp>,
+    ) -> Self {
         Self {
             path: config_dir.join(POLICY_FILE),
             setup,
             state: Mutex::new(Watched {
-                stamp: Some(stamp),
+                stamp,
                 ended: BTreeSet::new(),
-                policy: Some(Arc::new(policy)),
+                policy: policy.map(Arc::new),
             }),
         }
     }
