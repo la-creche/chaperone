@@ -4,11 +4,12 @@
 //! file. A change re-reads the file through the strict reader. While no
 //! valid policy is loaded, each call re-reads the file.
 
+use std::collections::BTreeSet;
 use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
-use chaperone_core::{POLICY_FILE_CAP, Policy, Setup};
+use chaperone_core::{POLICY_FILE_CAP, PluginName, Policy, Setup};
 
 use crate::files::{self, ReadError};
 use crate::startup::{self, POLICY_FILE, StartError};
@@ -58,6 +59,8 @@ pub struct PolicyFile {
 #[derive(Debug)]
 struct Watched {
     stamp: Option<Stamp>,
+    /// The upstreams that ended after start, as the last read knew them.
+    ended: BTreeSet<PluginName>,
     policy: Option<Arc<Policy>>,
 }
 
@@ -71,23 +74,29 @@ impl PolicyFile {
             setup,
             state: Mutex::new(Watched {
                 stamp: Some(stamp),
+                ended: BTreeSet::new(),
                 policy: Some(Arc::new(policy)),
             }),
         }
     }
 
-    /// The policy to decide one call with, reloaded first when the file
-    /// changed or when no valid policy is loaded. `None` means no valid
-    /// policy is loaded, and the call is denied (G2).
-    pub fn current(&self) -> Option<Arc<Policy>> {
+    /// The policy to decide one call with. It is read again when the file
+    /// changed, when `ended` differs from the last read, or when no valid
+    /// policy is loaded. `None` means no valid policy is loaded, and the
+    /// call is denied (G2).
+    pub fn current(&self, ended: &BTreeSet<PluginName>) -> Option<Arc<Policy>> {
         let mut state = self.state.lock().ok()?;
         let stamp = Stamp::of(&self.path).ok();
         // A mode change keeps the stamp, so a refused read is tried again.
-        if stamp == state.stamp && state.policy.is_some() {
+        if stamp == state.stamp && *ended == state.ended && state.policy.is_some() {
             return state.policy.clone();
         }
+        for upstream in ended.difference(&state.ended) {
+            tracing::error!(%upstream, "the upstream ended, and each app granted it is refused");
+        }
         state.stamp = stamp;
-        state.policy = match self.read() {
+        state.ended.clone_from(ended);
+        state.policy = match self.read(ended) {
             Ok(policy) => {
                 tracing::info!(file = %self.path.display(), "reloaded the policy file");
                 for (app, error) in policy.refused() {
@@ -113,9 +122,13 @@ impl PolicyFile {
         state.policy.clone()
     }
 
-    fn read(&self) -> Result<Policy, StartError> {
+    /// The policy file read against the setup, with the upstreams that did
+    /// not start and the upstreams in `ended` down.
+    fn read(&self, ended: &BTreeSet<PluginName>) -> Result<Policy, StartError> {
         let bytes = files::read_capped(&self.path, POLICY_FILE_CAP)?;
-        startup::policy_from(&bytes, &self.setup)
+        let down: BTreeSet<PluginName> = self.setup.down().union(ended).cloned().collect();
+        let setup = self.setup.clone().with_down(&down);
+        startup::policy_from(&bytes, &setup)
     }
 }
 
@@ -130,10 +143,12 @@ pub enum PolicySource {
 
 impl PolicySource {
     /// The policy for one call, or `None` when no valid policy is loaded.
-    pub fn current(&self) -> Option<Arc<Policy>> {
+    /// `ended` names the upstreams that ended after start. A fixed policy
+    /// does not read it.
+    pub fn current(&self, ended: &BTreeSet<PluginName>) -> Option<Arc<Policy>> {
         match self {
             Self::Fixed(policy) => Some(Arc::clone(policy)),
-            Self::File(file) => file.current(),
+            Self::File(file) => file.current(ended),
         }
     }
 }

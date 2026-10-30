@@ -16,13 +16,16 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 use chaperone::approval::ApprovalChannel;
-use chaperone::effect::{self, LaunchError, Redactor};
+use chaperone::effect::{self, Effect, LaunchError, Redactor};
 use chaperone::gateway::{Bounds, ChaperoneGateway, Plugins, SharedGateway};
 use chaperone::registry::AuditMode;
 use chaperone::startup;
 use std::time::Duration;
 
-use chaperone_core::{Bearer, CallOutcome, Credentials, Gateway, SecretDelivery};
+use chaperone_core::{
+    AppId, Bearer, CallOutcome, Credentials, Gateway, PluginName, Secret, SecretDelivery,
+    SecretName, SecretParam, ToolName,
+};
 use support::{
     TOKEN, config_dir, plugin_tree, policy_text, secrets_dir, write_manifest, write_secret,
 };
@@ -406,6 +409,41 @@ async fn a_plugin_that_does_not_speak_mcp_refuses_start() {
     .await
     .unwrap_err();
     assert!(matches!(error, LaunchError::Initialize { .. }), "{error}");
+}
+
+#[tokio::test]
+async fn an_upstream_whose_process_exits_has_ended() {
+    let name = PluginName::try_new("vikunja").unwrap();
+    let mut vikunja = BTreeMap::new();
+    vikunja.insert(
+        SecretParam::try_new("VIKUNJA_TOKEN").unwrap(),
+        Secret::new(
+            SecretName::try_new("vikunja_token").unwrap(),
+            "tok-123".to_owned(),
+        ),
+    );
+    let mut secrets = startup::Secrets::new();
+    secrets.insert(name.clone(), vikunja);
+    let redactor = Redactor::new(secrets);
+    let command = [
+        fake_binary().display().to_string(),
+        "--fake-upstream".to_owned(),
+    ];
+    let upstream = effect::launch(&name, &command, SecretDelivery::Stdin, &redactor, None)
+        .await
+        .unwrap();
+    assert!(!upstream.has_ended());
+
+    let app = AppId::try_new("librechat").unwrap();
+    let exit = ToolName::try_new("exit").unwrap();
+    let _ = upstream.call(&app, &exit, BTreeMap::new()).await;
+    for _ in 0..250 {
+        if upstream.has_ended() {
+            return;
+        }
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    panic!("the host did not see the upstream end");
 }
 
 #[test]
