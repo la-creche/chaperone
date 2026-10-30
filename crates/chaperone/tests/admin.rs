@@ -192,7 +192,7 @@ fn a_new_token_authenticates_and_the_previous_file_is_kept() {
         assert!(
             loaded
                 .identity
-                .resolve(&credentials, &loaded.policy)
+                .resolve(&credentials, loaded.policy.as_ref().unwrap())
                 .is_some()
         );
     }

@@ -119,7 +119,7 @@ async fn running_with(
         effect::launch_all_with(&loaded.setup, &loaded.catalog, &redactor, Some(&fake)).await?;
     let gateway = SharedGateway::new(ChaperoneGateway::new(
         loaded.run,
-        loaded.policy,
+        loaded.policy.unwrap(),
         Plugins {
             identity: loaded.identity,
             audit: loaded.audit,

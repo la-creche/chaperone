@@ -221,10 +221,72 @@ fn an_install_file_over_the_cap_refuses_start() {
 }
 
 #[test]
-fn a_policy_that_does_not_parse_refuses_start() {
+fn a_policy_that_does_not_parse_starts_with_no_policy() {
     let root = tempfile::tempdir().unwrap();
-    let error = load(root.path(), INSTALL, "version = 1\napps = {}\napps = {}\n").unwrap_err();
-    assert!(matches!(error, StartError::Policy(_)), "{error}");
+    let loaded = load(root.path(), INSTALL, "version = 1\napps = {}\napps = {}\n").unwrap();
+    assert!(loaded.policy.is_none());
+    let [Warning::NoPolicy { reason }] = loaded.warnings.as_slice() else {
+        panic!("one warning: {:?}", loaded.warnings);
+    };
+    assert!(reason.contains("twice"), "{reason}");
+}
+
+#[test]
+fn a_fence_with_no_code_still_refuses_start() {
+    let root = tempfile::tempdir().unwrap();
+    let plugins = plugin_tree(root.path());
+    write_manifest(
+        &plugins,
+        "decision/added/zz-nocode",
+        r#"
+            name = "zz-nocode"
+            version = "1"
+            kind = "decision"
+            hooks = ["fence"]
+        "#,
+    );
+    let install = "version = 1\nplugins = { vikunja = {}, zz-nocode = {} }\n";
+    let config = config_dir(root.path(), install, &policy_text(30));
+    let secrets = secrets_dir(root.path());
+    let error = startup::load(
+        &config,
+        &plugins,
+        &root.path().join("audit.jsonl"),
+        AuditMode::OwnerOnly,
+        &secrets,
+    )
+    .unwrap_err();
+    assert!(matches!(error, StartError::NoFenceCode { .. }), "{error}");
+}
+
+#[test]
+fn an_absent_policy_starts_with_no_policy() {
+    let root = tempfile::tempdir().unwrap();
+    let plugins = plugin_tree(root.path());
+    let config = config_dir(root.path(), INSTALL, &policy_text(30));
+    std::fs::remove_file(config.join("policy.toml")).unwrap();
+    let secrets = secrets_dir(root.path());
+    let loaded = startup::load(
+        &config,
+        &plugins,
+        &root.path().join("audit.jsonl"),
+        AuditMode::OwnerOnly,
+        &secrets,
+    )
+    .unwrap();
+    assert!(loaded.policy.is_none());
+    assert!(loaded.policy_stamp.is_none());
+    assert!(matches!(
+        loaded.warnings.as_slice(),
+        [Warning::NoPolicy { .. }]
+    ));
+}
+
+#[test]
+fn a_policy_of_another_version_starts_with_no_policy() {
+    let root = tempfile::tempdir().unwrap();
+    let loaded = load(root.path(), INSTALL, "version = 2\n").unwrap();
+    assert!(loaded.policy.is_none());
 }
 
 /// A tree where `vikunja` declares one secret, and an install file that
@@ -327,8 +389,15 @@ fn a_refused_app_is_a_warning_and_the_others_load() {
         "b".repeat(64)
     );
     let loaded = load(root.path(), INSTALL, &(policy_text(30) + &other)).unwrap();
-    assert!(loaded.policy.app(&app("librechat")).is_some());
-    assert!(loaded.policy.app(&app("other")).is_none());
+    assert!(
+        loaded
+            .policy
+            .as_ref()
+            .unwrap()
+            .app(&app("librechat"))
+            .is_some()
+    );
+    assert!(loaded.policy.as_ref().unwrap().app(&app("other")).is_none());
     let [
         Warning::RefusedApp {
             app: refused,

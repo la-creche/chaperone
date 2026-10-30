@@ -287,7 +287,7 @@ fn harness_with(calls_per_minute: u32, sink: MemorySink) -> Harness {
     let clock = Arc::new(FixedClock(Mutex::new(START)));
     let gateway = SharedGateway::new(ChaperoneGateway::new(
         RUN,
-        loaded.policy,
+        loaded.policy.unwrap(),
         Plugins {
             identity: loaded.identity,
             audit: Arc::clone(&sink) as Arc<dyn AuditSink>,
@@ -540,7 +540,7 @@ async fn an_identical_call_while_pending_waits_and_asks_once() {
     let sink = Arc::new(MemorySink::default());
     let gateway = SharedGateway::new(ChaperoneGateway::new(
         RUN,
-        loaded.policy,
+        loaded.policy.unwrap(),
         Plugins {
             identity: loaded.identity,
             audit: Arc::clone(&sink) as Arc<dyn AuditSink>,
@@ -686,7 +686,7 @@ async fn an_identity_hook_that_panics_resolves_to_nothing() {
     let sink = Arc::new(MemorySink::default());
     let gateway = SharedGateway::new(ChaperoneGateway::new(
         RUN,
-        loaded.policy,
+        loaded.policy.unwrap(),
         Plugins {
             identity: Box::new(PanicIdentity),
             audit: Arc::clone(&sink) as Arc<dyn AuditSink>,
@@ -764,7 +764,7 @@ async fn a_sink_that_refuses_the_record_fails_the_call() {
     let loaded = loaded(root.path(), 30);
     let gateway = SharedGateway::new(ChaperoneGateway::new(
         RUN,
-        loaded.policy,
+        loaded.policy.unwrap(),
         Plugins {
             identity: loaded.identity,
             audit: Arc::new(RefusingSink),
@@ -790,7 +790,7 @@ async fn the_audit_file_records_each_call_and_never_the_token() {
     let loaded = loaded(root.path(), 30);
     let gateway = SharedGateway::new(ChaperoneGateway::new(
         loaded.run,
-        loaded.policy,
+        loaded.policy.unwrap(),
         Plugins {
             identity: loaded.identity,
             audit: loaded.audit,
@@ -860,7 +860,7 @@ fn harness_without_upstreams() -> Harness {
     let clock = Arc::new(FixedClock(Mutex::new(START)));
     let gateway = SharedGateway::new(ChaperoneGateway::new(
         RUN,
-        loaded.policy,
+        loaded.policy.unwrap(),
         Plugins {
             identity: loaded.identity,
             audit: Arc::clone(&sink) as Arc<dyn AuditSink>,
@@ -993,7 +993,7 @@ fn gateway_over(root: &std::path::Path, policy: &str) -> (SharedGateway, Arc<Mem
     let sink = Arc::new(MemorySink::default());
     let gateway = SharedGateway::new(ChaperoneGateway::new(
         RUN,
-        loaded.policy,
+        loaded.policy.unwrap(),
         Plugins {
             identity: loaded.identity,
             audit: Arc::clone(&sink) as Arc<dyn AuditSink>,

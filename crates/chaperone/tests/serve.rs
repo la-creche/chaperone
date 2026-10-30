@@ -57,7 +57,7 @@ async fn serve() -> Served {
     .unwrap();
     let gateway = Arc::new(SharedGateway::new(ChaperoneGateway::new(
         loaded.run,
-        loaded.policy,
+        loaded.policy.unwrap(),
         Plugins {
             identity: loaded.identity,
             audit: loaded.audit,
