@@ -10,6 +10,7 @@
 
 mod support;
 
+use std::collections::BTreeSet;
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 
@@ -339,6 +340,34 @@ fn a_refused_app_is_a_warning_and_the_others_load() {
     };
     assert_eq!(refused, &app("other"));
     assert!(error.to_string().contains("nowhere"), "{error}");
+}
+
+#[test]
+fn a_down_upstream_refuses_each_app_granted_it() {
+    let root = tempfile::tempdir().unwrap();
+    let other = format!(
+        "\n[apps.other]\ntoken_sha256 = [\"{}\"]\n\
+         limits = {{ calls_per_minute = 1, max_pending_gates = 1 }}\n",
+        "b".repeat(64)
+    );
+    let loaded = load(root.path(), INSTALL, &(policy_text(30) + &other)).unwrap();
+    let down = BTreeSet::from([name("vikunja")]);
+    let (setup, policy) = startup::mark_down(&loaded.setup, &loaded.policy_bytes, &down).unwrap();
+    assert_eq!(setup.down(), &down);
+    assert!(policy.app(&app("librechat")).is_none());
+    assert!(policy.app(&app("other")).is_some());
+    let warnings: Vec<Warning> = startup::down_warnings(&policy).collect();
+    let [
+        Warning::RefusedApp {
+            app: refused,
+            error,
+        },
+    ] = warnings.as_slice()
+    else {
+        panic!("one refused app: {warnings:?}");
+    };
+    assert_eq!(refused, &app("librechat"));
+    assert!(error.to_string().contains("did not start"), "{error}");
 }
 
 #[test]

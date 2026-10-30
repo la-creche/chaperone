@@ -835,6 +835,36 @@ fn each_call_of_a_refused_app_is_denied() {
     );
 }
 
+#[test]
+fn a_grant_of_a_down_upstream_refuses_its_app() {
+    let install = InstallFile::read(INSTALL.as_bytes()).unwrap();
+    let setup = chaperone_core::resolve(&install, &catalog()).unwrap();
+    let down = BTreeSet::from([name("vikunja")]);
+    let setup = setup.with_down(&down);
+    let entities = EntityFence(name("ha-call"));
+    let text = with_other_app(&policy_text(""), &"b".repeat(64));
+    let loaded = Policy::load(text.as_bytes(), &setup, &[&entities]).unwrap();
+    assert!(loaded.app(&app_id("other")).is_some());
+    let refused: Vec<(&AppId, &PolicyError)> = loaded.refused().collect();
+    assert_eq!(refused.len(), 1);
+    assert_eq!(refused[0].0, &app_id("librechat"));
+    assert_eq!(
+        refused[0].1,
+        &PolicyError::UpstreamDown {
+            app: app_id("librechat"),
+            upstream: name("vikunja"),
+        }
+    );
+}
+
+#[test]
+fn a_down_name_that_is_no_upstream_is_left_out() {
+    let install = InstallFile::read(INSTALL.as_bytes()).unwrap();
+    let setup = chaperone_core::resolve(&install, &catalog()).unwrap();
+    let setup = setup.with_down(&BTreeSet::from([name("ghost")]));
+    assert!(setup.down().is_empty());
+}
+
 /// A fence whose section lists apps that its app must not share the
 /// policy with: a rule across apps, for the tests of [`Policy::load`].
 #[derive(Debug)]
