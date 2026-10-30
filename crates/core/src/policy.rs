@@ -1,6 +1,7 @@
 //! The policy file (`policy.toml`): app instances, token digests, limits,
 //! grants, argument fences, approval rules and plugin sections. A policy
-//! that does not load denies every call (G2). `docs/design.md` 6.
+//! that does not load denies every call (G2). A fault inside one app table
+//! refuses that app alone, and the other apps load. `docs/design.md` 6.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
@@ -225,7 +226,8 @@ struct RawApp {
     plugins: BTreeMap<PluginName, toml::Value>,
 }
 
-/// `policy.toml` as written.
+/// `policy.toml` as written. Each app table is read as a value first, so a
+/// table of the wrong shape refuses its own app and no other.
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct RawPolicy {
@@ -233,7 +235,7 @@ struct RawPolicy {
     version: u32,
     /// The app instances, by app ID.
     #[serde(default)]
-    apps: BTreeMap<AppId, RawApp>,
+    apps: BTreeMap<AppId, toml::Value>,
 }
 
 /// One active fence with its section for one app instance already read.
@@ -315,13 +317,17 @@ impl App {
     }
 }
 
-/// A loaded, checked policy.
+/// A loaded, checked policy. An app that the load refused is not in it, so
+/// each call of that app is denied.
 #[derive(Debug)]
 pub struct Policy {
     apps: BTreeMap<AppId, App>,
+    refused: BTreeMap<AppId, PolicyError>,
 }
 
-/// Why `policy.toml` does not load. Each one denies every call (G2).
+/// Why `policy.toml` does not load, or why it refuses one app. A refusal of
+/// the file denies every call (G2). A refusal of one app denies each call
+/// of that app.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum PolicyError {
     #[error("policy.toml is not valid: {0}")]
@@ -330,6 +336,8 @@ pub enum PolicyError {
     Version { found: u32 },
     #[error("the app {0} is not in policy.toml")]
     UnknownApp(AppId),
+    #[error("the app {app} is not valid: {error}")]
+    AppShape { app: AppId, error: String },
     #[error("the app {app} already holds {DIGESTS_MAX} token digests")]
     DigestsFull { app: AppId },
     #[error("the token digests of the app {app} are not one array in policy.toml")]
@@ -364,7 +372,7 @@ pub enum PolicyError {
         plugin: PluginName,
         error: SectionError,
     },
-    #[error("the fence {plugin} refuses the policy: {error}")]
+    #[error("the fence {plugin} refuses the app {}: {error}", error.caller)]
     CrossApp {
         plugin: PluginName,
         error: CrossAppError,
@@ -377,14 +385,16 @@ pub trait FenceCode: Send + Sync + fmt::Debug + sealed::Sealed {
     /// The plugin name of the fence.
     fn plugin(&self) -> &PluginName;
 
-    /// Prepare the section of each app instance in `apps`, then check the
-    /// sections together. Only when both pass does each app instance get
-    /// its prepared fence.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`PolicyError::Section`] or [`PolicyError::CrossApp`].
-    fn prepare_apps(&self, apps: &mut BTreeMap<AppId, App>) -> Result<(), PolicyError>;
+    /// Prepare the section of each app instance in `apps` that `refused`
+    /// does not hold, then check the sections together. A section that
+    /// does not prepare refuses its app. A rule that two apps break
+    /// together refuses the caller of the rule, and the check runs again
+    /// without it. Each app that passes gets its prepared fence.
+    fn prepare_apps(
+        &self,
+        apps: &mut BTreeMap<AppId, App>,
+        refused: &mut BTreeMap<AppId, PolicyError>,
+    );
 }
 
 mod sealed {
@@ -398,33 +408,53 @@ impl<F: Fence> FenceCode for F {
         self.name()
     }
 
-    fn prepare_apps(&self, apps: &mut BTreeMap<AppId, App>) -> Result<(), PolicyError> {
+    fn prepare_apps(
+        &self,
+        apps: &mut BTreeMap<AppId, App>,
+        refused: &mut BTreeMap<AppId, PolicyError>,
+    ) {
         let plugin = self.name();
-        let mut prepared = Vec::with_capacity(apps.len());
-        for (id, app) in apps.iter_mut() {
+        let mut prepared = BTreeMap::new();
+        for (id, app) in apps.iter() {
+            if refused.contains_key(id) {
+                continue;
+            }
             let section = app.sections.get(plugin).map(RawSection::new);
-            let fence = self
-                .prepare(section)
-                .map_err(|error| PolicyError::Section {
-                    app: id.clone(),
-                    plugin: plugin.clone(),
-                    error,
-                })?;
-            prepared.push((id, app, fence));
+            match self.prepare(section) {
+                Ok(fence) => {
+                    prepared.insert(id.clone(), fence);
+                }
+                Err(error) => {
+                    let app = id.clone();
+                    let plugin = plugin.clone();
+                    refused.insert(id.clone(), PolicyError::Section { app, plugin, error });
+                }
+            }
         }
-        let sections = prepared.iter().map(|(id, _, fence)| (*id, fence)).collect();
-        self.check_sections(&sections)
-            .map_err(|error| PolicyError::CrossApp {
+        while let Err(error) = self.check_sections(&prepared.iter().collect()) {
+            let caller = error.caller.clone();
+            let refusal = PolicyError::CrossApp {
                 plugin: plugin.clone(),
                 error,
-            })?;
-        for (_, app, fence) in prepared {
-            app.fences.push(ActiveFence {
-                plugin: plugin.clone(),
-                fence: Box::new(fence),
-            });
+            };
+            if prepared.remove(&caller).is_none() {
+                // The fence names an app it was not given. The check cannot
+                // say which app breaks the rule, so it refuses each one.
+                for (id, _) in std::mem::take(&mut prepared) {
+                    refused.insert(id, refusal.clone());
+                }
+                break;
+            }
+            refused.insert(caller, refusal);
         }
-        Ok(())
+        for (id, fence) in prepared {
+            if let Some(app) = apps.get_mut(&id) {
+                app.fences.push(ActiveFence {
+                    plugin: plugin.clone(),
+                    fence: Box::new(fence),
+                });
+            }
+        }
     }
 }
 
@@ -442,12 +472,12 @@ fn read_raw(bytes: &[u8]) -> Result<RawPolicy, PolicyError> {
 /// Returns a [`PolicyError`] when the file does not read, the app is not in
 /// it, or the app already holds two digests.
 pub fn with_digest(bytes: &[u8], app: &AppId, digest: TokenDigest) -> Result<Vec<u8>, PolicyError> {
-    let raw = read_raw(bytes)?;
+    let mut raw = read_raw(bytes)?;
     let instance = raw
         .apps
-        .get(app)
+        .remove(app)
         .ok_or_else(|| PolicyError::UnknownApp(app.clone()))?;
-    if instance.token_sha256.len() >= DIGESTS_MAX {
+    if raw_app(app, instance)?.token_sha256.len() >= DIGESTS_MAX {
         return Err(PolicyError::DigestsFull { app: app.clone() });
     }
     let not_found = || PolicyError::DigestArray { app: app.clone() };
@@ -460,7 +490,8 @@ pub fn with_digest(bytes: &[u8], app: &AppId, digest: TokenDigest) -> Result<Vec
     let separator = if comma { ", " } else { "" };
     let digest = String::from(digest);
     let after = format!("{head}{separator}\"{digest}\"{tail}").into_bytes();
-    read_raw(&after)?;
+    let instance = read_raw(&after)?.apps.remove(app).ok_or_else(not_found)?;
+    raw_app(app, instance)?;
     Ok(after)
 }
 
@@ -487,11 +518,14 @@ fn digest_slot(text: &str, app: &AppId) -> Option<(usize, bool)> {
 
 impl Policy {
     /// Read `policy.toml` and check it against the setup. Each active fence
-    /// in `setup` needs its code in `fences`.
+    /// in `setup` needs its code in `fences`. A fault inside one app table
+    /// refuses that app: [`Policy::refused`] names it, with its fault, and
+    /// the other apps load.
     ///
     /// # Errors
     ///
-    /// Returns the first [`PolicyError`] found. Checks run in a fixed order.
+    /// Returns the first [`PolicyError`] of the file itself: the strict
+    /// reader, the version, or the fence code of this build.
     pub fn load(
         bytes: &[u8],
         setup: &Setup,
@@ -516,28 +550,45 @@ impl Policy {
             }
         }
 
-        let mut owners: BTreeMap<TokenDigest, AppId> = BTreeMap::new();
         let mut apps = BTreeMap::new();
-        for (id, raw_app) in raw.apps {
-            let app = load_app(&id, raw_app, setup)?;
-            for digest in &app.digests {
-                if let Some(first) = owners.get(digest) {
-                    return Err(PolicyError::SharedDigest {
-                        first: first.clone(),
-                        second: id,
-                    });
+        let mut refused = BTreeMap::new();
+        for (id, value) in raw.apps {
+            match raw_app(&id, value).and_then(|raw| load_app(&id, raw, setup)) {
+                Ok(app) => {
+                    apps.insert(id, app);
                 }
-                owners.insert(digest.clone(), id.clone());
+                Err(error) => {
+                    refused.insert(id, error);
+                }
             }
-            apps.insert(id, app);
         }
-        for name in setup.fences() {
-            let Some(fence) = code.get(name) else {
-                return Err(PolicyError::MissingFence(name.clone()));
-            };
-            fence.prepare_apps(&mut apps)?;
+        let shared = shared_digests(&apps);
+        refuse(&mut apps, &mut refused, shared);
+
+        // A refused app can change what a rule across apps sees, so the
+        // fences run again until a round refuses no app.
+        loop {
+            let mut round = BTreeMap::new();
+            for app in apps.values_mut() {
+                app.fences.clear();
+            }
+            for name in setup.fences() {
+                let Some(fence) = code.get(name) else {
+                    return Err(PolicyError::MissingFence(name.clone()));
+                };
+                fence.prepare_apps(&mut apps, &mut round);
+            }
+            if round.is_empty() {
+                break;
+            }
+            refuse(&mut apps, &mut refused, round);
         }
-        Ok(Self { apps })
+        Ok(Self { apps, refused })
+    }
+
+    /// Each app that the load refused, with its fault, in ID order.
+    pub fn refused(&self) -> impl Iterator<Item = (&AppId, &PolicyError)> {
+        self.refused.iter()
     }
 
     /// The app instance `id`, or `None` when the policy does not hold it.
@@ -557,6 +608,54 @@ impl Policy {
     /// Every app instance, in ID order.
     pub fn apps(&self) -> impl Iterator<Item = (&AppId, &App)> {
         self.apps.iter()
+    }
+}
+
+/// The typed table of one app, from its value in the file.
+fn raw_app(id: &AppId, value: toml::Value) -> Result<RawApp, PolicyError> {
+    value
+        .try_into()
+        .map_err(|error: toml::de::Error| PolicyError::AppShape {
+            app: id.clone(),
+            error: error.message().to_owned(),
+        })
+}
+
+/// Each app that holds a token digest another app also holds. A token that
+/// matches two apps names neither, so each holder is refused.
+fn shared_digests(apps: &BTreeMap<AppId, App>) -> BTreeMap<AppId, PolicyError> {
+    let mut holders: BTreeMap<&TokenDigest, Vec<&AppId>> = BTreeMap::new();
+    for (id, app) in apps {
+        for digest in &app.digests {
+            holders.entry(digest).or_default().push(id);
+        }
+    }
+    let mut shared = BTreeMap::new();
+    for ids in holders.values() {
+        let [first, second, ..] = ids.as_slice() else {
+            continue;
+        };
+        for id in ids {
+            shared
+                .entry((*id).clone())
+                .or_insert_with(|| PolicyError::SharedDigest {
+                    first: (*first).clone(),
+                    second: (*second).clone(),
+                });
+        }
+    }
+    shared
+}
+
+/// Move each app of `faults` from `apps` to `refused`.
+fn refuse(
+    apps: &mut BTreeMap<AppId, App>,
+    refused: &mut BTreeMap<AppId, PolicyError>,
+    faults: BTreeMap<AppId, PolicyError>,
+) {
+    for (id, error) in faults {
+        apps.remove(&id);
+        refused.insert(id, error);
     }
 }
 

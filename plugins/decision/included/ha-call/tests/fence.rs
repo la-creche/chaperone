@@ -264,7 +264,7 @@ fn an_app_without_a_section_may_act_on_no_entity() {
 }
 
 #[test]
-fn a_bad_section_does_not_load() {
+fn a_bad_section_refuses_its_app() {
     for bad in [
         r#"{ entities = ["kitchen"] }"#,
         r#"{ entities = ["Light.Kitchen"] }"#,
@@ -272,7 +272,12 @@ fn a_bad_section_does_not_load() {
         r#"{ entities = "light.kitchen" }"#,
         "[]",
     ] {
-        let error = load(Some(bad)).unwrap_err();
+        let policy = load(Some(bad)).unwrap();
+        let refused: Vec<(&AppId, &PolicyError)> = policy.refused().collect();
+        let [(app, error)] = refused.as_slice() else {
+            panic!("{bad}: not one refused app: {refused:?}");
+        };
+        assert_eq!(app.as_str(), "librechat");
         assert!(
             matches!(error, PolicyError::Section { .. }),
             "{bad}: {error}"

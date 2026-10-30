@@ -83,6 +83,9 @@ pub enum CheckError {
     Read(#[from] ReadError),
     #[error(transparent)]
     Start(#[from] StartError),
+    /// `policy.toml` loads, but refuses these apps. One line for each app.
+    #[error("{0}")]
+    Refused(String),
 }
 
 /// `chaperone check` and `POST /check`: the strict reader and every
@@ -105,7 +108,14 @@ pub fn check(
         ConfigFile::Policy => {
             let install = files::read_capped(&config_dir.join(INSTALL_FILE), INSTALL_FILE_CAP)?;
             let (_, setup) = startup::setup_from(&install, plugins_dir)?;
-            startup::policy_from(bytes, &setup)?;
+            let policy = startup::policy_from(bytes, &setup)?;
+            let lines: Vec<String> = policy
+                .refused()
+                .map(|(app, error)| format!("the app {app} is refused: {error}"))
+                .collect();
+            if !lines.is_empty() {
+                return Err(CheckError::Refused(lines.join("\n")));
+            }
         }
     }
     Ok(())

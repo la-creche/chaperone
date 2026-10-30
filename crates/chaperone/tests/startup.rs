@@ -17,7 +17,7 @@ use chaperone::catalog::{self, CatalogError};
 use chaperone::registry::AuditMode;
 use chaperone::startup::{self, Loaded, StartError, Warning};
 use chaperone_core::{
-    Guard, INSTALL_FILE_CAP, PluginKind, PluginName, SecretError, SecretParam, Slot,
+    AppId, Guard, INSTALL_FILE_CAP, PluginKind, PluginName, SecretError, SecretParam, Slot,
 };
 use support::{
     INSTALL, config_dir, plugin_tree, policy_text, repo_plugins, secrets_dir, write_manifest,
@@ -26,6 +26,10 @@ use support::{
 
 fn name(text: &str) -> PluginName {
     PluginName::try_new(text).unwrap()
+}
+
+fn app(text: &str) -> AppId {
+    AppId::try_new(text).unwrap()
 }
 
 /// Load the fixture tree with `install` and `policy`.
@@ -310,6 +314,31 @@ fn a_setup_without_secrets_never_needs_the_directory() {
     )
     .unwrap();
     assert!(loaded.secrets.is_empty());
+}
+
+#[test]
+fn a_refused_app_is_a_warning_and_the_others_load() {
+    let root = tempfile::tempdir().unwrap();
+    let other = format!(
+        "\n[apps.other]\ntoken_sha256 = [\"{}\"]\n\
+         limits = {{ calls_per_minute = 1, max_pending_gates = 1 }}\n\
+         grants.nowhere.tools.list_tasks = {{}}\n",
+        "b".repeat(64)
+    );
+    let loaded = load(root.path(), INSTALL, &(policy_text(30) + &other)).unwrap();
+    assert!(loaded.policy.app(&app("librechat")).is_some());
+    assert!(loaded.policy.app(&app("other")).is_none());
+    let [
+        Warning::RefusedApp {
+            app: refused,
+            error,
+        },
+    ] = loaded.warnings.as_slice()
+    else {
+        panic!("one refused app: {:?}", loaded.warnings);
+    };
+    assert_eq!(refused, &app("other"));
+    assert!(error.to_string().contains("nowhere"), "{error}");
 }
 
 #[test]

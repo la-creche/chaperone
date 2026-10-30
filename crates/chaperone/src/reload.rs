@@ -90,6 +90,13 @@ impl PolicyFile {
         state.policy = match self.read() {
             Ok(policy) => {
                 tracing::info!(file = %self.path.display(), "reloaded the policy file");
+                for (app, error) in policy.refused() {
+                    tracing::warn!(
+                        %app,
+                        %error,
+                        "the app is refused, and each of its calls is denied"
+                    );
+                }
                 Some(Arc::new(policy))
             }
             // A refused file denies every call until a valid file lands

@@ -10,10 +10,11 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use chaperone_core::{
-    AppId, ArgValue, AuditApp, AuditTool, Caller, Catalog, Decision, DenyReason, Fence, FenceCode,
-    FenceReason, FenceVerdict, Found, GateId, Gates, InstallFile, Location, Manifest, PluginKey,
-    PluginName, Policy, PolicyError, PreparedFence, RawSection, Reach, Request, SectionError,
-    Timestamp, TokenDigest, ToolCall, ToolName, UpstreamBound, strict, with_digest,
+    AppId, ArgValue, AuditApp, AuditTool, Caller, Catalog, CrossAppError, Decision, DenyReason,
+    Fence, FenceCode, FenceReason, FenceVerdict, Found, GateId, Gates, InstallFile, Location,
+    Manifest, PluginKey, PluginName, Policy, PolicyError, PreparedFence, RawSection, Reach,
+    Request, SectionError, Timestamp, TokenDigest, ToolCall, ToolName, UpstreamBound, strict,
+    with_digest,
 };
 use proptest::prelude::*;
 use serde::Deserialize;
@@ -695,6 +696,17 @@ fn load_error(policy: &str) -> PolicyError {
     load(INSTALL, policy, &[&entities]).unwrap_err()
 }
 
+/// The fault of the app `librechat`, which the load of `policy` refuses.
+/// The file itself loads.
+fn refusal(policy: &str) -> PolicyError {
+    let entities = EntityFence(name("ha-call"));
+    let loaded = load(INSTALL, policy, &[&entities]).unwrap();
+    let librechat = app_id("librechat");
+    assert!(loaded.app(&librechat).is_none());
+    let refused: BTreeMap<&AppId, &PolicyError> = loaded.refused().collect();
+    refused.get(&librechat).copied().unwrap().clone()
+}
+
 #[test]
 fn a_policy_without_the_fence_code_does_not_load() {
     assert_eq!(
@@ -719,31 +731,28 @@ fn two_fences_of_one_name_do_not_load_in_either_order() {
 }
 
 #[test]
-fn a_policy_with_a_bad_plugin_section_does_not_load() {
+fn a_bad_plugin_section_refuses_its_app() {
     let text = policy_text("").replace(r#"gate = ["lock.front"]"#, "gates = []");
-    assert!(matches!(load_error(&text), PolicyError::Section { .. }));
+    assert!(matches!(refusal(&text), PolicyError::Section { .. }));
 }
 
 #[test]
-fn a_policy_with_a_section_for_an_inactive_plugin_does_not_load() {
+fn a_section_for_an_inactive_plugin_refuses_its_app() {
     let text = policy_text("zz-extra = {}");
-    assert!(matches!(
-        load_error(&text),
-        PolicyError::UnknownSection { .. }
-    ));
+    assert!(matches!(refusal(&text), PolicyError::UnknownSection { .. }));
 }
 
 #[test]
-fn a_policy_that_grants_an_inactive_upstream_does_not_load() {
+fn a_grant_of_an_inactive_upstream_refuses_its_app() {
     let text = policy_text("").replace("grants.vikunja.tools", "grants.nope.tools");
     assert!(matches!(
-        load_error(&text),
+        refusal(&text),
         PolicyError::UnknownUpstream { .. }
     ));
 }
 
 #[test]
-fn a_policy_with_three_digests_does_not_load() {
+fn three_digests_refuse_their_app() {
     let text = policy_text("").replace(
         &format!(r#"["{DIGEST}"]"#),
         &format!(
@@ -752,35 +761,147 @@ fn a_policy_with_three_digests_does_not_load() {
             "c".repeat(64)
         ),
     );
-    assert!(matches!(load_error(&text), PolicyError::DigestCount { .. }));
+    assert!(matches!(refusal(&text), PolicyError::DigestCount { .. }));
 }
 
 #[test]
-fn a_policy_with_an_upper_case_digest_does_not_load() {
+fn an_upper_case_digest_refuses_its_app() {
     let text = policy_text("").replace(DIGEST, &"A".repeat(64));
-    assert!(matches!(load_error(&text), PolicyError::Read(_)));
+    assert!(matches!(refusal(&text), PolicyError::AppShape { .. }));
 }
 
 #[test]
-fn a_policy_with_an_empty_argument_list_does_not_load() {
+fn an_empty_argument_list_refuses_its_app() {
     let text = policy_text("").replace("{ allow = [1, 2] }", "{ allow = [] }");
-    assert!(matches!(load_error(&text), PolicyError::EmptyFence { .. }));
+    assert!(matches!(refusal(&text), PolicyError::EmptyFence { .. }));
 }
 
-#[test]
-fn two_apps_cannot_share_a_digest() {
-    let text = policy_text("").replacen(
+/// The fixture policy with a second app, `other`, before `librechat`.
+/// `other` holds the token digest `digest` and grants nothing.
+fn with_other_app(policy: &str, digest: &str) -> String {
+    policy.replacen(
         "[apps.librechat]\n",
         &format!(
-            "[apps.other]\ntoken_sha256 = [\"{DIGEST}\"]\n\
+            "[apps.other]\ntoken_sha256 = [\"{digest}\"]\n\
              limits = {{ calls_per_minute = 1, max_pending_gates = 0 }}\n\n[apps.librechat]\n"
         ),
         1,
+    )
+}
+
+#[test]
+fn two_apps_that_share_a_digest_are_both_refused() {
+    let entities = EntityFence(name("ha-call"));
+    let loaded = load(
+        INSTALL,
+        &with_other_app(&policy_text(""), DIGEST),
+        &[&entities],
+    )
+    .unwrap();
+    let refused: Vec<&AppId> = loaded.refused().map(|(app, _)| app).collect();
+    assert_eq!(refused, [&app_id("librechat"), &app_id("other")]);
+    assert!(
+        loaded
+            .refused()
+            .all(|(_, error)| matches!(error, PolicyError::SharedDigest { .. }))
     );
-    assert!(matches!(
-        load_error(&text),
-        PolicyError::SharedDigest { .. }
-    ));
+    assert_eq!(loaded.apps().count(), 0);
+}
+
+#[test]
+fn a_refused_app_leaves_the_other_apps_loaded() {
+    let bad = policy_text("").replace("grants.vikunja.tools", "grants.nope.tools");
+    let entities = EntityFence(name("ha-call"));
+    let loaded = load(
+        INSTALL,
+        &with_other_app(&bad, &"b".repeat(64)),
+        &[&entities],
+    )
+    .unwrap();
+    assert!(loaded.app(&app_id("other")).is_some());
+    assert!(loaded.app(&app_id("librechat")).is_none());
+    assert!(matches!(refusal(&bad), PolicyError::UnknownUpstream { .. }));
+}
+
+#[test]
+fn each_call_of_a_refused_app_is_denied() {
+    let bad = policy_text("").replace("grants.vikunja.tools", "grants.nope.tools");
+    let entities = EntityFence(name("ha-call"));
+    let loaded = load(INSTALL, &bad, &[&entities]).unwrap();
+    let case = Case::new("ha-call", "ha_call", r#"{"entity_id": "light.kitchen"}"#);
+    assert_eq!(
+        case.decide(Some(&loaded)),
+        deny(DenyReason::UnknownCredential)
+    );
+}
+
+/// A fence whose section lists apps that its app must not share the
+/// policy with: a rule across apps, for the tests of [`Policy::load`].
+#[derive(Debug)]
+struct BlockFence(PluginName);
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct BlockSection {
+    blocks: BTreeSet<String>,
+}
+
+#[derive(Debug)]
+struct PreparedBlocks(BTreeSet<String>);
+
+impl Fence for BlockFence {
+    type Prepared = PreparedBlocks;
+
+    fn name(&self) -> &PluginName {
+        &self.0
+    }
+
+    fn prepare(&self, section: Option<RawSection<'_>>) -> Result<Self::Prepared, SectionError> {
+        let section = section.map(|raw| raw.parse::<BlockSection>()).transpose()?;
+        Ok(PreparedBlocks(
+            section.map(|one| one.blocks).unwrap_or_default(),
+        ))
+    }
+
+    fn check_sections(
+        &self,
+        sections: &BTreeMap<&AppId, &Self::Prepared>,
+    ) -> Result<(), CrossAppError> {
+        for (caller, prepared) in sections {
+            for target in sections.keys() {
+                if prepared.0.contains(target.as_str()) {
+                    return Err(CrossAppError {
+                        caller: (*caller).clone(),
+                        target: (*target).clone(),
+                        rule: FenceReason::new("blocked"),
+                    });
+                }
+            }
+        }
+        Ok(())
+    }
+}
+
+impl PreparedFence for PreparedBlocks {
+    fn check(&self, _call: &ToolCall<'_>) -> FenceVerdict {
+        FenceVerdict::Pass
+    }
+}
+
+#[test]
+fn a_rule_across_apps_refuses_its_caller_alone() {
+    let text = with_other_app(
+        &policy_text(r#"zz-extra = { blocks = ["other"] }"#),
+        &"b".repeat(64),
+    );
+    let entities = EntityFence(name("ha-call"));
+    let blocks = BlockFence(name("zz-extra"));
+    let loaded = load(INSTALL_EXTRA, &text, &[&entities, &blocks]).unwrap();
+    assert!(loaded.app(&app_id("other")).is_some());
+    let refused: Vec<(&AppId, &PolicyError)> = loaded.refused().collect();
+    assert_eq!(refused.len(), 1);
+    assert_eq!(refused[0].0, &app_id("librechat"));
+    assert!(matches!(refused[0].1, PolicyError::CrossApp { .. }));
 }
 
 /// The fixture policy with `timeout_s = <value>` on the `vikunja` grant.
@@ -815,9 +936,9 @@ fn an_upstream_grant_sets_its_own_bound() {
 }
 
 #[test]
-fn a_bound_outside_1_to_120_seconds_does_not_load() {
+fn a_bound_outside_1_to_120_seconds_refuses_its_app() {
     for value in ["0", "121", "-1"] {
-        let error = load_error(&bounded_policy(value));
+        let error = refusal(&bounded_policy(value));
         assert_eq!(
             error,
             PolicyError::UpstreamBound {
@@ -830,11 +951,11 @@ fn a_bound_outside_1_to_120_seconds_does_not_load() {
 }
 
 #[test]
-fn a_bound_that_is_not_an_integer_does_not_load() {
+fn a_bound_that_is_not_an_integer_refuses_its_app() {
     for value in ["1.5", r#""30""#, "true"] {
         assert!(matches!(
-            load_error(&bounded_policy(value)),
-            PolicyError::Read(strict::StrictError::Shape { .. })
+            refusal(&bounded_policy(value)),
+            PolicyError::AppShape { .. }
         ));
     }
 }
@@ -872,9 +993,9 @@ fn an_upstream_grant_sets_its_own_in_flight_limit() {
 }
 
 #[test]
-fn an_in_flight_limit_outside_1_to_8_does_not_load() {
+fn an_in_flight_limit_outside_1_to_8_refuses_its_app() {
     for value in ["0", "9", "-1"] {
-        let error = load_error(&inflight_policy(value));
+        let error = refusal(&inflight_policy(value));
         assert_eq!(
             error,
             PolicyError::InflightLimit {
@@ -887,11 +1008,11 @@ fn an_in_flight_limit_outside_1_to_8_does_not_load() {
 }
 
 #[test]
-fn an_in_flight_limit_that_is_not_an_integer_does_not_load() {
+fn an_in_flight_limit_that_is_not_an_integer_refuses_its_app() {
     for value in ["1.5", r#""2""#, "true"] {
         assert!(matches!(
-            load_error(&inflight_policy(value)),
-            PolicyError::Read(strict::StrictError::Shape { .. })
+            refusal(&inflight_policy(value)),
+            PolicyError::AppShape { .. }
         ));
     }
 }
