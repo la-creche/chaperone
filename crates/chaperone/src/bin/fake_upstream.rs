@@ -16,6 +16,9 @@
 //! | `delete_task`, `wait_task`, `odd_task` | Text, for the gated calls |
 //! | `whoami` | The `_meta`, the arguments, the argv and the environment, as JSON text |
 //!
+//! It also takes a call of `exit`, which it does not list: the process
+//! exits at once, as an upstream that crashes.
+//!
 //! Run with `--fake-approval`, it serves the approval channel instead: one
 //! tool, `approve`, that answers by the `tool` argument. `create_task` is
 //! approved, `delete_task` is denied, `wait_task` is approved after two
@@ -109,6 +112,7 @@ impl ServerHandler for Fake {
             "delete_task" => text("deleted".to_owned()),
             "wait_task" => text("waited".to_owned()),
             "odd_task" => text("odd".to_owned()),
+            "exit" => std::process::exit(0),
             "whoami" => text(
                 serde_json::json!({
                     "meta": context.meta,

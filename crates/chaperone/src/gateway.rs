@@ -5,7 +5,7 @@
 //! answer comes and keeps the result for an identical call to collect
 //! (`docs/design.md` 5.3).
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::panic::{self, AssertUnwindSafe};
 use std::sync::mpsc;
 use std::sync::{Arc, Mutex};
@@ -185,6 +185,18 @@ enum AfterRecord {
 }
 
 impl ChaperoneGateway {
+    /// The policy for one call. An upstream that ended since start is down,
+    /// so each app granted it is refused (`docs/design.md` 7.7).
+    fn policy(&self) -> Option<Arc<Policy>> {
+        let ended: BTreeSet<PluginName> = self
+            .upstreams
+            .iter()
+            .filter(|(_, upstream)| upstream.has_ended())
+            .map(|(name, _)| name.clone())
+            .collect();
+        self.policy.current(&ended)
+    }
+
     /// A gateway over a policy and the running upstreams.
     #[must_use]
     pub fn new(
@@ -230,7 +242,7 @@ impl ChaperoneGateway {
     /// loaded, and [`ListError::UnknownCredential`] when the credentials
     /// resolve to no app instance.
     pub fn list_tools(&self, credentials: &Credentials<'_>) -> Result<Vec<ListedTool>, ListError> {
-        let policy = self.policy.current().ok_or(ListError::PolicyNotLoaded)?;
+        let policy = self.policy().ok_or(ListError::PolicyNotLoaded)?;
         let caller = self
             .resolve(credentials, Some(&policy))
             .ok_or(ListError::UnknownCredential)?;
@@ -862,14 +874,14 @@ impl Gateway for SharedGateway {
     ) -> CallOutcome {
         // One policy decides the whole call, even when the file changes
         // during it (`docs/design.md` 6).
-        let policy = self.0.policy.current();
+        let policy = self.0.policy();
         let caller = self.0.resolve(credentials, policy.as_deref());
         self.call_resolved(policy, caller, name.to_owned(), arguments)
             .await
     }
 
     async fn health(&self) -> Health {
-        match self.0.policy.current() {
+        match self.0.policy() {
             Some(_) => Health::Serving,
             None => Health::PolicyNotLoaded,
         }

@@ -13,19 +13,23 @@ mod support;
 
 use std::collections::BTreeMap;
 use std::fs::Permissions;
+use std::future::Future;
 use std::os::unix::fs::PermissionsExt;
 use std::path::Path;
+use std::pin::Pin;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
-use chaperone::effect::{Redactor, Upstreams};
+use chaperone::effect::{Effect, EffectFault, EffectTool, Redactor, Upstreams};
 use chaperone::gateway::{Bounds, ChaperoneGateway, Plugins, SharedGateway};
 use chaperone::registry::AuditMode;
 use chaperone::reload::PolicyFile;
 use chaperone::startup;
 use chaperone_core::{
-    AuditDecision, AuditError, AuditEvent, AuditRecord, AuditSink, Bearer, CallOutcome,
-    Credentials, DenyReason, Gateway, ListError, RunId,
+    AppId, ArgValue, AuditDecision, AuditError, AuditEvent, AuditRecord, AuditSink, Bearer,
+    CallOutcome, Credentials, DenyReason, Gateway, ListError, PluginName, RunId, ToolName,
 };
+use rmcp::model::CallToolResult;
 use support::{INSTALL, TOKEN, config_dir, digest, fake_approval, plugin_tree, secrets_dir};
 
 /// A sink that keeps each record for the test.
@@ -80,6 +84,11 @@ struct Harness {
 /// A gateway that watches the policy file of a configuration directory.
 /// No upstream runs, so an allowed call fails with `not_connected`.
 fn harness(policy: &str) -> Harness {
+    harness_with(policy, Upstreams::new())
+}
+
+/// As [`harness`], with `upstreams` running.
+fn harness_with(policy: &str, upstreams: Upstreams) -> Harness {
     let root = tempfile::tempdir().unwrap();
     let plugins = plugin_tree(root.path());
     let config = config_dir(root.path(), INSTALL, policy);
@@ -95,7 +104,7 @@ fn harness(policy: &str) -> Harness {
             identity: loaded.identity,
             audit: Arc::clone(&sink) as Arc<dyn AuditSink>,
             clock: loaded.clock,
-            upstreams: Upstreams::new(),
+            upstreams,
             approval: fake_approval(),
             redactor: Redactor::new(BTreeMap::new()),
         },
@@ -120,7 +129,11 @@ async fn call(gateway: &SharedGateway, name: &str) -> CallOutcome {
 }
 
 async fn list(gateway: &SharedGateway) -> Result<usize, ListError> {
-    let bearer = Bearer::new(TOKEN.to_owned());
+    list_as(gateway, TOKEN).await
+}
+
+async fn list_as(gateway: &SharedGateway, token: &str) -> Result<usize, ListError> {
+    let bearer = Bearer::new(token.to_owned());
     let headers = BTreeMap::new();
     let credentials = Credentials {
         bearer: Some(&bearer),
@@ -239,4 +252,57 @@ async fn a_file_made_readable_again_loads_without_a_new_stamp() {
     std::fs::set_permissions(config.join("policy.toml"), Permissions::from_mode(0o600)).unwrap();
     let readable = call(&gateway, "vikunja__list_tasks").await;
     assert!(allowed(&readable), "{readable:?}");
+}
+
+/// An upstream with no tool that ends when the test says so.
+#[derive(Debug)]
+struct Ending(Arc<AtomicBool>);
+
+impl Effect for Ending {
+    fn tools(&self) -> &[EffectTool] {
+        &[]
+    }
+
+    fn call<'a>(
+        &'a self,
+        _app: &'a AppId,
+        _tool: &'a ToolName,
+        _arguments: BTreeMap<String, ArgValue>,
+    ) -> Pin<Box<dyn Future<Output = Result<CallToolResult, EffectFault>> + Send + 'a>> {
+        Box::pin(async { Err(EffectFault::NotConnected) })
+    }
+
+    fn has_ended(&self) -> bool {
+        self.0.load(Ordering::SeqCst)
+    }
+}
+
+#[tokio::test]
+async fn an_upstream_that_ends_refuses_each_app_granted_it() {
+    let other_token = "f".repeat(64);
+    let other = format!(
+        "\n[apps.other]\ntoken_sha256 = [\"{}\"]\n\
+         limits = {{ calls_per_minute = 30, max_pending_gates = 1 }}\n",
+        digest(&other_token)
+    );
+    let ended = Arc::new(AtomicBool::new(false));
+    let mut upstreams = Upstreams::new();
+    upstreams.insert(
+        PluginName::try_new("vikunja").unwrap(),
+        Box::new(Ending(Arc::clone(&ended))),
+    );
+    let harness = harness_with(&(policy_granting("list_tasks") + &other), upstreams);
+    assert_eq!(list(&harness.gateway).await, Ok(0));
+
+    ended.store(true, Ordering::SeqCst);
+    assert_eq!(
+        list(&harness.gateway).await,
+        Err(ListError::UnknownCredential)
+    );
+    assert_eq!(list_as(&harness.gateway, &other_token).await, Ok(0));
+    let CallOutcome::Denied(DenyReason::UnknownCredential) =
+        call(&harness.gateway, "vikunja__list_tasks").await
+    else {
+        panic!("the call of a refused app is not denied");
+    };
 }

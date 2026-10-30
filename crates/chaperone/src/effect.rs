@@ -85,6 +85,12 @@ pub trait Effect: Send + Sync + fmt::Debug {
         tool: &'a ToolName,
         arguments: BTreeMap<String, ArgValue>,
     ) -> Pin<Box<dyn Future<Output = Result<CallToolResult, EffectFault>> + Send + 'a>>;
+
+    /// Whether the connection to the upstream has closed since start. An
+    /// upstream that ended stays down: version 1 does not restart one.
+    fn has_ended(&self) -> bool {
+        false
+    }
 }
 
 /// Every running upstream, by plugin name.
@@ -266,6 +272,10 @@ impl Effect for EffectProcess {
                 Err(_) => Err(EffectFault::BadResult),
             }
         })
+    }
+
+    fn has_ended(&self) -> bool {
+        self.service.is_closed() || self.service.peer().is_transport_closed()
     }
 }
 

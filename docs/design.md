@@ -28,7 +28,7 @@ Each rule has an ID. Code comments, tests and pull requests cite the ID.
 | ID | Rule |
 |---|---|
 | G1 | **Deterministic.** The same policy, request, counters and gate state give the same decision. No model call anywhere in the core. |
-| G2 | **Fail closed.** An unhandled error, a plugin fault or an unanswered hook is a deny. A policy that does not load denies every call. A fault inside one app table refuses that app, and denies each call of it. An upstream that does not start refuses each app that it grants. An empty slot or a missing plugin refuses start. |
+| G2 | **Fail closed.** An unhandled error, a plugin fault or an unanswered hook is a deny. A policy that does not load denies every call. A fault inside one app table refuses that app, and denies each call of it. An upstream that does not start, or that ends, refuses each app that grants it. An empty slot or a missing plugin refuses start. |
 | G3 | **Pure decision.** The decision function does no I/O. It reads no clock and no global state. The caller passes the time as an argument. |
 | G4 | **One identity kind.** A credential resolves to one app instance, or to nothing. An identity plugin can narrow what that app instance may reach. It can never widen it. |
 | G5 | **chaperone holds every credential.** An upstream credential never reaches an app, a model or a sandbox. |
@@ -339,7 +339,7 @@ A call:
 
 The `_meta` of each `tools/call` holds the key `chaperone.app`. Its value is the app ID of the call, as a string. The approval channel gets the same key. The app ID is not a secret. The `_meta` holds no token, no secret and no session of chaperone. An effect plugin can use the app ID as the identity of the caller, because chaperone resolved it from the bearer token (G4). The app cannot set this key. A decision plugin does not get it.
 
-An upstream that is not running, or whose connection is closed, fails a call with `not_connected`. Version 1 does not restart an upstream. The operator restarts chaperone.
+An upstream whose connection closes after start is down from then on. Before each call and each `tools/list`, chaperone looks for an upstream that ended. When it finds a new one, it logs it and loads the policy again, so each app with a grant of that upstream is refused (section 6). A call that reaches a closed connection before that fails with `not_connected`. Version 1 does not restart an upstream. The operator restarts chaperone.
 
 The manifest an app sees holds a tool when the policy grants it, the caller's reach holds it, the upstream lists it and its exposed name is valid. chaperone logs a warning at start for each granted tool that its upstream does not list.
 
