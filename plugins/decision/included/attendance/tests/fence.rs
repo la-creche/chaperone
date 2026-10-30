@@ -155,6 +155,21 @@ fn refused_pair(error: &PolicyError) -> (&str, &str, &str) {
     )
 }
 
+/// The one app that `policy` refused, and its fault.
+fn only_refusal(policy: &Policy) -> (&str, &PolicyError) {
+    let refused: Vec<(&AppId, &PolicyError)> = policy.refused().collect();
+    let [(app, error)] = refused.as_slice() else {
+        panic!("not one refused app: {refused:?}");
+    };
+    (app.as_str(), error)
+}
+
+/// `policy`, after a check that it refused no app.
+fn whole(policy: Policy) -> Policy {
+    assert_eq!(policy.refused().count(), 0, "{policy:?}");
+    policy
+}
+
 fn decision(
     policy: &Policy,
     upstream: &str,
@@ -283,7 +298,7 @@ fn job_status_and_another_upstream_pass_and_another_tool_is_denied() {
 }
 
 #[test]
-fn a_bad_section_does_not_load() {
+fn a_bad_section_refuses_its_app() {
     let too_many = |count: usize, field: &str| {
         let names: Vec<String> = (0..count).map(|index| format!("\"f{index:03}\"")).collect();
         format!("{{ {field} = [{}] }}", names.join(", "))
@@ -298,25 +313,30 @@ fn a_bad_section_does_not_load() {
         too_many(65, "enqueue_targets"),
         "[]".to_owned(),
     ] {
-        let error = load(Some(&bad)).unwrap_err();
+        let policy = load(Some(&bad)).unwrap();
+        let (app, error) = only_refusal(&policy);
+        assert_eq!(app, "librechat");
         assert!(
             matches!(error, PolicyError::Section { .. }),
             "{bad}: {error}"
         );
     }
-    load(Some(&too_many(32, "delegates"))).unwrap();
-    load(Some(&too_many(64, "enqueue_targets"))).unwrap();
+    whole(load(Some(&too_many(32, "delegates"))).unwrap());
+    whole(load(Some(&too_many(64, "enqueue_targets"))).unwrap());
 }
 
 #[test]
-fn a_delegate_target_that_delegates_does_not_load() {
-    let error = load_apps(&[
+fn a_delegate_target_that_delegates_refuses_the_caller() {
+    let policy = load_apps(&[
         ("alpha", Some(r#"{ delegates = ["beta"] }"#)),
         ("beta", Some(r#"{ delegates = ["gamma"] }"#)),
         ("gamma", None),
     ])
-    .unwrap_err();
-    let (caller, target, rule) = refused_pair(&error);
+    .unwrap();
+    let (app, error) = only_refusal(&policy);
+    assert_eq!(app, "alpha");
+    assert_eq!(policy.apps().count(), 2);
+    let (caller, target, rule) = refused_pair(error);
     assert_eq!((caller, target), ("alpha", "beta"));
     assert!(rule.starts_with("one_hop"), "{rule}");
     let shown = error.to_string();
@@ -325,26 +345,31 @@ fn a_delegate_target_that_delegates_does_not_load() {
 
 #[test]
 fn a_star_of_callers_around_one_target_loads() {
-    load_apps(&[
-        ("alpha", Some(r#"{ delegates = ["hub"] }"#)),
-        (
-            "beta",
-            Some(r#"{ delegates = ["hub"], enqueue_targets = ["alpha"] }"#),
-        ),
-        ("gamma", Some(r#"{ delegates = ["hub", "outside"] }"#)),
-        ("hub", Some(r#"{ enqueue_targets = ["alpha"] }"#)),
-    ])
-    .unwrap();
+    whole(
+        load_apps(&[
+            ("alpha", Some(r#"{ delegates = ["hub"] }"#)),
+            (
+                "beta",
+                Some(r#"{ delegates = ["hub"], enqueue_targets = ["alpha"] }"#),
+            ),
+            ("gamma", Some(r#"{ delegates = ["hub", "outside"] }"#)),
+            ("hub", Some(r#"{ enqueue_targets = ["alpha"] }"#)),
+        ])
+        .unwrap(),
+    );
 }
 
 #[test]
-fn an_app_that_delegates_to_itself_does_not_load() {
-    let error = load_apps(&[
+fn an_app_that_delegates_to_itself_is_refused() {
+    let policy = load_apps(&[
         ("alpha", Some(r#"{ enqueue_targets = ["beta"] }"#)),
         ("beta", Some(r#"{ delegates = ["beta"] }"#)),
     ])
-    .unwrap_err();
-    let (caller, target, rule) = refused_pair(&error);
+    .unwrap();
+    let (app, error) = only_refusal(&policy);
+    assert_eq!(app, "beta");
+    assert!(policy.app(&AppId::try_new("alpha").unwrap()).is_some());
+    let (caller, target, rule) = refused_pair(error);
     assert_eq!((caller, target), ("beta", "beta"));
     assert!(rule.contains("itself"), "{rule}");
 }

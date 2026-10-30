@@ -107,6 +107,30 @@ fn the_check_refuses_a_delegation_chain_and_names_both_apps() {
 }
 
 #[test]
+fn the_check_names_each_refused_app_on_its_own_line() {
+    let root = tempfile::tempdir().unwrap();
+    let plugins = plugin_tree(root.path());
+    let config = config_dir(root.path(), INSTALL, &policy_text(30));
+    let app = |id: &str, digest: char, upstream: &str| {
+        format!(
+            "\n[apps.{id}]\ntoken_sha256 = [\"{}\"]\n\
+             limits = {{ calls_per_minute = 1, max_pending_gates = 1 }}\n\
+             grants.{upstream}.tools.list_tasks = {{}}\n",
+            digest.to_string().repeat(64)
+        )
+    };
+    let text = policy_text(30) + &app("one", 'b', "nowhere") + &app("two", 'c', "ghost");
+    let error = admin::check(ConfigFile::Policy, text.as_bytes(), &config, &plugins).unwrap_err();
+    let shown = error.to_string();
+    let lines: Vec<&str> = shown.lines().collect();
+    assert_eq!(lines.len(), 2, "{shown}");
+    assert!(lines[0].starts_with("the app one is refused: "), "{shown}");
+    assert!(lines[0].contains("nowhere"), "{shown}");
+    assert!(lines[1].starts_with("the app two is refused: "), "{shown}");
+    assert!(!shown.contains("librechat"), "{shown}");
+}
+
+#[test]
 fn the_check_refuses_an_unknown_guard() {
     let root = tempfile::tempdir().unwrap();
     let plugins = plugin_tree(root.path());

@@ -28,7 +28,7 @@ Each rule has an ID. Code comments, tests and pull requests cite the ID.
 | ID | Rule |
 |---|---|
 | G1 | **Deterministic.** The same policy, request, counters and gate state give the same decision. No model call anywhere in the core. |
-| G2 | **Fail closed.** An unhandled error, a plugin fault or an unanswered hook is a deny. A policy that does not load denies every call. An empty slot or a missing plugin refuses start. |
+| G2 | **Fail closed.** An unhandled error, a plugin fault or an unanswered hook is a deny. A policy that does not load denies every call. A fault inside one app table refuses that app, and denies each call of it. An empty slot or a missing plugin refuses start. |
 | G3 | **Pure decision.** The decision function does no I/O. It reads no clock and no global state. The caller passes the time as an argument. |
 | G4 | **One identity kind.** A credential resolves to one app instance, or to nothing. An identity plugin can narrow what that app instance may reach. It can never widen it. |
 | G5 | **chaperone holds every credential.** An upstream credential never reaches an app, a model or a sandbox. |
@@ -186,8 +186,8 @@ Rules:
 - An install entry of an effect plugin can hold `args`: arguments that chaperone appends to the command of the manifest at launch. The manifest names the program. The install file adds what differs per deployment, such as an address. An argument is never a secret value (G9).
 - An install entry of an effect plugin can hold `user`: the OS user that the plugin runs as (section 8). The value is `mcp-`, then `a-z`, then 1 to 30 of `a-z`, `0-9` and `-`. An entry of a plugin with no effect half that holds `user` refuses start. Any other value refuses start.
 - The install entry of the front door plugin can hold `guard`: `loopback` or `host-firewall` (section 7.6). An entry without `guard` takes `loopback`. An entry of another plugin that holds `guard` refuses start. Any other value refuses start.
-- An upstream grant can hold `timeout_s`: the bound of one call to that upstream, in whole seconds (section 5.5). The value is an integer from 1 to 120. A grant without it takes 30. Any other value does not load, and the error names the rule.
-- An upstream grant can hold `max_inflight`: the most calls of the app instance to that upstream that can be in flight at one time (section 5.2). The value is an integer from 1 to 8. A grant without it sets no limit. Any other value does not load, and the error names the rule.
+- An upstream grant can hold `timeout_s`: the bound of one call to that upstream, in whole seconds (section 5.5). The value is an integer from 1 to 120. A grant without it takes 30. Any other value refuses the app, and the error names the rule.
+- An upstream grant can hold `max_inflight`: the most calls of the app instance to that upstream that can be in flight at one time (section 5.2). The value is an integer from 1 to 8. A grant without it sets no limit. Any other value refuses the app, and the error names the rule.
 
   ```toml
   [apps.research.grants.attendance]
@@ -197,8 +197,10 @@ Rules:
 
 - The policy file names a plugin by name only. It cannot launch a binary or bind a secret.
 - An external tool that writes the policy file runs as an OS user that cannot write `install.toml`.
-- chaperone reloads `policy.toml` when the file changes. Before each call, it compares the device, inode, size and modification time of the file with the file it loaded. One policy decides the whole call. A reload that fails denies every call until a valid file loads (G2). A bad write by the operator therefore stops every app until a valid file lands.
-- `chaperone check` is the only authority on a valid configuration. It runs the strict reader and every rule across files.
+- chaperone reads `policy.toml` at two levels. A fault of the file itself does not load the policy: the strict reader, the version, a top-level key, an app ID that is not valid, or a fence of `install.toml` with no code in this build. A fault inside one app table refuses that app only. The other apps load. A refused app holds no grant, so each call of it is denied with `unknown_credential`. chaperone logs each refused app with its fault.
+- A rule across apps refuses apps too. Two apps that hold one token digest are both refused, because the token names neither. A `check_sections` refusal of a fence refuses its caller app (section 7.8).
+- chaperone reloads `policy.toml` when the file changes. Before each call, it compares the device, inode, size and modification time of the file with the file it loaded. One policy decides the whole call. A reload that fails denies every call until a valid file loads (G2). A bad write by the operator therefore stops every app until a valid file lands. A reload that refuses one app stops that app only.
+- `chaperone check` is the only authority on a valid configuration. It runs the strict reader and every rule across files. It refuses a policy that refuses an app, with one line for each refused app.
 
 ## 7. Plugins
 
@@ -350,7 +352,7 @@ A fence implements the trait `Fence` of `crates/core/src/hook.rs`. chaperone cal
 | `check_sections` | At each policy load, once, after every `prepare` of the fence | Nothing, or a refusal that names a caller app ID, a target app ID and the rule |
 | `check` | At each call, in the decision (section 5.2) | Pass, `Deny(reason)` or `Gate` |
 
-`check_sections` gets the prepared sections of every app instance, by app ID, and nothing else (G3). It can only refuse. A refusal stops the policy load (G2). `chaperone check` then refuses the file, and after a reload chaperone denies every call until a valid file loads. The rule of a refusal is a fixed text of the fence (G9). The default `check_sections` refuses nothing.
+`check_sections` gets the prepared sections of every app instance, by app ID, and nothing else (G3). It can only refuse. A refusal refuses the caller app of the refusal (G2). The load then runs the check again without that app, until the check passes. `chaperone check` refuses the file. A refusal that names a caller the fence was not given refuses each app of that fence. The rule of a refusal is a fixed text of the fence (G9). The default `check_sections` refuses nothing.
 
 ## 8. Secrets
 
@@ -495,9 +497,9 @@ The fence applies these rules to a call to the `attendance` upstream:
 3. A call of `job_status` passes. The effect half limits it to the jobs of the caller.
 4. A call of any other tool is denied.
 
-A call to any other upstream passes untouched. Each deny reason starts with `tool_not_granted`. A section with another key, a bad family name or a list over its cap does not load.
+A call to any other upstream passes untouched. Each deny reason starts with `tool_not_granted`. A section with another key, a bad family name or a list over its cap refuses its app.
 
-The family of an app instance is its app ID. The `check_sections` hook of the fence (section 7.8) keeps delegation to one hop. A policy does not load in these cases:
+The family of an app instance is its app ID. The `check_sections` hook of the fence (section 7.8) keeps delegation to one hop. The caller app is refused in these cases:
 
 1. An app instance lists its own app ID in `delegates`.
 2. An app instance lists the app ID of another app instance in `delegates`, and that other app instance has a `delegates` list that is not empty.

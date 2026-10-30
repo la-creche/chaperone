@@ -9,7 +9,7 @@ use std::path::Path;
 use std::sync::Arc;
 
 use chaperone_core::{
-    AuditSink, Catalog, Clock, FenceCode, Guard, INSTALL_FILE_CAP, Identity, InstallError,
+    AppId, AuditSink, Catalog, Clock, FenceCode, Guard, INSTALL_FILE_CAP, Identity, InstallError,
     InstallFile, NameError, POLICY_FILE_CAP, PluginKind, PluginName, Policy, PolicyError, RunId,
     Secret, SecretDelivery, SecretError, SecretName, SecretParam, SecretSource, Setup, SetupError,
     Slot, resolve,
@@ -81,6 +81,9 @@ pub enum Warning {
     /// The front door serves plain HTTP on a LAN address under the guard
     /// `host-firewall` (`docs/design.md` 7.6).
     HostFirewall(SocketAddr),
+    /// `policy.toml` refuses one app, so each call of that app is denied
+    /// (`docs/design.md` 6).
+    RefusedApp { app: AppId, error: PolicyError },
 }
 
 impl fmt::Display for Warning {
@@ -93,6 +96,10 @@ impl fmt::Display for Warning {
             Self::HostFirewall(address) => write!(
                 f,
                 "the front door serves plain HTTP on {address}, and only the host firewall limits who reaches it"
+            ),
+            Self::RefusedApp { app, error } => write!(
+                f,
+                "the app {app} is refused, and each of its calls is denied: {error}"
             ),
         }
     }
@@ -175,6 +182,10 @@ pub fn load(
     let policy_stamp = Stamp::of(&policy_path)?;
     let policy_bytes = files::read_capped(&policy_path, POLICY_FILE_CAP)?;
     let policy = policy_from(&policy_bytes, &setup)?;
+    warnings.extend(policy.refused().map(|(app, error)| Warning::RefusedApp {
+        app: app.clone(),
+        error: error.clone(),
+    }));
     let run = run_id()?;
     Ok(Loaded {
         run,
