@@ -28,7 +28,7 @@ Each rule has an ID. Code comments, tests and pull requests cite the ID.
 | ID | Rule |
 |---|---|
 | G1 | **Deterministic.** The same policy, request, counters and gate state give the same decision. No model call anywhere in the core. |
-| G2 | **Fail closed.** An unhandled error, a plugin fault or an unanswered hook is a deny. A policy that does not load denies every call. A fault inside one app table refuses that app, and denies each call of it. An empty slot or a missing plugin refuses start. |
+| G2 | **Fail closed.** An unhandled error, a plugin fault or an unanswered hook is a deny. A policy that does not load denies every call. A fault inside one app table refuses that app, and denies each call of it. An upstream that does not start refuses each app that it grants. An empty slot or a missing plugin refuses start. |
 | G3 | **Pure decision.** The decision function does no I/O. It reads no clock and no global state. The caller passes the time as an argument. |
 | G4 | **One identity kind.** A credential resolves to one app instance, or to nothing. An identity plugin can narrow what that app instance may reach. It can never widen it. |
 | G5 | **chaperone holds every credential.** An upstream credential never reaches an app, a model or a sandbox. |
@@ -197,7 +197,7 @@ Rules:
 
 - The policy file names a plugin by name only. It cannot launch a binary or bind a secret.
 - An external tool that writes the policy file runs as an OS user that cannot write `install.toml`.
-- chaperone reads `policy.toml` at two levels. A fault of the file itself does not load the policy: the strict reader, the version, a top-level key, an app ID that is not valid, or a fence of `install.toml` with no code in this build. A fault inside one app table refuses that app only. The other apps load. A refused app holds no grant, so each call of it is denied with `unknown_credential`. chaperone logs each refused app with its fault.
+- chaperone reads `policy.toml` at two levels. A fault of the file itself does not load the policy: the strict reader, the version, a top-level key, an app ID that is not valid, or a fence of `install.toml` with no code in this build. A fault inside one app table refuses that app only. A grant of an upstream that did not start refuses the app too (section 7.7). The other apps load. A refused app holds no grant, so each call of it is denied with `unknown_credential`. chaperone logs each refused app with its fault.
 - A rule across apps refuses apps too. Two apps that hold one token digest are both refused, because the token names neither. A `check_sections` refusal of a fence refuses its caller app (section 7.8).
 - chaperone reloads `policy.toml` when the file changes. Before each call, it compares the device, inode, size and modification time of the file with the file it loaded. One policy decides the whole call. A reload that fails denies every call until a valid file loads (G2). A bad write by the operator therefore stops every app until a valid file lands. A reload that refuses one app stops that app only.
 - `chaperone check` is the only authority on a valid configuration. It runs the strict reader and every rule across files. It refuses a policy that refuses an app, with one line for each refused app.
@@ -323,8 +323,9 @@ Start:
 
 1. After the configuration loads, the host launches each active upstream with the `command` of its manifest, in plugin name order, then the approval channel the same way. A command whose program has no directory is looked up next to the chaperone binary first, then on `PATH`, so the plugins that ship with chaperone are found before any other program of that name.
 2. The host pipes stdin, stdout and stderr. It writes the secret line of section 7.5 when the manifest declares a secret. It sends the MCP `initialize` request, then `tools/list`, and keeps the list.
-3. A launch that fails, an `initialize` that fails or a `tools/list` that fails refuses start (G2). An approval channel that does not list the tool `approve` refuses start.
-4. The host reads stderr as log text. It logs each line with the plugin name, after it blanks each exact secret value (G9).
+3. An upstream whose process fails is down: a spawn that fails, a secret line that does not write, an `initialize` that fails or a `tools/list` that fails. The host logs the fault and starts the other upstreams. The policy then loads again, and each app with a grant of a down upstream is refused (section 6). An app runs with all of its grants or not at all (G2).
+4. A fault of the plugin tree refuses start: an active upstream with no command in its manifest, a missing helper, or a program that is not absolute (below). The approval channel is a slot: any launch fault of it refuses start. An approval channel that does not list the tool `approve` refuses start.
+5. The host reads stderr as log text. It logs each line with the plugin name, after it blanks each exact secret value (G9).
 
 An effect plugin whose install entry holds `user` starts through the helper `chaperone-as` (section 8). The host runs `chaperone-as <user> <program> <args...>`, with the helper next to the chaperone binary. The program must be an absolute path, or a program next to chaperone. The host does not look it up on `PATH`. A missing helper, or a program that is not absolute, refuses start. A plugin without `user` starts as the user of chaperone.
 
@@ -374,7 +375,7 @@ A fence implements the trait `Fence` of `crates/core/src/hook.rs`. chaperone cal
 5. It empties the ambient, effective, permitted and inheritable capability sets, and sets `no_new_privs`. It then reads `/proc/self/status` and checks the ids, the groups, the four sets, `NoNewPrivs` and `Threads: 1`.
 6. It calls `execve` with the command, the arguments and the environment of step 2.
 
-A step that fails writes one line to stderr and exits with 125, before the exec. The host reads that exit as an upstream that fails its `initialize`, so chaperone refuses start (section 7.7). The helper never writes stdout, because stdout is the MCP channel of the plugin.
+A step that fails writes one line to stderr and exits with 125, before the exec. The host reads that exit as an upstream that fails its `initialize`, so that upstream is down (section 7.7). The helper never writes stdout, because stdout is the MCP channel of the plugin.
 
 The host starts the helper with the one variable and no other. It holds `CAP_SETUID` while it starts, and an ambient capability does not make the dynamic loader ignore `LD_PRELOAD`. A switch between two users that are not root keeps every capability, so step 5 is necessary. The calls of step 4 change the calling thread only, so the helper runs on one thread.
 

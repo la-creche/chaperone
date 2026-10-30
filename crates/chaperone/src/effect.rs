@@ -157,7 +157,9 @@ fn text_of(block: &ContentBlock) -> Option<&str> {
     None
 }
 
-/// Why an upstream did not start. Each one refuses start (G2).
+/// Why an effect plugin did not start. A fault of the plugin tree or of
+/// the approval channel refuses start (G2). Any other fault of an upstream
+/// marks that upstream down (`docs/design.md` 7.7).
 #[derive(Debug, thiserror::Error)]
 pub enum LaunchError {
     #[error("{plugin} has no effect manifest with a command")]
@@ -186,10 +188,30 @@ pub enum LaunchError {
     NotAbsolute { plugin: PluginName },
 }
 
-/// Every effect plugin the host launched.
+impl LaunchError {
+    /// Whether the fault is of the upstream process itself, and not of the
+    /// plugin tree or of the host of chaperone.
+    fn is_of_the_process(&self) -> bool {
+        match self {
+            Self::Spawn { .. }
+            | Self::SecretLine { .. }
+            | Self::Initialize { .. }
+            | Self::ListTools { .. } => true,
+            Self::NoCommand { .. }
+            | Self::NoApproveTool { .. }
+            | Self::NoApprovalChannel
+            | Self::NoHelper { .. }
+            | Self::NotAbsolute { .. } => false,
+        }
+    }
+}
+
+/// Every effect plugin the host launched, and each upstream that did not
+/// start, with its fault.
 #[derive(Debug)]
 pub struct Launched {
     pub upstreams: Upstreams,
+    pub down: BTreeMap<PluginName, LaunchError>,
     pub approval: Box<dyn Effect>,
 }
 
@@ -248,11 +270,13 @@ impl Effect for EffectProcess {
 }
 
 /// Launch every active upstream of `setup`, in plugin name order, then the
-/// approval channel (`docs/design.md` 7.7).
+/// approval channel (`docs/design.md` 7.7). An upstream whose process
+/// fails is down, and the others start.
 ///
 /// # Errors
 ///
-/// Returns the first [`LaunchError`] found. chaperone then refuses start.
+/// Returns the first [`LaunchError`] of the plugin tree or of the approval
+/// channel. chaperone then refuses start.
 pub async fn launch_all(
     setup: &Setup,
     catalog: &Catalog,
@@ -273,7 +297,8 @@ pub fn helper_path() -> Option<PathBuf> {
 ///
 /// # Errors
 ///
-/// Returns the first [`LaunchError`] found. chaperone then refuses start.
+/// Returns the first [`LaunchError`] of the plugin tree or of the approval
+/// channel. chaperone then refuses start.
 pub async fn launch_all_with(
     setup: &Setup,
     catalog: &Catalog,
@@ -281,9 +306,17 @@ pub async fn launch_all_with(
     helper: Option<&Path>,
 ) -> Result<Launched, LaunchError> {
     let mut upstreams = Upstreams::new();
+    let mut down = BTreeMap::new();
     for name in setup.upstreams() {
-        let upstream = launch_named(name, setup, catalog, redactor, helper).await?;
-        upstreams.insert(name.clone(), Box::new(upstream));
+        match launch_named(name, setup, catalog, redactor, helper).await {
+            Ok(upstream) => {
+                upstreams.insert(name.clone(), Box::new(upstream));
+            }
+            Err(error) if error.is_of_the_process() => {
+                down.insert(name.clone(), error);
+            }
+            Err(error) => return Err(error),
+        }
     }
     let name = setup
         .slot(Slot::ApprovalChannel)
@@ -300,6 +333,7 @@ pub async fn launch_all_with(
     }
     Ok(Launched {
         upstreams,
+        down,
         approval: Box::new(approval),
     })
 }
@@ -462,10 +496,6 @@ pub async fn launch(
         })?;
     }
 
-    // DESIGN-QUESTION: docs/design.md 7.7 refuses start when an upstream
-    // fails its initialize, and a refusal of chaperone-as is such a failure.
-    // The reading: chaperone does not start. A change starts chaperone
-    // without that upstream, and its calls fail with `not_connected`.
     let service =
         ().serve((stdout, stdin))
             .await

@@ -125,7 +125,7 @@ pub enum PolicySource {
     /// A policy that does not change while chaperone runs.
     Fixed(Arc<Policy>),
     /// The policy file, reloaded when it changes.
-    File(PolicyFile),
+    File(Box<PolicyFile>),
 }
 
 impl PolicySource {
@@ -146,6 +146,6 @@ impl From<Policy> for PolicySource {
 
 impl From<PolicyFile> for PolicySource {
     fn from(file: PolicyFile) -> Self {
-        Self::File(file)
+        Self::File(Box::new(file))
     }
 }

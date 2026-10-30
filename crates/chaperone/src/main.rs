@@ -287,6 +287,25 @@ async fn run(args: Serve) -> ExitCode {
             return ExitCode::FAILURE;
         }
     };
+    for (upstream, error) in &launched.down {
+        tracing::error!(%upstream, %error, "the upstream is down, and each app granted it is refused");
+    }
+    if !launched.down.is_empty() {
+        let down = launched.down.keys().cloned().collect();
+        match startup::mark_down(&loaded.setup, &loaded.policy_bytes, &down) {
+            Ok((setup, policy)) => {
+                loaded.setup = setup;
+                loaded.policy = policy;
+            }
+            Err(error) => {
+                tracing::error!(%error, "refusing to start");
+                return ExitCode::FAILURE;
+            }
+        }
+        for warning in startup::down_warnings(&loaded.policy) {
+            tracing::warn!(%warning);
+        }
+    }
     effect::warn_unlisted(&loaded.policy, &launched.upstreams);
     let listener = match tokio::net::TcpListener::bind(listen).await {
         Ok(listener) => listener,

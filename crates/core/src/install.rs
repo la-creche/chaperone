@@ -179,6 +179,9 @@ pub struct Setup {
     slots: BTreeMap<Slot, PluginName>,
     fences: BTreeSet<PluginName>,
     upstreams: BTreeSet<PluginName>,
+    /// The active upstreams that did not start. Empty until the host
+    /// launches the upstreams.
+    down: BTreeSet<PluginName>,
     bindings: BTreeMap<PluginName, Binding>,
     guard: Guard,
 }
@@ -200,6 +203,21 @@ impl Setup {
     #[must_use]
     pub fn upstreams(&self) -> &BTreeSet<PluginName> {
         &self.upstreams
+    }
+
+    /// The active upstreams that did not start, in name order. A grant of
+    /// one refuses its app (`docs/design.md` 7.7).
+    #[must_use]
+    pub fn down(&self) -> &BTreeSet<PluginName> {
+        &self.down
+    }
+
+    /// This setup with `down` as the upstreams that did not start. A name
+    /// that is not an active upstream is left out.
+    #[must_use]
+    pub fn with_down(mut self, down: &BTreeSet<PluginName>) -> Self {
+        self.down = self.upstreams.intersection(down).cloned().collect();
+        self
     }
 
     /// The secret binding of an active plugin.
@@ -325,6 +343,7 @@ pub fn resolve(install: &InstallFile, catalog: &Catalog) -> Result<Setup, SetupE
         slots,
         fences,
         upstreams,
+        down: BTreeSet::new(),
         bindings,
         guard,
     })

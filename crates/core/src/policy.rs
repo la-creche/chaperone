@@ -348,6 +348,8 @@ pub enum PolicyError {
     SharedDigest { first: AppId, second: AppId },
     #[error("the app {app} grants tools of {upstream}, which is not an active upstream")]
     UnknownUpstream { app: AppId, upstream: PluginName },
+    #[error("the app {app} grants tools of {upstream}, which did not start")]
+    UpstreamDown { app: AppId, upstream: PluginName },
     #[error("the app {app} grants no tool of {upstream}")]
     EmptyGrant { app: AppId, upstream: PluginName },
     #[error("the app {app} sets timeout_s of {upstream} outside 1 to 120 seconds")]
@@ -678,6 +680,13 @@ fn load_app(id: &AppId, raw: RawApp, setup: &Setup) -> Result<App, PolicyError> 
     for (upstream, grant) in &raw.grants {
         if !setup.upstreams().contains(upstream) {
             return Err(PolicyError::UnknownUpstream {
+                app: id.clone(),
+                upstream: upstream.clone(),
+            });
+        }
+        // An app runs with all of its grants or not at all (G2).
+        if setup.down().contains(upstream) {
+            return Err(PolicyError::UpstreamDown {
                 app: id.clone(),
                 upstream: upstream.clone(),
             });

@@ -318,36 +318,77 @@ async fn the_env_exception_hands_the_secret_in_the_environment() {
     list_and_call(&running).await;
 }
 
-#[tokio::test]
-async fn a_command_that_does_not_exist_refuses_start() {
-    let root = tempfile::tempdir().unwrap();
-    let plugins = plugin_tree(root.path());
-    write_manifest(
-        &plugins,
-        "effect/added/vikunja",
-        r#"
-            name = "vikunja"
-            version = "1"
-            kind = "effect"
-            hooks = ["upstream"]
-            command = ["/nonexistent/chaperone-test-upstream"]
-        "#,
-    );
-    let config = config_dir(root.path(), support::INSTALL, &policy_text(30));
-    let secrets = secrets_dir(root.path());
-    let loaded = startup::load(
+/// A plugin tree with the upstream `vikunja` of `vikunja` and the
+/// approval channel `fake-approval` of `approval`, each a manifest text,
+/// loaded with the fixture policy. `vikunja` takes one secret.
+fn loaded_with(root: &Path, vikunja: &str, approval: &str) -> startup::Loaded {
+    let plugins = plugin_tree(root);
+    write_manifest(&plugins, "effect/added/vikunja", vikunja);
+    write_manifest(&plugins, "effect/included/fake-approval", approval);
+    let install = r#"
+        version = 1
+        slots.approval_channel = "fake-approval"
+        plugins.fake-approval = {}
+        plugins.vikunja.secrets.VIKUNJA_TOKEN = "vikunja_token"
+    "#;
+    let config = config_dir(root, install, &policy_text(30));
+    let secrets = secrets_dir(root);
+    write_secret(&secrets, "vikunja_token", "tok-123");
+    startup::load(
         &config,
         &plugins,
-        &root.path().join("audit.jsonl"),
+        &root.join("audit.jsonl"),
         AuditMode::OwnerOnly,
         &secrets,
     )
-    .unwrap();
+    .unwrap()
+}
+
+const MISSING_UPSTREAM: &str = r#"
+    name = "vikunja"
+    version = "1"
+    kind = "effect"
+    hooks = ["upstream"]
+    secrets = ["VIKUNJA_TOKEN"]
+    command = ["/nonexistent/chaperone-test-upstream"]
+"#;
+
+#[tokio::test]
+async fn a_command_that_does_not_exist_marks_its_upstream_down() {
+    let root = tempfile::tempdir().unwrap();
+    let loaded = loaded_with(root.path(), MISSING_UPSTREAM, &approval_manifest());
+    let redactor = Redactor::new(loaded.secrets);
+    let launched = effect::launch_all(&loaded.setup, &loaded.catalog, &redactor)
+        .await
+        .unwrap();
+    let vikunja = chaperone_core::PluginName::try_new("vikunja").unwrap();
+    assert!(!launched.upstreams.contains_key(&vikunja));
+    let error = launched.down.get(&vikunja).unwrap();
+    assert!(matches!(error, LaunchError::Spawn { .. }), "{error}");
+}
+
+#[tokio::test]
+async fn an_approval_channel_that_does_not_start_refuses_start() {
+    let root = tempfile::tempdir().unwrap();
+    let approval = r#"
+        name = "fake-approval"
+        version = "1"
+        kind = "effect"
+        slot = "approval_channel"
+        hooks = ["approval"]
+        command = ["/nonexistent/chaperone-test-approval"]
+    "#;
+    let loaded = loaded_with(
+        root.path(),
+        &vikunja_manifest(&["--fake-upstream"]),
+        approval,
+    );
     let redactor = Redactor::new(loaded.secrets);
     let error = effect::launch_all(&loaded.setup, &loaded.catalog, &redactor)
         .await
         .unwrap_err();
     assert!(matches!(error, LaunchError::Spawn { .. }), "{error}");
+    assert!(error.to_string().contains("fake-approval"), "{error}");
 }
 
 #[tokio::test]

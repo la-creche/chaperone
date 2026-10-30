@@ -2,7 +2,7 @@
 //! audit file and read every bound secret before chaperone serves anything.
 //! Every check that fails refuses start (G2).
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 use std::net::{IpAddr, SocketAddr};
 use std::path::Path;
@@ -117,6 +117,8 @@ pub struct Loaded {
     pub catalog: Catalog,
     pub setup: Setup,
     pub policy: Policy,
+    /// The bytes of `policy.toml` that `policy` holds.
+    pub policy_bytes: Vec<u8>,
     /// The stamp of `policy.toml` when chaperone read it.
     pub policy_stamp: Stamp,
     pub identity: Box<dyn Identity>,
@@ -192,6 +194,7 @@ pub fn load(
         catalog,
         setup,
         policy,
+        policy_bytes,
         policy_stamp,
         identity,
         audit,
@@ -228,6 +231,35 @@ pub fn policy_from(policy_bytes: &[u8], setup: &Setup) -> Result<Policy, StartEr
     let fences = fences_for(setup)?;
     let fence_refs: Vec<&dyn FenceCode> = fences.iter().map(AsRef::as_ref).collect();
     Ok(Policy::load(policy_bytes, setup, &fence_refs)?)
+}
+
+/// The setup with `down` as the upstreams that did not start, and the
+/// policy of `policy_bytes` read again against it. Each app granted a down
+/// upstream is refused (`docs/design.md` 7.7).
+///
+/// # Errors
+///
+/// Returns the [`StartError`] of the policy. The same bytes loaded before,
+/// so only a fault of this build gives one.
+pub fn mark_down(
+    setup: &Setup,
+    policy_bytes: &[u8],
+    down: &BTreeSet<PluginName>,
+) -> Result<(Setup, Policy), StartError> {
+    let setup = setup.clone().with_down(down);
+    let policy = policy_from(policy_bytes, &setup)?;
+    Ok((setup, policy))
+}
+
+/// A warning for each app of `policy` that a down upstream refuses.
+pub fn down_warnings(policy: &Policy) -> impl Iterator<Item = Warning> + '_ {
+    policy
+        .refused()
+        .filter(|(_, error)| matches!(error, PolicyError::UpstreamDown { .. }))
+        .map(|(app, error)| Warning::RefusedApp {
+            app: app.clone(),
+            error: error.clone(),
+        })
 }
 
 /// Check the front door address against `guard` (`docs/design.md` 7.6).
