@@ -54,8 +54,11 @@ fn is_version(text: &str) -> bool {
             .all(|part| !part.is_empty() && part.bytes().all(|byte| byte.is_ascii_digit()))
 }
 
-/// The name that a request states as its requester. The executor treats it
-/// as a claim.
+/// The key of the app ID in the `_meta` of a call (`docs/design.md` 7.7).
+const APP_META_KEY: &str = "chaperone.app";
+
+/// The name that a request states as its requester: the app ID of the
+/// call. The executor treats it as a claim.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Requester(String);
 
@@ -64,6 +67,16 @@ impl Requester {
     #[must_use]
     pub fn parse(text: &str) -> Option<Self> {
         is_name(text).then(|| Self(text.to_owned()))
+    }
+
+    /// The app ID in the `_meta` of a call, or nothing when `_meta` holds no
+    /// app ID that is a name. chaperone resolves the app ID from the bearer
+    /// token, and the app cannot set it (G4).
+    #[must_use]
+    pub fn of_call(meta: &serde_json::Map<String, serde_json::Value>) -> Option<Self> {
+        meta.get(APP_META_KEY)
+            .and_then(serde_json::Value::as_str)
+            .and_then(Self::parse)
     }
 }
 
@@ -249,9 +262,8 @@ impl Request {
             Action::Release => ("release", None),
             Action::Rollback(target) => ("rollback", Some(target.as_str())),
         };
-        // DESIGN-QUESTION: docs/design.md 7.7 sends an upstream the app ID
-        // in `_meta` and no session. The reading: requested_by is the install
-        // argument and requester_session is null. A change reads the app ID.
+        // docs/design.md 7.7 sends an upstream the app ID in `_meta` and no
+        // session, so requester_session is null.
         // DESIGN-QUESTION: AGENTS.md "Time" wants RFC 3339. The executor
         // reads ts as seconds since the Unix epoch, so ts is a number. A
         // change needs the executor to read RFC 3339.
