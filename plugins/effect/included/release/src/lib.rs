@@ -386,7 +386,7 @@ mod tests {
         let root = tempfile::tempdir().unwrap();
         let raw = serde_json::json!({"components": {"chaperone": "1.2.3"}});
         let arguments = Arguments::parse(raw.as_object().unwrap().clone()).unwrap();
-        let requester = Requester::parse("agent-control").unwrap();
+        let requester = Requester::parse("creche").unwrap();
         let request = Request::new(arguments, requester, Duration::from_millis(1), [0; 10]);
         let refuse = |_: &Path| {
             Err(FileError::Io(io::Error::from(
