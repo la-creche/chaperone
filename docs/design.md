@@ -544,7 +544,7 @@ An app instance that delegates sets `timeout_s = 120` on its `attendance` grant 
 
 The plugin takes `--hook-url` and `--listen` through `args` in `install.toml`. It refuses an unspecified listen address. It holds the two tokens in memory only, from the secret line of section 7.5. A hook that does not answer `2xx`, or a tap that does not come in the life of the gate, is a denial.
 
-`release` is an upstream in `plugins/effect/included`. It serves one tool, `request`, so the model sees `release__request` when the policy grants it. Each call writes one request file into the `requests/` directory of the release spool. An external release executor reads the file, resolves the components and asks the operator. The plugin approves nothing. It takes no secret. It takes `--requests-dir` and `--requested-by` through `args` in `install.toml`. The policy grants `release__request` to one app instance only, and `--requested-by` names that instance. The plugin does not read the app ID of a call (section 7.7), so a second instance with the grant would file requests under the same name.
+`release` is an upstream in `plugins/effect/included`. It serves one tool, `request`, so the model sees `release__request` when the policy grants it. Each call writes one request file into the `requests/` directory of the release spool. An external release executor reads the file, resolves the components and asks the operator. The plugin approves nothing. It takes no secret. It takes `--requests-dir` through `args` in `install.toml`. The requester of each request is the app ID of its call, which chaperone sends in `_meta` (section 7.7). A call with no app ID, or with an app ID that is not `a-z` then 1 to 30 of `a-z`, `0-9` and `-`, is refused, and no file is written. Each app instance with the grant files requests under its own name.
 
 The arguments are `components`, `kind` and `rollback_of`:
 
@@ -554,7 +554,7 @@ The arguments are `components`, `kind` and `rollback_of`:
 | `kind` | `release`, the default, or `rollback` |
 | `rollback_of` | Only for `rollback`: the request ID to reverse |
 
-The file is `<ID>.json`, mode 0600. The ID is a ULID: 26 characters of upper-case Crockford base32, from the time in milliseconds and 80 random bits. The file holds one JSON object with these fields, in this order: `id`, `kind`, `components`, `rollback_of`, `requested_by`, `requester_session` and `ts`. `requested_by` is the `--requested-by` argument. `requester_session` is `null`. `ts` is the time in seconds since the Unix epoch, as a number, because the executor reads that shape.
+The file is `<ID>.json`, mode 0600. The ID is a ULID: 26 characters of upper-case Crockford base32, from the time in milliseconds and 80 random bits. The file holds one JSON object with these fields, in this order: `id`, `kind`, `components`, `rollback_of`, `requested_by`, `requester_session` and `ts`. `requested_by` is the app ID of the call. `requester_session` is `null`. `ts` is the time in seconds since the Unix epoch, as a number, because the executor reads that shape.
 
 The plugin writes the body to `.<ID>.json.tmp`, then gives it its name with a hard link and removes the temporary name. A link never replaces a file that exists. The plugin refuses a call in these cases, and writes no file:
 

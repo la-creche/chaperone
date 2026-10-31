@@ -1,6 +1,7 @@
 //! The `release` upstream binary. It serves MCP on stdio with one tool,
 //! `request`. Each call writes one request file into the directory of
-//! `--requests-dir` and answers the request ID. The plugin takes no secret.
+//! `--requests-dir` and answers the request ID. The requester of a request
+//! is the app ID of its call. The plugin takes no secret.
 
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -24,16 +25,11 @@ struct Args {
     /// The requests/ directory of the release spool.
     #[arg(long)]
     requests_dir: PathBuf,
-    /// The requester that each request states: a-z, then 1 to 30 of a-z,
-    /// 0-9 and -.
-    #[arg(long)]
-    requested_by: String,
 }
 
 #[derive(Debug, Clone)]
 struct Plugin {
     requests_dir: Arc<PathBuf>,
-    requester: Requester,
 }
 
 fn error_text(text: String) -> CallToolResult {
@@ -41,8 +37,15 @@ fn error_text(text: String) -> CallToolResult {
 }
 
 impl Plugin {
-    /// Check the arguments and write one request file.
-    fn request(&self, arguments: serde_json::Map<String, serde_json::Value>) -> CallToolResult {
+    /// Check the caller and the arguments, and write one request file.
+    fn request(
+        &self,
+        meta: &serde_json::Map<String, serde_json::Value>,
+        arguments: serde_json::Map<String, serde_json::Value>,
+    ) -> CallToolResult {
+        let Some(requester) = Requester::of_call(meta) else {
+            return error_text("the call carries no app ID that is a name".into());
+        };
         let arguments = match Arguments::parse(arguments) {
             Ok(arguments) => arguments,
             Err(error) => return error_text(error.to_string()),
@@ -54,7 +57,7 @@ impl Plugin {
         if getrandom::fill(&mut entropy).is_err() {
             return error_text("the OS random source failed".into());
         }
-        let request = Request::new(arguments, self.requester.clone(), now, entropy);
+        let request = Request::new(arguments, requester, now, entropy);
         match file(&self.requests_dir, &request) {
             Ok(_) => {
                 let answer = serde_json::json!({
@@ -118,12 +121,13 @@ impl ServerHandler for Plugin {
     async fn call_tool(
         &self,
         request: CallToolRequestParams,
-        _context: RequestContext<RoleServer>,
+        context: RequestContext<RoleServer>,
     ) -> Result<CallToolResponse, ErrorData> {
         if request.name != REQUEST {
             return Err(ErrorData::invalid_params("no such tool", None));
         }
-        Ok(self.request(request.arguments.unwrap_or_default()).into())
+        let arguments = request.arguments.unwrap_or_default();
+        Ok(self.request(&context.meta, arguments).into())
     }
 }
 
@@ -141,13 +145,8 @@ async fn run(plugin: Plugin) -> Result<(), String> {
 
 fn main() -> std::process::ExitCode {
     let args = Args::parse();
-    let Some(requester) = Requester::parse(&args.requested_by) else {
-        eprintln!("release: --requested-by is not a-z, then 1 to 30 of a-z, 0-9 and -");
-        return std::process::ExitCode::FAILURE;
-    };
     let plugin = Plugin {
         requests_dir: Arc::new(args.requests_dir),
-        requester,
     };
     let runtime = match tokio::runtime::Builder::new_multi_thread()
         .enable_all()
