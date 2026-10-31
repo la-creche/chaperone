@@ -12,6 +12,7 @@
 
 use std::collections::BTreeMap;
 use std::sync::Arc;
+use std::time::Duration;
 
 use axum::body::{Body, to_bytes};
 use axum::extract::Request;
@@ -37,6 +38,11 @@ pub const MCP_PATH: &str = "/mcp";
 
 /// The path where the front door answers a health probe.
 pub const HEALTH_PATH: &str = "/healthz";
+
+/// How long an MCP session stays open with no request. A longer limit
+/// grants no reach, because the front door reads the bearer token on each
+/// request (G4).
+pub const SESSION_IDLE_LIMIT: Duration = Duration::from_secs(24 * 60 * 60);
 
 /// The largest request body the front door reads (`docs/design.md` 7.6).
 pub const BODY_CAP: ByteCap = ByteCap::new(1024 * 1024);
@@ -226,6 +232,14 @@ async fn healthz<G: Gateway>(gateway: Arc<G>) -> Response {
     (status, [(CONTENT_TYPE, "application/json")], body).into_response()
 }
 
+/// The MCP session store, where a session closes after
+/// [`SESSION_IDLE_LIMIT`] with no request.
+fn session_manager() -> LocalSessionManager {
+    let mut manager = LocalSessionManager::default();
+    manager.session_config.keep_alive = Some(SESSION_IDLE_LIMIT);
+    manager
+}
+
 /// Serve MCP on `listener` until `shutdown` is cancelled. `allowed_hosts`
 /// lists the `Host` values to accept. `rmcp` refuses every other host, to
 /// stop DNS rebinding.
@@ -246,7 +260,7 @@ pub async fn serve<G: Gateway>(
         .with_cancellation_token(shutdown.child_token());
     let service = StreamableHttpService::new(
         move || Ok(front.clone()),
-        Arc::new(LocalSessionManager::default()),
+        Arc::new(session_manager()),
         config,
     );
     let router = axum::Router::new()
@@ -264,6 +278,15 @@ pub async fn serve<G: Gateway>(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_session_closes_after_the_idle_limit() {
+        assert_eq!(
+            session_manager().session_config.keep_alive,
+            Some(SESSION_IDLE_LIMIT)
+        );
+        assert_eq!(SESSION_IDLE_LIMIT, Duration::from_secs(24 * 60 * 60));
+    }
 
     #[test]
     fn reads_a_bearer_header() {
