@@ -314,3 +314,13 @@ fn the_unit_holds_only_the_two_capabilities_of_chaperone_as() {
         ["CAP_SETUID CAP_SETGID"]
     );
 }
+
+#[test]
+fn the_crate_holds_the_placeholder_version_that_the_release_stamps() {
+    let manifest =
+        std::fs::read_to_string(repo_root().join("crates/chaperone/Cargo.toml")).unwrap();
+    assert!(manifest.lines().any(|line| line == "version = \"0.0.0\""));
+    let workflow = workflow_text();
+    assert!(workflow.contains("- name: Stamp the version"));
+    assert!(workflow.contains("handover/bin/allocate-tags.sh --dry-run"));
+}

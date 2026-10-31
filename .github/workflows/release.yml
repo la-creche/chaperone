@@ -1,16 +1,34 @@
-# Release on merge (docs/design.md section 12): plan, build, sign, release.
-# A version of crates/chaperone/Cargo.toml with a tag, or no version, ends
-# the run green with nothing to do. Only `sign` holds the identity token,
-# and it runs no code of the repository. Only `release` can write: it
-# makes the tag at the merge commit and the Release. GITHUB_TOKEN makes
+# Release on merge (docs/design.md section 12): gate, plan, build, sign,
+# release, as creche's release.yml mints its tags (creche contract 06 §2):
+# NO VERSION LIVES IN A FILE. The tag is the version, and the build stamps it.
+#
+#   gate ──────────────────────────────┐
+#   plan ── build ── sign ── release ──┘   release needs all four
+#
+# `plan` asks creche's allocator (handover/bin/allocate-tags.sh, at the
+# pinned CRECHE_REF) for the next `chaperone-vX.Y.Z`: the newest tag plus a
+# patch, or the level of a `bump:minor` / `bump:major` label on the merged
+# pull request. A merge that changed no chaperone path, or a commit already
+# tagged, plans nothing, and the run ends green. `build` writes that version
+# into the working tree's Cargo.toml and Cargo.lock, never into git, so
+# `chaperone --version` names the tag. `release` runs the same allocator for
+# real, with the archive and its bundle: it checks the signature with the
+# words the host uses, then makes the tag at the merge commit and the
+# Release. It refuses a tag other than the planned one.
+#
+# Only `sign` holds the identity token, and it runs no code of the
+# repository. Only `release` can write. GITHUB_TOKEN makes
 # `github-actions[bot]` the author. Each signature writes one public record
-# to the Sigstore transparency log. A tag is never moved. A tag with no
-# Release is finished by "Re-run failed jobs" of the same run.
+# to the Sigstore transparency log. A tag is never moved. A red run tags
+# nothing, and the next green run covers its changes: the allocator measures
+# from chaperone's own newest tag. `workflow_dispatch` starts the same run by
+# hand, for a commit a missed run left behind.
 name: release
 
 on:
   push:
     branches: [main]
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -23,48 +41,90 @@ concurrency:
 env:
   TARGET: x86_64-unknown-linux-musl
   ARCHIVE: chaperone-x86_64-unknown-linux-musl.tar.gz
+  # The COMMIT of la-creche/creche whose allocator this run borrows, as
+  # mcp's and registry's tag workflows borrow it. Raise it deliberately, and
+  # only to a commit on creche's `main`. The check in `plan` refuses one that
+  # cannot scope a run to one repository.
+  CRECHE_REF: a4b8ba2e84bf1670dce2b0c3bae4bf88c8c0fd5c
 
 jobs:
-  plan:
+  # ci.yml's gate, on the merged commit. Diff the two when changing either.
+  gate:
     runs-on: ubuntu-24.04
-    timeout-minutes: 5
-    outputs:
-      tag: ${{ steps.version.outputs.tag }}
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+      - name: Install the pinned toolchain
+        run: rustup show active-toolchain || rustup toolchain install
+      - name: Format
+        run: cargo fmt --all --check
+      - name: Lint
+        run: cargo clippy --workspace --all-targets --locked -- -D warnings
+      - name: Test
+        run: cargo test --workspace --locked
 
-      - name: Read the version
-        id: version
+  plan:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      pull-requests: read # the merge SHA -> PR lookup, for the bump label
+    outputs:
+      tag: ${{ steps.plan.outputs.tag }}
+      version: ${{ steps.plan.outputs.version }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          # Every tag and the history: the newest chaperone-v* tag is the
+          # base of both the level and the range.
+          fetch-depth: 0
+
+      # The product is public, so the checkout needs no token of its own.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: la-creche/creche
+          ref: ${{ env.CRECHE_REF }}
+          path: .creche
+          persist-credentials: false
+
+      - name: Check the pin can scope a run to one repository
         run: |
           set -euo pipefail
-          version="$(python3 -c '
-          import tomllib
-          with open("crates/chaperone/Cargo.toml", "rb") as file:
-              value = tomllib.load(file)["package"].get("version")
-          print(value if isinstance(value, str) else "")
-          ')"
-          if [[ -z "$version" ]]; then
-            echo "crates/chaperone/Cargo.toml sets no version: nothing to release." >> "$GITHUB_STEP_SUMMARY"
-            exit 0
-          fi
-          if [[ ! "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-            echo "::error::the version $version is not x.y.z"
+          script=.creche/handover/bin/allocate-tags.sh
+          if ! grep -q 'TAG_REPO_ROOT' "$script" || ! grep -q 'TAG_REPO:-' "$script"; then
+            echo "::error::CRECHE_REF $CRECHE_REF cannot scope a run to one repository; raise it to a commit on creche's main that carries TAG_REPO_ROOT and TAG_REPO."
             exit 1
           fi
-          tag="chaperone-v$version"
-          status=0
-          git ls-remote --exit-code --tags origin "refs/tags/$tag" > /dev/null || status=$?
-          if [[ "$status" -eq 0 ]]; then
-            echo "The tag $tag exists: nothing to release." >> "$GITHUB_STEP_SUMMARY"
+
+      - uses: astral-sh/setup-uv@bec219d24cd3e171d82865faccec33120bb574f4 # v10.1.0
+
+      # The dry run needs no write scope. Its one `would create` line names
+      # the next tag; no such line means nothing to release.
+      - name: Plan the tag
+        id: plan
+        working-directory: .creche
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG_REPO_ROOT: ${{ github.workspace }}
+          TAG_REPO: chaperone
+        run: |
+          set -euo pipefail
+          handover/bin/allocate-tags.sh --dry-run | tee "$RUNNER_TEMP/plan"
+          tag="$(sed -n 's/^would create \(chaperone-v[0-9][0-9.]*\) on .*/\1/p' "$RUNNER_TEMP/plan")"
+          if [[ -z "$tag" ]]; then
+            echo "No new chaperone tag on $GITHUB_SHA: nothing to release." >> "$GITHUB_STEP_SUMMARY"
             exit 0
           fi
-          if [[ "$status" -ne 2 ]]; then
-            echo "::error::git ls-remote failed with the status $status"
+          version="${tag#chaperone-v}"
+          if [[ ! "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ || "$tag" == *$'\n'* ]]; then
+            echo "::error::the plan named no single x.y.z tag: $tag"
             exit 1
           fi
           echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
 
   build:
     needs: plan
@@ -77,6 +137,31 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+
+      # The tag is the version. It goes into the working tree only, so
+      # `chaperone --version` names the tag and git never holds a number.
+      - name: Stamp the version
+        env:
+          VERSION: ${{ needs.plan.outputs.version }}
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import os
+          import re
+
+          version = os.environ["VERSION"]
+          for path, pattern in (
+              ("crates/chaperone/Cargo.toml", r'(?m)^(version = )"0\.0\.0"$'),
+              ("Cargo.lock", r'(name = "chaperone"\nversion = )"0\.0\.0"'),
+          ):
+              with open(path, encoding="utf-8") as file:
+                  text = file.read()
+              stamped, count = re.subn(pattern, rf'\g<1>"{version}"', text, count=1)
+              if count != 1:
+                  raise SystemExit(f"{path} holds no chaperone version 0.0.0 to stamp")
+              with open(path, "w", encoding="utf-8") as file:
+                  file.write(stamped)
+          PY
 
       # Each program goes to `$CARGO_INSTALL_ROOT/bin/<name>`, the rule of a
       # binary build of the host's release tool. The programs are chaperone,
@@ -114,6 +199,8 @@ jobs:
       # tree gives the same bytes.
       - name: Check and pack
         id: pack
+        env:
+          VERSION: ${{ needs.plan.outputs.version }}
         run: |
           set -euo pipefail
           export LC_ALL=C
@@ -139,6 +226,10 @@ jobs:
               exit 1
             fi
           done
+          if [[ "$("$work/chaperone/bin/chaperone" --version)" != "chaperone $VERSION" ]]; then
+            echo "::error::chaperone --version does not name $VERSION"
+            exit 1
+          fi
           if grep -rqF -e "$GITHUB_WORKSPACE" -e "${CARGO_HOME:-$HOME/.cargo}" -e "$RUNNER_TEMP" "$work"; then
             echo "::error::a program holds a path of the runner"
             exit 1
@@ -205,12 +296,26 @@ jobs:
           retention-days: 7
 
   release:
-    needs: [plan, build, sign]
+    needs: [gate, plan, build, sign]
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     permissions:
       contents: write # the tag and the Release
+      pull-requests: read # the merge SHA -> PR lookup, for the bump label
     steps:
+      # The allocator tags this checkout and pushes the tag, so it keeps the
+      # job's credentials.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: la-creche/creche
+          ref: ${{ env.CRECHE_REF }}
+          path: .creche
+          persist-credentials: false
+
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           name: archive
@@ -225,40 +330,35 @@ jobs:
         with:
           cosign-release: v3.1.3
 
-      # The words of the host's check of the signature.
-      - name: Check the signature
+      - uses: astral-sh/setup-uv@bec219d24cd3e171d82865faccec33120bb574f4 # v10.1.0
+
+      # Only the bytes that the build job packed.
+      - name: Check the digest
         env:
           DIGEST: ${{ needs.build.outputs.digest }}
         run: |
           set -euo pipefail
           cd "$RUNNER_TEMP/assets"
           sha256sum --check --strict <<< "$DIGEST"
-          cosign verify-blob --bundle "$ARCHIVE.sigstore.json" \
-            --certificate-oidc-issuer https://token.actions.githubusercontent.com \
-            --certificate-identity "https://github.com/$GITHUB_REPOSITORY/.github/workflows/release.yml@refs/heads/main" \
-            --certificate-github-workflow-repository "$GITHUB_REPOSITORY" \
-            --certificate-github-workflow-ref refs/heads/main \
-            --certificate-github-workflow-sha "$GITHUB_SHA" \
-            "$ARCHIVE" < /dev/null
 
-      # A lightweight tag at the merge commit. A tag on another commit
-      # stops the run.
+      # The allocator checks the signature with the words the host uses
+      # (`handover artifacts --verify-words`), then makes the tag at the
+      # merge commit and the Release with both files. It never moves a tag.
       - name: Tag and publish
+        working-directory: .creche
         env:
           GH_TOKEN: ${{ github.token }}
+          TAG_REPO_ROOT: ${{ github.workspace }}
+          TAG_REPO: chaperone
           TAG: ${{ needs.plan.outputs.tag }}
         run: |
           set -euo pipefail
-          cd "$RUNNER_TEMP/assets"
-          found="$(git ls-remote --tags "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY.git" "refs/tags/$TAG" | cut -f 1)"
-          if [[ -z "$found" ]]; then
-            gh api --method POST "repos/$GITHUB_REPOSITORY/git/refs" \
-              -f "ref=refs/tags/$TAG" -f "sha=$GITHUB_SHA" > /dev/null
-          elif [[ "$found" != "$GITHUB_SHA" ]]; then
-            echo "::error::$TAG exists on $found, not on $GITHUB_SHA. A tag is never moved."
+          export ASSET_DIR="$RUNNER_TEMP/assets"
+          COSIGN="$(command -v cosign)"
+          export COSIGN
+          handover/bin/allocate-tags.sh | tee "$RUNNER_TEMP/release"
+          if ! grep -q "^released $TAG on $GITHUB_SHA" "$RUNNER_TEMP/release"; then
+            echo "::error::the allocator did not release the planned $TAG"
             exit 1
           fi
-          gh release create "$TAG" --repo "$GITHUB_REPOSITORY" --verify-tag \
-            --title "$TAG" --notes "chaperone, built from $GITHUB_SHA." \
-            "$ARCHIVE" "$ARCHIVE.sigstore.json"
           echo "Released $TAG on $GITHUB_SHA." >> "$GITHUB_STEP_SUMMARY"
