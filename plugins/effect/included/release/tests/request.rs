@@ -26,7 +26,7 @@ fn arguments(value: serde_json::Value) -> Result<Arguments, ArgumentError> {
 }
 
 fn request(value: serde_json::Value, entropy: [u8; 10]) -> Request {
-    let requester = Requester::parse("agent-control").unwrap();
+    let requester = Requester::parse("creche").unwrap();
     Request::new(arguments(value).unwrap(), requester, NOW, entropy)
 }
 
@@ -67,7 +67,7 @@ fn a_request_writes_one_file_with_the_exact_fields() {
         concat!(
             r#"{"id":"01K8DSY3ZM0000000000000000","kind":"release","#,
             r#""components":{"chaperone":"1.2.3","mcp-servers":"latest"},"#,
-            r#""rollback_of":null,"requested_by":"agent-control","#,
+            r#""rollback_of":null,"requested_by":"creche","#,
             r#""requester_session":null,"ts":1761400000.5}"#
         )
     );
