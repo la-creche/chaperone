@@ -541,6 +541,7 @@ An app instance that delegates sets `timeout_s = 120` on its `attendance` grant 
 
 1. **Out.** For each gate, the plugin sends `POST` to the flow's hook with the bearer `APPROVAL_TOKEN` and the body `{"job_id", "gate_id", "agent", "summary", "kind": "approval"}`. The flow pushes a card with Approve and Deny to the operator's phone. The gate ID of chaperone is 16 bytes. `job_id` is those bytes as 26 lower-case base32 characters of the ULID alphabet, and `gate_id` is the first 8 bytes as 16 hex characters, because the flow accepts only those shapes. `agent` is the app ID. `summary` is the exposed tool name and the canonical arguments, cut to 400 characters.
 2. **Back.** The plugin serves `POST /resume` on the address of its `--listen` argument. The flow sends the tap there with the bearer `RESUME_TOKEN` and the body `{"job", "gate", "decision"}`, where `decision` is `approve` or `deny`. The plugin decodes `job` to the gate, answers chaperone's `approve` call, and returns `200`. A repeat of the same decision returns `200`. A contradicting decision returns `409` and the first answer stands. An unknown gate returns `404`. A wrong bearer returns `401`.
+3. **Page.** The plugin serves `GET /pending/{job}` on the same address, under the bearer `RESUME_TOKEN`. The operator's approval page reads the gate there when a tap on the card itself is lost. For a gate that waits for its tap, the answer is `200` and `{"job", "gate", "agent", "summary", "expires_in_s"}`. A gate that is decided, expired or no longer awaited returns `404`, so the page lives only as long as the request. The page sends its decision to `POST /resume`, the same as the flow. A wrong bearer returns `401`. Text that is not a `job_id` returns `400`.
 
 The plugin takes `--hook-url` and `--listen` through `args` in `install.toml`. It refuses an unspecified listen address. It holds the two tokens in memory only, from the secret line of section 7.5. A hook that does not answer `2xx`, or a tap that does not come in the life of the gate, is a denial.
 
@@ -634,6 +635,8 @@ One pull request per step:
     1. The defaults of the production layout (section 8).
     2. The component manifest and the service unit (sections 8 and 12).
     3. The version `0.2.0` (section 12).
+12. After version 1, one pull request each:
+    1. `GET /pending/{job}` of `ha-approval`, for the operator's approval page (section 12).
 
 ## 14. Open items
 

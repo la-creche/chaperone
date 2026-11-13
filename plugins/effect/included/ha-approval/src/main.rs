@@ -2,7 +2,9 @@
 //! flow (`docs/design.md` section 12). The plugin serves MCP on stdio with
 //! one tool, `approve`. For each gate it posts a request to the flow's
 //! hook, then waits for the tap. The flow posts the tap back to `/resume`
-//! on this plugin. The plugin holds the two tokens in memory only (G9).
+//! on this plugin. `GET /pending/{job}` shows an open gate to the
+//! operator's approval page. The plugin holds the two tokens in memory
+//! only (G9).
 
 mod ids;
 
@@ -11,9 +13,10 @@ use std::net::SocketAddr;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-use axum::extract::{DefaultBodyLimit, State};
+use axum::extract::{DefaultBodyLimit, Path, State};
 use axum::http::{HeaderMap, StatusCode};
-use axum::routing::post;
+use axum::response::{IntoResponse, Response};
+use axum::routing::{get, post};
 use axum::{Json, Router};
 use clap::Parser;
 use rmcp::model::{
@@ -85,6 +88,18 @@ struct Pending {
     waiter: Option<oneshot::Sender<Decision>>,
     decided: Option<Decision>,
     asked: Instant,
+    app: String,
+    summary: String,
+}
+
+/// What `GET /pending/{job}` shows of a gate that waits for its tap.
+#[derive(Debug, serde::Serialize)]
+struct Open {
+    job: String,
+    gate: String,
+    agent: String,
+    summary: String,
+    expires_in_s: u64,
 }
 
 #[derive(Debug, Default)]
@@ -191,6 +206,8 @@ impl Plugin {
                     waiter: Some(sender),
                     decided: None,
                     asked: now,
+                    app: app.to_owned(),
+                    summary: summary.clone(),
                 },
             );
         }
@@ -266,6 +283,31 @@ impl Plugin {
                 Tap::Recorded
             }
         }
+    }
+
+    /// The gate while it waits for its tap. `None` once it is decided,
+    /// expired or forgotten, so the approval page lives only as long as
+    /// the request.
+    fn open(&self, gate: Gate) -> Option<Open> {
+        let mut gates = self.gates.lock().ok()?;
+        let now = Instant::now();
+        gates.prune(now);
+        let pending = gates.gates.get(&gate.0)?;
+        let waiting = pending
+            .waiter
+            .as_ref()
+            .is_some_and(|waiter| !waiter.is_closed());
+        if pending.decided.is_some() || !waiting {
+            return None;
+        }
+        let left = GATE_LIFE.saturating_sub(now.duration_since(pending.asked));
+        Some(Open {
+            job: gate.job_id(),
+            gate: gate.gate_id(),
+            agent: pending.app.clone(),
+            summary: pending.summary.clone(),
+            expires_in_s: left.as_secs(),
+        })
     }
 
     fn bearer_matches(&self, headers: &HeaderMap) -> bool {
@@ -366,6 +408,28 @@ async fn resume_handler(
     }
 }
 
+/// The approval page reads an open gate here, under the bearer of
+/// `/resume`. A decided, expired or unknown gate is `404`.
+async fn pending_handler(
+    State(shared): State<Shared>,
+    headers: HeaderMap,
+    Path(job): Path<String>,
+) -> Response {
+    let reply = |status: StatusCode, text: &str| {
+        (status, Json(serde_json::json!({ "status": text }))).into_response()
+    };
+    if !shared.0.bearer_matches(&headers) {
+        return reply(StatusCode::UNAUTHORIZED, "unauthorized");
+    }
+    let Some(gate) = Gate::from_job_id(&job) else {
+        return reply(StatusCode::BAD_REQUEST, "job is not a job id");
+    };
+    match shared.0.open(gate) {
+        Some(open) => (StatusCode::OK, Json(open)).into_response(),
+        None => reply(StatusCode::NOT_FOUND, "unknown gate"),
+    }
+}
+
 /// Read the secret line and take the two tokens.
 async fn read_secrets(stdin: &mut BufReader<tokio::io::Stdin>) -> Result<(String, String), String> {
     let mut line = String::new();
@@ -409,10 +473,14 @@ async fn run(args: Args) -> Result<(), String> {
         .map_err(|error| format!("cannot bind {}: {error}", args.listen))?;
     let router = Router::new()
         .route("/resume", post(resume_handler))
+        .route("/pending/{job}", get(pending_handler))
         .layer(DefaultBodyLimit::max(RESUME_BODY_CAP))
         .with_state(shared.clone());
     let server = tokio::spawn(axum::serve(listener, router).into_future());
-    eprintln!("ha-approval: serving /resume on {}", args.listen);
+    eprintln!(
+        "ha-approval: serving /resume and /pending on {}",
+        args.listen
+    );
 
     let service = shared
         .serve((stdin, tokio::io::stdout()))
