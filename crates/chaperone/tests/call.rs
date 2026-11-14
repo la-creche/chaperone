@@ -1,5 +1,5 @@
 //! The call path end to end, without a front door: each outcome of
-//! `docs/design.md` 5.4 that build step 5 can reach, and its audit records.
+//! `docs/design.md` 5.4 that this test reaches, and its audit records.
 //! An in-memory fake stands in for the upstream process.
 
 #![allow(

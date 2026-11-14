@@ -6,8 +6,8 @@
 //! Each method writes its record through the [`AuditSink`] and hands out
 //! the next state only after the write succeeds. No other code holds a
 //! record to write, so no call can run before its decision record (G6).
-//! The transition from a gated call to an allowed call arrives with the
-//! approval answer type in build step 6.
+//! [`GatedCall::approved`] makes the transition from a gated call to an
+//! allowed call.
 //!
 //! A record never holds a secret, a token or unconstrained app text (G9).
 //! The tool is present only when the policy configures it. The arguments

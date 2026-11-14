@@ -6,7 +6,7 @@ The app never holds an upstream credential. No model takes part in a decision. A
 
 ## Status
 
-Build steps 1 to 9 are done. `chaperone serve` decides and audits each call from an MCP client. It runs an allowed call through its upstream. It asks the approval channel about a gated call and runs the call after an approval. Step 10 holds the rest of version 1. `docs/design.md` section 13 lists the build order.
+Build steps 1 to 12.1 are done. Version 1 is released. The latest tag is `chaperone-v0.5.3`. `chaperone serve` decides and audits each call from an MCP client. It runs an allowed call through its upstream. It asks the approval channel about a gated call and runs the call after an approval. `docs/design.md` section 13 lists the build order.
 
 ## Documents
 
@@ -15,6 +15,7 @@ Build steps 1 to 9 are done. `chaperone serve` decides and audits each call from
 | `docs/design.md` | What chaperone guarantees, its parts, plugins, configuration, version 1 |
 | `AGENTS.md` | Rules for every contributor and every agent |
 | `plugins/AGENTS.md` | Plugin kinds, slots, hooks and the plugin manifest |
+| `docs/ha.md` | How chaperone reaches Home Assistant, and what an agent may read there |
 | `docs/writing-standard.md` | How every document in this repository is written |
 
 ## License
