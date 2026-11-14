@@ -1,5 +1,6 @@
 //! The plugin binary end to end: a fake flow hook takes the request, the
-//! test taps through `/resume`, and the `approve` call answers.
+//! test taps through `/resume`, and the `approve` call answers. The test
+//! also reads the open gate through `/pending`.
 
 #![allow(
     clippy::unwrap_used,
@@ -74,6 +75,7 @@ async fn free_port() -> SocketAddr {
 struct Running {
     client: rmcp::service::RunningService<rmcp::RoleClient, ()>,
     resume_url: String,
+    pending_url: String,
     _child: Child,
 }
 
@@ -104,6 +106,7 @@ async fn start(flow: &Flow) -> Running {
     Running {
         client,
         resume_url: format!("http://{listen}/resume"),
+        pending_url: format!("http://{listen}/pending"),
         _child: child,
     }
 }
@@ -143,6 +146,61 @@ async fn resume(
     let status = response.status();
     let body: serde_json::Value = response.json().await.unwrap();
     (StatusCode::from_u16(status.as_u16()).unwrap(), body)
+}
+
+async fn pending(url: &str, token: &str, job: &str) -> (StatusCode, serde_json::Value) {
+    let response = reqwest::Client::new()
+        .get(format!("{url}/{job}"))
+        .bearer_auth(token)
+        .send()
+        .await
+        .unwrap();
+    let status = response.status();
+    let body: serde_json::Value = response.json().await.unwrap();
+    (StatusCode::from_u16(status.as_u16()).unwrap(), body)
+}
+
+#[tokio::test]
+async fn an_open_gate_is_shown_until_its_tap() {
+    let mut flow = fake_flow().await;
+    let running = start(&flow).await;
+    let client = running.client.peer().clone();
+    let asked = tokio::spawn(async move { client.call_tool(approve_request(GATE_HEX)).await });
+    let request = tokio::time::timeout(Duration::from_secs(5), flow.requests.recv())
+        .await
+        .unwrap()
+        .unwrap();
+    let job = request["job_id"].as_str().unwrap().to_owned();
+
+    // A wrong bearer, a bad job and an unknown gate are refused first.
+    let (status, _) = pending(&running.pending_url, "wrong", &job).await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED);
+    let (status, _) = pending(&running.pending_url, RESUME_TOKEN, "not-a-job").await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    let (status, _) = pending(&running.pending_url, RESUME_TOKEN, &"0".repeat(26)).await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+
+    let (status, open) = pending(&running.pending_url, RESUME_TOKEN, &job).await;
+    assert_eq!(status, StatusCode::OK, "{open}");
+    assert_eq!(open["job"], job.as_str());
+    assert_eq!(open["gate"], request["gate_id"]);
+    assert_eq!(open["agent"], "librechat");
+    assert_eq!(open["summary"], request["summary"]);
+    let left = open["expires_in_s"].as_u64().unwrap();
+    assert!((590..=600).contains(&left), "{left}");
+
+    let (status, _) = resume(
+        &running.resume_url,
+        RESUME_TOKEN,
+        serde_json::json!({"job": job, "gate": open["gate"], "decision": "deny"}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    asked.await.unwrap().unwrap();
+
+    // A decided gate is gone from the page.
+    let (status, _) = pending(&running.pending_url, RESUME_TOKEN, &job).await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
 }
 
 #[tokio::test]
