@@ -37,18 +37,18 @@ JSON has no comments, so the reasons are here.
 
 The file lists 20 domains: `sensor`, `binary_sensor`, `switch`, `light`, `number`, `select`, `update`, `media_player`, `cover`, `input_boolean`, `input_number`, `fan`, `remote`, `counter`, `climate`, `weather`, `time`, `sun`, `vacuum` and `event`.
 
-The `sun` domain is required. The entity `sun.sun` is the visible control of the policy. The tool that writes the policy refuses a file without it.
+The `sun` domain is required. The entity `sun.sun` is the visible control of the policy. The operator's own tool that writes the policy into Home Assistant lives outside this repository. That tool should refuse a file without this domain.
 
 ### 3.2 Hidden domains
 
 | Domains | Why |
 |---|---|
-| `camera`, `person`, `device_tracker` | They show where people are. The policy never lists them. The tool that writes the policy must refuse a file that lists one. |
+| `camera`, `person`, `device_tracker` | They show where people are. The policy never lists them. The operator's tool that writes the policy should refuse a file that lists one. |
 | `zone`, `image`, `group`, `alarm_control_panel` | They show presence. The state of the home zone is the count of people at home. An armed-away state says that nobody is home. |
 | `automation`, `script`, `scene` | Each visible entity costs an admin-only configuration fetch for each search with a query. That fetch fails with HTTP 401 and counts as a failed login. The `last_triggered` field of an arrival automation also shows presence. |
 | `button`, `text`, `notify`, `conversation`, `ai_task`, `stt`, `tts`, `wake_word`, `assist_satellite` | They have no read value. |
 
-Only the first row is fixed. The operator may edit the other rows. After an edit, run the tool that writes the policy into Home Assistant again. The tool is idempotent.
+Only the first row is fixed. The operator may edit the other rows. After an edit, write the policy into Home Assistant again with the same tool.
 
 ### 3.3 What a domain allowlist cannot do
 
