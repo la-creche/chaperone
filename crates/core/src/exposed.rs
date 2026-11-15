@@ -1,8 +1,10 @@
 //! The name under which an app sees an upstream tool: `<upstream>__<tool>`
-//! (`docs/design.md` 7.6). LibreChat passes each MCP tool to the model as a
-//! function named `<tool>_mcp_chaperone` in version 1. Model APIs allow only
-//! `A-Z a-z 0-9 _ -` in a function name, up to 64 characters. The limit of
-//! [`ExposedName::MAX`] leaves room for that suffix.
+//! (`docs/design.md` 7.6). The limit comes from an interface. A client such
+//! as LibreChat passes each MCP tool to the model as a function named
+//! `<tool>_mcp_chaperone`. Model APIs allow only `A-Z a-z 0-9 _ -` in a
+//! function name, up to 64 characters. The limit of [`ExposedName::MAX`]
+//! leaves room for that suffix. Version 1 used the connection name `ch`, so
+//! it did not need the room.
 
 use std::fmt;
 

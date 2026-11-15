@@ -26,7 +26,7 @@ pub enum CallFault {
     UnknownTool,
     /// The upstream of an allowed call is not running.
     NotConnected,
-    /// The call needs an approval, and no approval channel can answer yet.
+    /// The call needs an approval, and no approval channel can answer.
     NoApprovalChannel,
     /// The decision did not return inside the bound that the `chaperone`
     /// program sets, or did not return at all (G2).
