@@ -496,10 +496,18 @@ Version 1 proves the idea with one client app.
 |---|---|
 | Client app | The agent runtime in the sandbox. The runtime of version 1 is Flue. |
 | Upstream | An existing Vikunja MCP server, unchanged, with the env exception |
-| Decision plugins | `ha-call` decision half: an entity allow-list for Home Assistant calls. `attendance` decision half: the families each app instance may reach. |
+| Decision plugins | `ha-call` decision half: an entity allow-list for Home Assistant calls. `ha-entities`: the entity domains a Home Assistant upstream may name. `attendance` decision half: the families each app instance may reach. |
 | Effect plugins | `ha-call` effect half: the Home Assistant call. `ha-approval`: the approval channel, through the operator's existing approval flow. `release`: one request file in the release spool per call. `attendance` effect half: the doors of the session service. |
 
 `ha-call` is one plugin in two halves, both in `included`. The decision half is a fence. Each app instance lists the entities it may act on in its `ha-call` section of the policy file, as `entities = ["light.kitchen"]`. A call to the `ha-call` upstream passes only when every entity in its `entity_id` is on that list. A call with no `entity_id` is denied, because a service call without a target acts on every entity of its domain. An app instance with no section may act on no entity (G2). A call to any other upstream passes untouched. The effect half serves one tool, `call_service`, with `domain`, `service`, `entity_id` and optional `data`. It sends one `POST /api/services/<domain>/<service>` to Home Assistant with the long-lived token `HA_TOKEN` from the secret line, and returns the answer as text. It takes `--url` through `args` in `install.toml`.
+
+`ha-entities` is a fence in `plugins/decision/included`, with no effect half. It guards an upstream that reads Home Assistant with the token of a user who may not read every entity. Home Assistant answers a read of an entity that this user may not read with a 401, and its IP ban counts each 401 as a failed login. Each app instance maps an upstream to the domains it may read in its `ha-entities` section of the policy file, such as `upstreams = { ha-read = ["light", "sun"] }`. A domain is 1 or more of `a-z`, `0-9` and `_`. The fence applies these rules to a call to a listed upstream:
+
+1. A call with no `entity_id` passes.
+2. A call passes when its `entity_id` is `domain.object_id` of a listed domain, or a non-empty list of them. Each part is `a-z`, `0-9` and `_`, and the whole is at most 255 bytes.
+3. Any other `entity_id` is denied: an unlisted domain, another form, an empty list or a value that is not text.
+
+A call to an upstream that the section does not list passes untouched. An app instance with no section passes untouched. A section that lists no upstream refuses its app instance.
 
 `attendance` is one plugin in two halves. The decision half is a fence in `plugins/decision/included`. Each app instance lists the families it may reach in its `attendance` section of the policy file, such as `delegates = ["research"]`. A family name is `a-z`, then 1 to 30 of `a-z`, `0-9` and `-`.
 
@@ -653,6 +661,7 @@ One pull request per step:
     3. The version `0.2.0` (section 12).
 12. After version 1, one pull request each:
     1. `GET /pending/{job}` of `ha-approval`, for the operator's approval page (section 12). Done.
+    2. The `ha-entities` fence (section 12).
 
 ## 14. Open items
 
