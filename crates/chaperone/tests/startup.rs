@@ -57,6 +57,7 @@ fn the_repository_plugin_tree_holds_the_defaults_and_the_included() {
             "attendance",
             "bearer",
             "ha-call",
+            "ha-entities",
             "audit-jsonl",
             "mcp-http",
             "secret-files",
