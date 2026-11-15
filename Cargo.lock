@@ -276,6 +276,7 @@ dependencies = [
  "chaperone-plugin-audit-jsonl",
  "chaperone-plugin-bearer",
  "chaperone-plugin-ha-call-fence",
+ "chaperone-plugin-ha-entities-fence",
  "chaperone-plugin-mcp-http",
  "chaperone-plugin-secret-files",
  "chaperone-plugin-system-clock",
@@ -400,6 +401,16 @@ dependencies = [
 
 [[package]]
 name = "chaperone-plugin-ha-call-fence"
+version = "0.0.0"
+dependencies = [
+ "chaperone-core",
+ "proptest",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "chaperone-plugin-ha-entities-fence"
 version = "0.0.0"
 dependencies = [
  "chaperone-core",
