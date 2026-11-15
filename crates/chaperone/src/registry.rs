@@ -22,6 +22,7 @@ pub use chaperone_plugin_audit_jsonl::AuditMode;
 use chaperone_plugin_audit_jsonl::{JsonlAudit, OpenError};
 use chaperone_plugin_bearer::BearerIdentity;
 use chaperone_plugin_ha_call_fence::EntityFence;
+use chaperone_plugin_ha_entities_fence::DomainFence;
 use chaperone_plugin_secret_files::FileSecrets;
 use chaperone_plugin_system_clock::SystemClock;
 
@@ -102,6 +103,10 @@ pub const FENCES: &[FenceEntry] = &[
         name: "ha-call",
         build: ha_call,
     },
+    FenceEntry {
+        name: "ha-entities",
+        build: ha_entities,
+    },
 ];
 
 /// The row of the fence `plugin`, if this build has one.
@@ -116,6 +121,10 @@ fn attendance() -> Result<Box<dyn FenceCode>, NameError> {
 
 fn ha_call() -> Result<Box<dyn FenceCode>, NameError> {
     Ok(Box::new(EntityFence::new()?))
+}
+
+fn ha_entities() -> Result<Box<dyn FenceCode>, NameError> {
+    Ok(Box::new(DomainFence::new()?))
 }
 
 fn bearer() -> Box<dyn Identity> {

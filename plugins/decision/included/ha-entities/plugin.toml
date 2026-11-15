@@ -1,0 +1,4 @@
+name = "ha-entities"
+version = "1.0.0"
+kind = "decision"
+hooks = ["fence"]

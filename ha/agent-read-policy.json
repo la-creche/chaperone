@@ -1,0 +1,26 @@
+{
+  "entities": {
+    "domains": {
+      "sensor": {"read": true},
+      "binary_sensor": {"read": true},
+      "switch": {"read": true},
+      "light": {"read": true},
+      "number": {"read": true},
+      "select": {"read": true},
+      "update": {"read": true},
+      "media_player": {"read": true},
+      "cover": {"read": true},
+      "input_boolean": {"read": true},
+      "input_number": {"read": true},
+      "fan": {"read": true},
+      "remote": {"read": true},
+      "counter": {"read": true},
+      "climate": {"read": true},
+      "weather": {"read": true},
+      "time": {"read": true},
+      "sun": {"read": true},
+      "vacuum": {"read": true},
+      "event": {"read": true}
+    }
+  }
+}

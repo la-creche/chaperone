@@ -14,6 +14,7 @@ members = [
   "plugins/default/system-clock",
   "plugins/decision/included/attendance",
   "plugins/decision/included/ha-call",
+  "plugins/decision/included/ha-entities",
   "plugins/effect/included/attendance",
   "plugins/effect/included/ha-call",
   "plugins/effect/included/ha-approval",
