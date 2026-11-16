@@ -258,7 +258,21 @@ impl Effect for EffectProcess {
             let mut request =
                 CallToolRequestParams::new(tool.as_str().to_owned()).with_arguments(members);
             request.meta = Some(app_meta(app));
-            match self.service.call_tool(request).await {
+            // The request runs in a task of its own. A caller that stops
+            // waiting drops this future: the bound of `docs/design.md` 5.5
+            // ended, or the app gave up. The library sends
+            // `notifications/cancelled` for a request whose future drops,
+            // and an upstream can exit on that notification. Then each app
+            // with a grant of it is refused (`docs/design.md` 7.7). The
+            // task keeps the request, so no drop of the caller reaches the
+            // upstream. It ends with the answer, or with the connection.
+            let peer = self.service.peer().clone();
+            let answer = tokio::spawn(async move { peer.call_tool(request).await });
+            let Ok(answer) = answer.await else {
+                // The task panicked or the runtime stops. No answer came.
+                return Err(EffectFault::NotConnected);
+            };
+            match answer {
                 Ok(result) => Ok(result),
                 // An MCP error is the upstream's answer to this call.
                 Err(ServiceError::McpError(error)) => Ok(CallToolResult::error(vec![

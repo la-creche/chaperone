@@ -349,7 +349,7 @@ An effect plugin whose install entry holds `user` starts through the helper `cha
 A call:
 
 1. The decision allowed the call and the `decided` record is durable (G6).
-2. The host sends `tools/call` to the upstream with the tool name and the arguments. It waits up to the bound of section 5.5.
+2. The host sends `tools/call` to the upstream with the tool name and the arguments. It waits up to the bound of section 5.5. A caller can stop waiting: the bound ended, or the app gave up. The host then sends no `notifications/cancelled` to the upstream. An upstream can exit on that notification, and chaperone then refuses each app with a grant of it. The request stays open until the upstream answers or its connection closes. The host drops that answer.
 3. The result check: every content block is text, and the text of all blocks is at most 1 MiB together. An embedded resource that holds text counts as a text block of that text, because an upstream may return a file that way. A block of another type, a resource that holds a blob, or more text fails the call with `bad_result`. Structured content is not forwarded. An MCP error from the upstream is a result with `is_error` set and the error message as its text.
 4. The host blanks each exact secret value in each text block, the text of a resource included (section 8).
 5. chaperone writes the `ran` record with the upstream's `is_error` flag, then returns the result.
