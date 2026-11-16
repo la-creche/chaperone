@@ -1,0 +1,33 @@
+# The Forgejo copy of .github/workflows/ci.yml. Forgejo reads this
+# directory and ignores .github/workflows once it exists. The runner image
+# has no Rust toolchain, so a step installs the toolchain that
+# rust-toolchain.toml pins before the gate runs. Forgejo ignores
+# `permissions:`. The key stays so the intent reads the same on both forges.
+name: ci
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  gate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: https://github.com/actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Install rustup and the pinned toolchain
+        uses: https://github.com/dtolnay/rust-toolchain@df2a88e9fe4098bad09cb42c3dec7187f15861fc # master
+        with:
+          toolchain: "1.92.0"
+          components: rustfmt, clippy
+      - name: Install the pinned toolchain
+        run: rustup show active-toolchain || rustup toolchain install
+      - name: Format
+        run: cargo fmt --all --check
+      - name: Lint
+        run: cargo clippy --workspace --all-targets --locked -- -D warnings
+      - name: Test
+        run: cargo test --workspace --locked
