@@ -446,6 +446,58 @@ async fn an_upstream_whose_process_exits_has_ended() {
     panic!("the host did not see the upstream end");
 }
 
+/// The text of the one block of `result`.
+fn only_text(result: &rmcp::model::CallToolResult) -> String {
+    let value = serde_json::to_value(result).unwrap();
+    value["content"][0]["text"].as_str().unwrap().to_owned()
+}
+
+/// A caller that stops waiting drops its call: the bound of
+/// `docs/design.md` 5.5 ends, or the app gives up. The upstream must get no
+/// `notifications/cancelled` for it, and it answers the next call.
+#[tokio::test]
+async fn a_call_that_the_caller_drops_sends_no_cancel_to_the_upstream() {
+    let name = PluginName::try_new("vikunja").unwrap();
+    let mut vikunja = BTreeMap::new();
+    vikunja.insert(
+        SecretParam::try_new("VIKUNJA_TOKEN").unwrap(),
+        Secret::new(
+            SecretName::try_new("vikunja_token").unwrap(),
+            "tok-123".to_owned(),
+        ),
+    );
+    let mut secrets = startup::Secrets::new();
+    secrets.insert(name.clone(), vikunja);
+    let redactor = Redactor::new(secrets);
+    let command = [
+        fake_binary().display().to_string(),
+        "--fake-upstream".to_owned(),
+    ];
+    let upstream = effect::launch(&name, &command, SecretDelivery::Stdin, &redactor, None)
+        .await
+        .unwrap();
+
+    let app = AppId::try_new("librechat").unwrap();
+    let slow = ToolName::try_new("slow").unwrap();
+    let dropped = tokio::time::timeout(
+        Duration::from_millis(200),
+        upstream.call(&app, &slow, BTreeMap::new()),
+    )
+    .await;
+    assert!(dropped.is_err(), "the slow call answered before the drop");
+
+    // The fake answers `slow` after two seconds. By then a cancel that the
+    // drop sent has arrived.
+    tokio::time::sleep(Duration::from_millis(2500)).await;
+    let cancels = ToolName::try_new("cancels").unwrap();
+    let seen = upstream
+        .call(&app, &cancels, BTreeMap::new())
+        .await
+        .unwrap();
+    assert_eq!(only_text(&seen), "0");
+    assert!(!upstream.has_ended());
+}
+
 #[test]
 fn the_fake_binary_exists_and_exits_without_the_flag() {
     let status = std::process::Command::new(fake_binary()).status().unwrap();

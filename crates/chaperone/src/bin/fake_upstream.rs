@@ -19,6 +19,9 @@
 //! It also takes a call of `exit`, which it does not list: the process
 //! exits at once, as an upstream that crashes.
 //!
+//! It counts each `notifications/cancelled` it gets. A call of `cancels`,
+//! which it does not list, answers with that count as text.
+//!
 //! Run with `--fake-approval`, it serves the approval channel instead: one
 //! tool, `approve`, that answers by the `tool` argument. `create_task` is
 //! approved, `delete_task` is denied, `wait_task` is approved after two
@@ -32,13 +35,14 @@
 )]
 
 use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 
 use rmcp::model::{
-    CallToolRequestParams, CallToolResponse, CallToolResult, ContentBlock, ListToolsResult,
-    PaginatedRequestParams, ServerCapabilities, ServerConfig, Tool,
+    CallToolRequestParams, CallToolResponse, CallToolResult, CancelledNotificationParam,
+    ContentBlock, ListToolsResult, PaginatedRequestParams, ServerCapabilities, ServerConfig, Tool,
 };
-use rmcp::service::{RequestContext, RoleServer};
+use rmcp::service::{NotificationContext, RequestContext, RoleServer};
 use rmcp::{ErrorData, ServerHandler, ServiceExt};
 use tokio::io::{AsyncBufReadExt, BufReader};
 
@@ -59,11 +63,21 @@ const TOOLS: [&str; 11] = [
 #[derive(Debug, Clone)]
 struct Fake {
     token: String,
+    /// How many `notifications/cancelled` the client sent.
+    cancels: Arc<AtomicUsize>,
 }
 
 impl ServerHandler for Fake {
     fn get_info(&self) -> ServerConfig {
         ServerConfig::new(ServerCapabilities::builder().enable_tools().build())
+    }
+
+    async fn on_cancelled(
+        &self,
+        _notification: CancelledNotificationParam,
+        _context: NotificationContext<RoleServer>,
+    ) {
+        self.cancels.fetch_add(1, Ordering::SeqCst);
     }
 
     async fn list_tools(
@@ -113,6 +127,7 @@ impl ServerHandler for Fake {
             "wait_task" => text("waited".to_owned()),
             "odd_task" => text("odd".to_owned()),
             "exit" => std::process::exit(0),
+            "cancels" => text(self.cancels.load(Ordering::SeqCst).to_string()),
             "whoami" => text(
                 serde_json::json!({
                     "meta": context.meta,
@@ -228,9 +243,10 @@ async fn serve(from_env: bool) {
             .to_owned()
     };
     eprintln!("fake upstream started");
-    let service = Fake { token }
-        .serve((stdin, tokio::io::stdout()))
-        .await
-        .unwrap();
+    let fake = Fake {
+        token,
+        cancels: Arc::new(AtomicUsize::new(0)),
+    };
+    let service = fake.serve((stdin, tokio::io::stdout())).await.unwrap();
     service.waiting().await.unwrap();
 }
